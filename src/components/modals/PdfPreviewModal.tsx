@@ -58,22 +58,21 @@ export const PdfPreviewModal: React.FC<PdfPreviewModalProps> = ({
     }
   };
 
-  const handleEmailWithGmail = () => {
+  const handleEmailClient = () => {
     const subject = encodeURIComponent(`Krueger Painting - ${pdfResult.fileName.replace('.pdf', '')}`);
     const body = encodeURIComponent(
       `Hi ${customer?.name || 'Customer'},\n\nPlease find your project document from Krueger Painting attached.\n\nProject Total: $${pdfResult.grossTotal}\nBalance Due: $${pdfResult.balanceDue}\n\nBest regards,\nJosh Krueger\nKrueger Painting\n(262) 443-1199`
     );
     const toEmail = encodeURIComponent(customer?.email || '');
-    const gmailUrl = `https://mail.google.com/mail/?view=cm&fs=1&to=${toEmail}&su=${subject}&body=${body}`;
 
     // Download PDF first so user can attach it immediately
     handleDownload();
-    window.open(gmailUrl, '_blank');
-    onToast('✔ Opening Gmail compose with estimate details! (PDF downloaded to attach)');
+    window.location.href = `mailto:${toEmail}?subject=${subject}&body=${body}`;
+    onToast('✔ Opening email client with document details! (PDF downloaded to attach)');
   };
 
   const handleEmail = () => {
-    handleEmailWithGmail();
+    handleEmailClient();
   };
 
   const handlePrint = () => {

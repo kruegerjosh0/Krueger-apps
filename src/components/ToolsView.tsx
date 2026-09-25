@@ -14,7 +14,6 @@ interface ToolsViewProps {
   onOpenSettings: () => void;
   onOpenCloudSync?: () => void;
   onOpenApkInstaller?: () => void;
-  onOpenGmail?: () => void;
 }
 
 export const ToolsView: React.FC<ToolsViewProps> = ({
@@ -31,10 +30,8 @@ export const ToolsView: React.FC<ToolsViewProps> = ({
   onOpenSettings,
   onOpenCloudSync,
   onOpenApkInstaller,
-  onOpenGmail,
 }) => {
   const tools = [
-    { title: 'Gmail Hub', icon: '✉️', desc: 'Customer emails & quotes', action: onOpenGmail || onOpenSettings },
     { title: 'Cloud Sync', icon: '☁️', desc: 'Sync files across devices', action: onOpenCloudSync || onOpenSettings },
     { title: 'Android APK / App', icon: '📱', desc: 'Install native Android app', action: onOpenApkInstaller || onOpenSettings },
     { title: 'Tax Report', icon: '📊', desc: 'Monthly gross & IRS deductions', action: onOpenTaxReport },

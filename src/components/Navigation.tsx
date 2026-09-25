@@ -1,6 +1,6 @@
 import React from 'react';
 
-export type TabType = 'dash' | 'sched' | 'email' | 'weather' | 'notes' | 'tools';
+export type TabType = 'dash' | 'sched' | 'weather' | 'notes' | 'tools';
 
 interface NavigationProps {
   activeTab: TabType;
@@ -11,14 +11,13 @@ export const Navigation: React.FC<NavigationProps> = ({ activeTab, onTabChange }
   const tabs: { id: TabType; label: string; icon: string }[] = [
     { id: 'dash', label: 'Folders', icon: '📁' },
     { id: 'sched', label: 'Schedule', icon: '📅' },
-    { id: 'email', label: 'Gmail', icon: '✉️' },
     { id: 'weather', label: 'Weather', icon: '🌦️' },
     { id: 'notes', label: 'Notes', icon: '📝' },
     { id: 'tools', label: 'Tools', icon: '🛠️' },
   ];
 
   return (
-    <nav className="fixed bottom-0 left-0 w-full bg-[var(--surface)]/95 backdrop-blur-md border-t border-[var(--border)] z-40 h-16 grid grid-cols-6 safe-bottom shadow-lg">
+    <nav className="fixed bottom-0 left-0 w-full bg-[var(--surface)]/95 backdrop-blur-md border-t border-[var(--border)] z-40 h-16 grid grid-cols-5 safe-bottom shadow-lg">
       {tabs.map((tab) => {
         const isActive = activeTab === tab.id;
         return (

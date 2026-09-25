@@ -38,7 +38,6 @@ import { WeatherView } from './components/WeatherView';
 import { CalendarView } from './components/CalendarView';
 import { NotesView } from './components/NotesView';
 import { ToolsView } from './components/ToolsView';
-import { GmailView } from './components/GmailView';
 
 // Modals
 import { PdfPreviewModal } from './components/modals/PdfPreviewModal';
@@ -1026,7 +1025,7 @@ export default function App() {
         showToast(`🚗 Logged ${newMil.miles} miles for ${newMil.purpose}`);
       } else if (act.type === 'navigate') {
         const target = (act.target || '').toLowerCase();
-        if (['dash', 'sched', 'weather', 'notes', 'tools', 'email'].includes(target)) {
+        if (['dash', 'sched', 'weather', 'notes', 'tools'].includes(target)) {
           setActiveTab(target as TabType);
         } else if (target === 'calculator' || target === 'calc') {
           setCalcOpen(true);
@@ -1108,17 +1107,6 @@ export default function App() {
           />
         )}
 
-        {activeTab === 'email' && (
-          <GmailView
-            customers={customers}
-            onOpenCustomerFolder={(cId) => {
-              const c = customers.find((x) => x.id === cId);
-              if (c) setActiveFolderCustomer(c);
-            }}
-            onToast={showToast}
-          />
-        )}
-
         {activeTab === 'weather' && (
           <WeatherView
             currentLocation={currentLocation}
@@ -1162,7 +1150,6 @@ export default function App() {
             onOpenSettings={() => setSettingsOpen(true)}
             onOpenCloudSync={() => setCloudSyncOpen(true)}
             onOpenApkInstaller={() => setApkInstallerOpen(true)}
-            onOpenGmail={() => setActiveTab('email')}
           />
         )}
       </main>

@@ -1,0 +1,6 @@
+{
+  "name": "Krueger Painting OS",
+  "description": "Professional contractor operating system for Krueger Painting featuring PDF estimates and bills, GPS and searchable weather hub, scheduling, client CRM, and field tools.",
+  "requestFramePermissions": ["geolocation", "microphone"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

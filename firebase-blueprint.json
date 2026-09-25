@@ -1,0 +1,48 @@
+{
+  "entities": {
+    "ContractorProfile": {
+      "title": "Contractor Profile and Settings",
+      "description": "User profile, company branding, and default print and cost settings",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "email": { "type": "string" },
+        "companyName": { "type": "string" },
+        "phone": { "type": "string" },
+        "address": { "type": "string" },
+        "motto": { "type": "string" },
+        "updatedAt": { "type": "string" }
+      },
+      "required": ["userId", "email"]
+    },
+    "ContractorDataBackup": {
+      "title": "Contractor Cloud Sync Payload",
+      "description": "Full synchronized workspace containing customers, jobs, notes, price book, and mileage for multi-device access",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "customersJson": { "type": "string" },
+        "notesJson": { "type": "string" },
+        "expensesJson": { "type": "string" },
+        "mileageJson": { "type": "string" },
+        "shoppingJson": { "type": "string" },
+        "priceBookJson": { "type": "string" },
+        "settingsJson": { "type": "string" },
+        "constantsJson": { "type": "string" },
+        "deviceLabel": { "type": "string" },
+        "updatedAt": { "type": "string" }
+      },
+      "required": ["userId", "updatedAt"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": "ContractorProfile",
+      "description": "Profile and metadata for the authenticated contractor"
+    },
+    "/users/{userId}/sync/current": {
+      "schema": "ContractorDataBackup",
+      "description": "Active synchronized workspace state accessible from any signed-in device"
+    }
+  }
+}

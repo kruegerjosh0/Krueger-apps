@@ -1,0 +1,82 @@
+import React from 'react';
+
+interface ToolsViewProps {
+  onOpenTaxReport: () => void;
+  onOpenCalc: () => void;
+  onOpenPriceBook: () => void;
+  onOpenColorDb: () => void;
+  onOpenMileage: () => void;
+  onOpenExpenses: () => void;
+  onOpenShoppingList: () => void;
+  onOpenWebPhotos: () => void;
+  onOpenRegionalMap: () => void;
+  onSyncCalendar: () => void;
+  onOpenSettings: () => void;
+  onOpenCloudSync?: () => void;
+  onOpenApkInstaller?: () => void;
+  onOpenGmail?: () => void;
+}
+
+export const ToolsView: React.FC<ToolsViewProps> = ({
+  onOpenTaxReport,
+  onOpenCalc,
+  onOpenPriceBook,
+  onOpenColorDb,
+  onOpenMileage,
+  onOpenExpenses,
+  onOpenShoppingList,
+  onOpenWebPhotos,
+  onOpenRegionalMap,
+  onSyncCalendar,
+  onOpenSettings,
+  onOpenCloudSync,
+  onOpenApkInstaller,
+  onOpenGmail,
+}) => {
+  const tools = [
+    { title: 'Gmail Hub', icon: '✉️', desc: 'Customer emails & quotes', action: onOpenGmail || onOpenSettings },
+    { title: 'Cloud Sync', icon: '☁️', desc: 'Sync files across devices', action: onOpenCloudSync || onOpenSettings },
+    { title: 'Android APK / App', icon: '📱', desc: 'Install native Android app', action: onOpenApkInstaller || onOpenSettings },
+    { title: 'Tax Report', icon: '📊', desc: 'Monthly gross & IRS deductions', action: onOpenTaxReport },
+    { title: 'Calculator', icon: '📐', desc: 'Net sqft & 2-coat paint gals', action: onOpenCalc },
+    { title: 'Price Book', icon: '🏷️', desc: 'Sherwin & Menards prices', action: onOpenPriceBook },
+    { title: 'Color DB', icon: '🎨', desc: 'Logged formulas & sheens', action: onOpenColorDb },
+    { title: 'Mileage Log', icon: '🚗', desc: 'IRS 67¢/mi auto deduction', action: onOpenMileage },
+    { title: 'Expenses & OCR', icon: '🧾', desc: 'Receipt scanner & ledger', action: onOpenExpenses },
+    { title: 'Shopping List', icon: '🛒', desc: 'Tape, plastic & paint checklist', action: onOpenShoppingList },
+    { title: 'Web Photos', icon: '🌐', desc: 'Netlify HTML portfolio tags', action: onOpenWebPhotos },
+    { title: 'Regional Map', icon: '🗺️', desc: 'All client sites plotted', action: onOpenRegionalMap },
+    { title: 'Sync Calendar', icon: '📅', desc: 'Export jobs to phone cal (.ICS)', action: onSyncCalendar },
+    { title: 'Settings', icon: '⚙️', desc: 'Themes, rates & print terms', action: onOpenSettings },
+  ];
+
+  return (
+    <div className="space-y-4 max-w-2xl mx-auto pb-20">
+      <div>
+        <h2 className="text-base font-extrabold uppercase tracking-wide text-[var(--accent)]">
+          Contractor Suite & Pro Tools
+        </h2>
+        <p className="text-[11px] text-[var(--text-muted)]">
+          Estimating, logistics, tax bookkeeping & field management
+        </p>
+      </div>
+
+      <div className="grid grid-cols-2 sm:grid-cols-3 gap-2.5">
+        {tools.map((t) => (
+          <button
+            key={t.title}
+            type="button"
+            onClick={t.action}
+            className="bg-[var(--surface)] hover:border-[var(--accent)] border border-[var(--border)] p-4 rounded-xl flex flex-col items-center justify-center text-center gap-1.5 shadow-sm transition-all active:scale-95 cursor-pointer"
+          >
+            <span className="text-2xl">{t.icon}</span>
+            <span className="font-extrabold text-xs uppercase tracking-wide text-[var(--text)]">
+              {t.title}
+            </span>
+            <span className="text-[10px] text-[var(--text-muted)] leading-tight">{t.desc}</span>
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+};

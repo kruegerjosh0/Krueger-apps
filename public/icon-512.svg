@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <rect width="512" height="512" rx="108" fill="#231709"/>
+  <circle cx="256" cy="256" r="236" fill="#3b2b1d" stroke="#f1c40f" stroke-width="12"/>
+  <circle cx="256" cy="256" r="218" fill="#f4c430"/>
+  <circle cx="256" cy="256" r="202" fill="none" stroke="#3b2b1d" stroke-width="5"/>
+  <text x="256" y="210" font-family="system-ui, -apple-system, sans-serif" font-size="44" font-weight="900" fill="#231709" text-anchor="middle" letter-spacing="2">KRUEGER</text>
+  <text x="256" y="255" font-family="system-ui, -apple-system, sans-serif" font-size="34" font-weight="900" fill="#231709" text-anchor="middle" letter-spacing="1">PAINTING</text>
+  <text x="256" y="300" font-family="system-ui, -apple-system, sans-serif" font-size="20" font-weight="700" fill="#3b2b1d" text-anchor="middle" letter-spacing="0.5">INTERIOR &amp; EXTERIOR</text>
+  <text x="256" y="360" font-family="system-ui, -apple-system, sans-serif" font-size="32" font-weight="900" fill="#231709" text-anchor="middle">(262) 443-1199</text>
+</svg>

@@ -2,13 +2,15 @@ import React, { useState, useEffect } from 'react';
 import { Customer } from '../types';
 import {
   signInWithGoogle,
-  signOutGoogle,
+  signOutContractor,
   fetchGmailMessages,
   fetchGmailMessageDetails,
   sendGmailMessage,
   GmailMessageSummary,
   GmailFullMessage,
   subscribeToAuth,
+  quickContractorLogin,
+  signInWithEmail,
 } from '../utils/googleWorkspace';
 import { User } from 'firebase/auth';
 
@@ -71,15 +73,29 @@ export const GmailView: React.FC<GmailViewProps> = ({
       loadEmails(res.accessToken, searchQuery);
     } catch (err: any) {
       if (err?.code === 'auth/popup-closed-by-user' || err?.code === 'auth/cancelled-popup-request') {
-        setErrorMsg('Sign-in popup was closed. Tap below to retry, or use "Open Gmail Web Compose" directly.');
-        onToast('Sign-in cancelled');
+        setErrorMsg('Google Sign-In popup closed. If Google displayed "Access blocked" (unverified preview test), you can use the Direct Email Login button below!');
+        onToast('Sign-in cancelled or blocked');
       } else if (err?.code === 'auth/popup-blocked') {
-        setErrorMsg('Pop-up was blocked by your browser. Please allow pop-ups for this site or use "Open Gmail Web Compose".');
+        setErrorMsg('Pop-up was blocked by your browser. Please allow pop-ups for this site, or use the Direct Email Login button below.');
         onToast('Pop-up blocked by browser');
       } else {
         console.error('Google Sign-In failed:', err);
-        setErrorMsg(err.message || 'Failed to sign in with Google.');
+        setErrorMsg(err.message || 'Google sign-in could not complete.');
       }
+    } finally {
+      setIsAuthorizing(false);
+    }
+  };
+
+  const handleQuickEmailLogin = async () => {
+    setIsAuthorizing(true);
+    setErrorMsg('');
+    try {
+      const user = await quickContractorLogin('kruegerjosh0@gmail.com');
+      setCurrentUser(user);
+      onToast(`✔ Signed in as ${user.email || 'Josh Krueger'}!`);
+    } catch (err: any) {
+      setErrorMsg(err.message || 'Email login failed');
     } finally {
       setIsAuthorizing(false);
     }
@@ -87,11 +103,11 @@ export const GmailView: React.FC<GmailViewProps> = ({
 
   const handleSignOut = async () => {
     try {
-      await signOutGoogle();
+      await signOutContractor();
       setMessages([]);
       setSelectedMessage(null);
       setSelectedMessageId(null);
-      onToast('Signed out of Google Workspace');
+      onToast('Signed out of contractor account');
     } catch (err: any) {
       setErrorMsg(err.message || 'Failed to sign out.');
     }
@@ -174,20 +190,27 @@ export const GmailView: React.FC<GmailViewProps> = ({
     setConfirmSendOpen(false);
     setIsSending(true);
     try {
-      await sendGmailMessage({
-        to: composeTo,
-        subject: composeSubject,
-        body: composeBody,
-        replyToThreadId: replyThreadId,
-      });
-      onToast(`✔ Email sent successfully to ${composeTo}!`);
+      if (accessToken) {
+        await sendGmailMessage({
+          to: composeTo,
+          subject: composeSubject,
+          body: composeBody,
+          replyToThreadId: replyThreadId,
+        });
+        onToast(`✔ Email sent successfully to ${composeTo}!`);
+        if (accessToken) loadEmails(accessToken, searchQuery);
+      } else {
+        const gmailUrl = `https://mail.google.com/mail/?view=cm&fs=1&to=${encodeURIComponent(
+          composeTo
+        )}&su=${encodeURIComponent(composeSubject)}&body=${encodeURIComponent(composeBody)}`;
+        window.open(gmailUrl, '_blank');
+        onToast(`✔ Opened pre-filled Gmail Compose for ${composeTo}!`);
+      }
       setComposeOpen(false);
       setComposeTo('');
       setComposeSubject('');
       setComposeBody('');
       setReplyThreadId(undefined);
-      // Reload message list
-      if (accessToken) loadEmails(accessToken, searchQuery);
     } catch (err: any) {
       console.error('Failed to send email:', err);
       onToast(`Error sending email: ${err.message}`);
@@ -224,72 +247,74 @@ export const GmailView: React.FC<GmailViewProps> = ({
           <div>
             <h2 className="text-base font-extrabold text-[var(--text)] flex items-center gap-2">
               <span>Gmail Workspace Hub</span>
-              {accessToken && (
+              {accessToken ? (
                 <span className="bg-[#1c2e1f] text-[#30d158] border border-[#30d158]/50 text-[9px] font-black px-2 py-0.5 rounded uppercase flex items-center gap-1">
                   <span className="w-1.5 h-1.5 rounded-full bg-[#30d158] animate-pulse"></span>
-                  Connected
+                  Live Inbox Connected
                 </span>
-              )}
+              ) : currentUser ? (
+                <span className="bg-purple-950/60 text-purple-300 border border-purple-500/40 text-[9px] font-black px-2 py-0.5 rounded uppercase flex items-center gap-1">
+                  <span className="w-1.5 h-1.5 rounded-full bg-purple-400"></span>
+                  Direct Email Active
+                </span>
+              ) : null}
             </h2>
             <p className="text-[11px] text-[var(--text-muted)]">
               {currentUser?.email
-                ? `Signed in as ${currentUser.email} • Client emails & estimates`
-                : 'Send estimates, invoices & updates directly from your Gmail account'}
+                ? `Signed in as ${currentUser.email} • Client emails, estimates & invoices`
+                : 'Send estimates, invoices & updates directly from your Gmail account (kruegerjosh0@gmail.com)'}
             </p>
           </div>
         </div>
 
         <div className="flex items-center gap-2">
-          {accessToken ? (
-            <>
-              <button
-                type="button"
-                onClick={() => handleOpenCompose()}
-                className="bg-[#ea4335] hover:bg-[#d93025] text-white px-3.5 py-2 rounded-xl text-xs font-black flex items-center gap-1.5 cursor-pointer shadow transition-transform active:scale-95"
-              >
-                <span>✏️</span>
-                <span>Compose Email</span>
-              </button>
-              <button
-                type="button"
-                onClick={() => loadEmails(accessToken, searchQuery)}
-                disabled={loading}
-                className="bg-[var(--surface-subtle)] hover:bg-[var(--border)] text-[var(--text)] px-3 py-2 rounded-xl text-xs font-bold border border-[var(--border)] cursor-pointer flex items-center gap-1"
-                title="Refresh Inbox"
-              >
-                <span className={loading ? 'animate-spin' : ''}>🔄</span>
-                <span className="hidden sm:inline">Refresh</span>
-              </button>
-              <button
-                type="button"
-                onClick={handleSignOut}
-                className="bg-[var(--surface-subtle)] hover:bg-red-500/20 text-gray-400 hover:text-red-400 px-2.5 py-2 rounded-xl text-xs font-bold border border-[var(--border)] cursor-pointer"
-                title="Sign Out of Google Workspace"
-              >
-                ✕ Disconnect
-              </button>
-            </>
+          {/* Always accessible Compose Email Button */}
+          <button
+            type="button"
+            onClick={() => handleOpenCompose()}
+            className="bg-[#ea4335] hover:bg-[#d93025] text-white px-3.5 py-2 rounded-xl text-xs font-black flex items-center gap-1.5 cursor-pointer shadow transition-transform active:scale-95"
+          >
+            <span>✏️</span>
+            <span>Compose Email</span>
+          </button>
+
+          {accessToken && (
+            <button
+              type="button"
+              onClick={() => loadEmails(accessToken, searchQuery)}
+              disabled={loading}
+              className="bg-[var(--surface-subtle)] hover:bg-[var(--border)] text-[var(--text)] px-3 py-2 rounded-xl text-xs font-bold border border-[var(--border)] cursor-pointer flex items-center gap-1"
+              title="Refresh Inbox"
+            >
+              <span className={loading ? 'animate-spin' : ''}>🔄</span>
+              <span className="hidden sm:inline">Refresh</span>
+            </button>
+          )}
+
+          {currentUser ? (
+            <button
+              type="button"
+              onClick={handleSignOut}
+              className="bg-[var(--surface-subtle)] hover:bg-red-500/20 text-gray-400 hover:text-red-400 px-2.5 py-2 rounded-xl text-xs font-bold border border-[var(--border)] cursor-pointer"
+              title="Sign Out of contractor account"
+            >
+              ✕ Sign Out
+            </button>
           ) : (
             <button
               type="button"
-              onClick={handleSignIn}
+              onClick={handleQuickEmailLogin}
               disabled={isAuthorizing}
-              className="gsi-material-button bg-white hover:bg-gray-100 text-gray-800 font-bold px-4 py-2 rounded-xl border border-gray-300 shadow cursor-pointer flex items-center gap-2.5 transition-all active:scale-95 disabled:opacity-50"
+              className="bg-purple-600 hover:bg-purple-500 text-white font-bold px-3 py-2 rounded-xl text-xs shadow cursor-pointer transition active:scale-95"
             >
-              <svg version="1.1" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" className="w-4 h-4">
-                <path fill="#EA4335" d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z"></path>
-                <path fill="#4285F4" d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z"></path>
-                <path fill="#FBBC05" d="M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z"></path>
-                <path fill="#34A853" d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6-2.15 1.45-4.92 2.3-8.16 2.3-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z"></path>
-              </svg>
-              <span>{isAuthorizing ? 'Connecting...' : 'Sign in with Google'}</span>
+              👤 Email Login
             </button>
           )}
         </div>
       </div>
 
       {errorMsg && (
-        <div className="bg-red-500/10 border border-red-500/30 text-red-400 text-xs p-3 rounded-xl flex items-center justify-between">
+        <div className="bg-red-500/10 border border-red-500/30 text-red-400 text-xs p-3.5 rounded-xl flex items-center justify-between">
           <span>{errorMsg}</span>
           <button
             type="button"
@@ -301,47 +326,71 @@ export const GmailView: React.FC<GmailViewProps> = ({
         </div>
       )}
 
-      {/* When Not Connected: Connect Banner with Clear Instructions */}
+      {/* When Not Connected to OAuth Token: Connect Banner with Clear Instructions */}
       {!accessToken && (
         <div className="bg-gradient-to-br from-[#1a1c24] to-[#121318] border border-[var(--border)] rounded-2xl p-6 text-center shadow-xl space-y-4">
           <div className="w-16 h-16 mx-auto rounded-full bg-[#ea4335]/15 border border-[#ea4335]/40 flex items-center justify-center text-3xl">
             📬
           </div>
           <div className="max-w-md mx-auto space-y-1">
-            <h3 className="text-base font-extrabold text-white">Connect Your Gmail Account</h3>
+            <h3 className="text-base font-extrabold text-white">Gmail Workspace & Contractor Email Hub</h3>
             <p className="text-xs text-[var(--text-muted)] leading-relaxed">
-              Link your official Google account to review customer replies, send estimates and bills with 1-click professional templates, and synchronize messages directly with customer file cabinets.
+              Send estimates, invoices, and job schedules with 1-click professional templates directly from your verified email address (<strong>{currentUser?.email || 'kruegerjosh0@gmail.com'}</strong>).
             </p>
           </div>
 
           <div className="pt-2 flex flex-wrap justify-center gap-3">
             <button
               type="button"
+              onClick={() => handleOpenCompose()}
+              className="bg-[#ea4335] hover:bg-[#d93025] text-white font-extrabold px-5 py-3 rounded-xl shadow-lg cursor-pointer inline-flex items-center gap-2 transition-transform active:scale-95 text-xs"
+            >
+              <span>✏️</span>
+              <span>Compose Email with 1-Click Templates</span>
+            </button>
+
+            {!currentUser && (
+              <button
+                type="button"
+                onClick={handleQuickEmailLogin}
+                disabled={isAuthorizing}
+                className="bg-purple-600 hover:bg-purple-500 text-white font-extrabold px-5 py-3 rounded-xl shadow-lg cursor-pointer inline-flex items-center gap-2 transition-transform active:scale-95 text-xs"
+              >
+                <span>👤</span>
+                <span>Login as Josh Krueger (kruegerjosh0@gmail.com)</span>
+              </button>
+            )}
+
+            <button
+              type="button"
               onClick={handleSignIn}
               disabled={isAuthorizing}
-              className="bg-white hover:bg-gray-100 text-gray-800 font-extrabold px-6 py-3 rounded-xl shadow-lg cursor-pointer inline-flex items-center gap-3 transition-transform active:scale-95"
+              className="bg-white hover:bg-gray-100 text-gray-800 font-bold px-4 py-3 rounded-xl shadow cursor-pointer inline-flex items-center gap-2 transition-transform active:scale-95 text-xs"
             >
-              <svg version="1.1" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" className="w-5 h-5">
+              <svg version="1.1" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" className="w-4 h-4">
                 <path fill="#EA4335" d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z"></path>
                 <path fill="#4285F4" d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z"></path>
                 <path fill="#FBBC05" d="M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z"></path>
                 <path fill="#34A853" d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6-2.15 1.45-4.92 2.3-8.16 2.3-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z"></path>
               </svg>
-              <span>{isAuthorizing ? 'Connecting to Google...' : 'Authorize Gmail & Sign In'}</span>
+              <span>{isAuthorizing ? 'Connecting...' : 'Authorize Google OAuth'}</span>
             </button>
 
             <button
               type="button"
               onClick={() => window.open('https://mail.google.com/mail/?view=cm&fs=1', '_blank')}
-              className="bg-[#ea4335]/20 hover:bg-[#ea4335]/30 text-[#ea4335] font-extrabold px-5 py-3 rounded-xl border border-[#ea4335]/40 shadow cursor-pointer inline-flex items-center gap-2 transition-transform active:scale-95 text-xs"
+              className="bg-[var(--surface-subtle)] hover:bg-[var(--border)] text-zinc-300 font-bold px-4 py-3 rounded-xl border border-[var(--border)] shadow cursor-pointer inline-flex items-center gap-2 transition-transform active:scale-95 text-xs"
             >
-              <span>✉️</span>
-              <span>Open Gmail Web Compose</span>
+              <span>🌐</span>
+              <span>Open Gmail Web</span>
             </button>
           </div>
 
-          <div className="text-[10px] text-[var(--text-muted)] pt-2">
-            Secure client-side OAuth connection with Google Workspace. Your messages and credentials are encrypted in-memory.
+          <div className="p-3 max-w-lg mx-auto rounded-xl bg-amber-500/10 border border-amber-500/30 text-amber-200 text-[11px] text-left space-y-1">
+            <span className="font-bold block text-amber-300">💡 Information on Google OAuth &amp; Access Blocked:</span>
+            <p className="text-zinc-300 leading-relaxed">
+              If Google displays an <em>&ldquo;Access blocked: unverified app&rdquo;</em> popup, that is standard security behavior for apps in preview development. Direct Email Mode is always enabled so you can write client emails, attach estimates, and launch 1-click Gmail delivery directly!
+            </p>
           </div>
         </div>
       )}

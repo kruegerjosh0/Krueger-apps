@@ -568,40 +568,10 @@ export const JobModal: React.FC<JobModalProps> = ({
           <summary className="px-3.5 py-2.5 font-bold text-xs text-[var(--text)] cursor-pointer flex justify-between items-center">
             <span className="flex items-center gap-2">
               <span>🛠️ Rooms, Sections & Dimensions ({rooms.length})</span>
-              <span className="text-[10px] bg-[#2c2317] text-[#f1c40f] border border-[#f1c40f]/40 font-bold px-1.5 py-0.5 rounded">
-                Voice Ready
-              </span>
             </span>
             <span className="text-[10px]">▼</span>
           </summary>
           <div className="p-3 space-y-3 border-t border-[var(--border)]">
-            {/* Hands-Free Voice Assistant Callout */}
-            <div className="bg-[#1b1710] border border-[#f1c40f]/50 rounded-xl p-3 flex flex-wrap items-center justify-between gap-2.5 shadow-sm">
-              <div className="flex items-center gap-2.5">
-                <div className="w-8 h-8 rounded-full bg-[#f1c40f] text-[#231709] flex items-center justify-center font-bold text-base shadow">
-                  🎙️
-                </div>
-                <div>
-                  <div className="text-xs font-black text-[#f1c40f] flex items-center gap-1.5">
-                    <span>Voice Estimating Assistant (Flip AI)</span>
-                    <span className="bg-[#1c2e1f] text-[#30d158] border border-[#30d158]/50 text-[9px] font-black px-1.5 py-0.2 rounded uppercase">
-                      Live
-                    </span>
-                  </div>
-                  <div className="text-[10.5px] text-gray-300">
-                    Just speak your room dimensions out loud (e.g. &ldquo;14 by 18 living room, 2 coats Emerald satin&rdquo;)
-                  </div>
-                </div>
-              </div>
-              <button
-                type="button"
-                onClick={() => setVoiceEstimatorOpen(true)}
-                className="bg-[#f1c40f] hover:bg-[#e0b40e] text-[#231709] px-3.5 py-1.5 rounded-lg text-xs font-black shadow cursor-pointer transition-transform active:scale-95 flex items-center gap-1.5 ml-auto sm:ml-0"
-              >
-                <span>🎙️</span>
-                <span>Talk to Flip</span>
-              </button>
-            </div>
 
             {rooms.map((room, idx) => (
               <div
@@ -718,23 +688,14 @@ export const JobModal: React.FC<JobModalProps> = ({
               </div>
             ))}
 
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+            <div>
               <button
                 type="button"
                 onClick={handleAddRoom}
-                className="py-2.5 bg-[var(--surface)] hover:bg-[var(--border)] border border-dashed border-[var(--border)] rounded-xl text-xs font-bold text-[var(--accent)] cursor-pointer flex items-center justify-center gap-1.5 transition-transform active:scale-95"
+                className="w-full py-2.5 bg-[var(--surface)] hover:bg-[var(--border)] border border-dashed border-[var(--border)] rounded-xl text-xs font-bold text-[var(--accent)] cursor-pointer flex items-center justify-center gap-1.5 transition-transform active:scale-95"
               >
                 <span>➕</span>
-                <span>Add Room Manually</span>
-              </button>
-
-              <button
-                type="button"
-                onClick={() => setVoiceEstimatorOpen(true)}
-                className="py-2.5 bg-[#2c2317] hover:bg-[#3b2b1d] border border-[#f1c40f] rounded-xl text-xs font-black text-[#f1c40f] cursor-pointer flex items-center justify-center gap-1.5 shadow-sm transition-transform active:scale-95"
-              >
-                <span>🎙️</span>
-                <span>Add Room by Voice</span>
+                <span>Add Room or Section</span>
               </button>
             </div>
 
@@ -859,23 +820,14 @@ export const JobModal: React.FC<JobModalProps> = ({
               </div>
             ))}
 
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+            <div>
               <button
                 type="button"
                 onClick={handleAddRepair}
-                className="py-2 bg-[var(--surface)] hover:bg-[var(--border)] border border-dashed border-[var(--border)] rounded-lg text-xs font-bold text-[var(--accent)] cursor-pointer flex items-center justify-center gap-1 transition-transform active:scale-95"
+                className="w-full py-2 bg-[var(--surface)] hover:bg-[var(--border)] border border-dashed border-[var(--border)] rounded-lg text-xs font-bold text-[var(--accent)] cursor-pointer flex items-center justify-center gap-1 transition-transform active:scale-95"
               >
                 <span>➕</span>
-                <span>Add Repair Manually</span>
-              </button>
-
-              <button
-                type="button"
-                onClick={() => setVoiceEstimatorOpen(true)}
-                className="py-2 bg-[#2c2317] hover:bg-[#3b2b1d] border border-[#f1c40f]/70 rounded-lg text-xs font-black text-[#f1c40f] cursor-pointer flex items-center justify-center gap-1 shadow-sm transition-transform active:scale-95"
-              >
-                <span>🎙️</span>
-                <span>Add Repair by Voice</span>
+                <span>Add Prep or Repair Item</span>
               </button>
             </div>
           </div>

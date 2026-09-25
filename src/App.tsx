@@ -57,8 +57,9 @@ import { RegionalMapModal } from './components/modals/RegionalMapModal';
 import { SettingsModal } from './components/modals/SettingsModal';
 import { DayPopupModal } from './components/modals/DayPopupModal';
 import { ImageViewerModal } from './components/modals/ImageViewerModal';
-import { VoiceEstimatorModal } from './components/modals/VoiceEstimatorModal';
+import { AiAssistantModal, AiAction } from './components/modals/AiAssistantModal';
 import { CloudSyncModal } from './components/modals/CloudSyncModal';
+import { AccountLoginModal } from './components/modals/AccountLoginModal';
 import { ApkInstallerModal } from './components/modals/ApkInstallerModal';
 import {
   testFirestoreConnection,
@@ -126,8 +127,9 @@ export default function App() {
 
   const [editingNote, setEditingNote] = useState<FieldNote | null>(null);
   const [noteModalOpen, setNoteModalOpen] = useState(false);
-  const [globalVoiceModalOpen, setGlobalVoiceModalOpen] = useState(false);
+  const [aiAssistantOpen, setAiAssistantOpen] = useState(false);
   const [cloudSyncOpen, setCloudSyncOpen] = useState(false);
+  const [accountModalOpen, setAccountModalOpen] = useState(false);
   const [apkInstallerOpen, setApkInstallerOpen] = useState(false);
   const [cloudUser, setCloudUser] = useState<any>(null);
 
@@ -864,6 +866,191 @@ export default function App() {
     showToast('✔ Opened in Estimator Tool with your notes!');
   };
 
+  // Universal AI Assistant Actions Executor (Flip AI Brain)
+  const handleExecuteAiActions = (actions: AiAction[]) => {
+    if (!Array.isArray(actions) || actions.length === 0) return;
+
+    actions.forEach((act) => {
+      if (!act || !act.type) return;
+
+      if (act.type === 'create_customer_estimate') {
+        const custName = (act.customerName || 'New Client Walkthrough').trim();
+        const existingCust = customers.find(
+          (c) => c.name.toLowerCase() === custName.toLowerCase()
+        );
+        const newCustId = existingCust ? existingCust.id : Date.now();
+
+        const roomsList: RoomArea[] = Array.isArray(act.rooms) && act.rooms.length > 0
+          ? act.rooms.map((r: any) => ({
+              n: r.n || 'Main Area',
+              r: Number(r.r) || 350,
+              og: String(r.og || '2'),
+              prod: r.prod || 'Emerald',
+              sheen: r.sheen || 'Satin',
+              color: r.color || '',
+              sp: true,
+            }))
+          : [
+              {
+                n: act.roomName || 'Living Room / Main Area',
+                r: 350,
+                og: '2',
+                prod: 'Emerald',
+                sheen: 'Satin',
+                color: '',
+                sp: true,
+              },
+            ];
+
+        const repairsList: RepairItem[] = Array.isArray(act.repairs)
+          ? act.repairs.map((rep: any) => ({
+              d: rep.d || 'Drywall patch & prep',
+              h: Number(rep.h) || 1,
+            }))
+          : [];
+
+        const newJob: JobProject = {
+          id: Date.now() + Math.floor(Math.random() * 1000),
+          title: act.jobTitle || 'Interior Painting Estimate',
+          date: new Date().toLocaleDateString(),
+          status: 'PENDING',
+          showLaborTotal: true,
+          showOverallTotal: false,
+          matsIncluded: false,
+          paintRate: '1.00',
+          repairRate: constants.repairRate || 75,
+          disc: 0,
+          discType: 'PCT',
+          discLabel: '',
+          matVal: 0,
+          sunVal: 0,
+          depo: 0,
+          payments: [],
+          prepScope: act.prepScope || 'Mask floors & trim, caulk gaps, patch holes, spot-prime bare drywall.',
+          scope: act.scope || 'Apply 2 coats of premium latex paint with professional brush and roll technique.',
+          rooms: roomsList,
+          repairs: repairsList,
+          rtMiles: 0,
+          workDays: 1,
+          schedDate: '',
+          schedEndDate: '',
+          clientSig: '',
+        };
+
+        if (existingCust) {
+          const updatedCust: Customer = {
+            ...existingCust,
+            jobs: [newJob, ...(existingCust.jobs || [])],
+            lastActive: Date.now(),
+          };
+          const updatedList = customers.map((c) => (c.id === updatedCust.id ? updatedCust : c));
+          setCustomers(updatedList);
+          saveRecord('KMaster_C', updatedList);
+          setJobModalCustomer(updatedCust);
+          setActiveEditingJob(newJob);
+        } else {
+          const newCust: Customer = {
+            id: newCustId,
+            name: custName,
+            address: act.address || '',
+            phone: act.phone || '',
+            email: act.email || '',
+            jobs: [newJob],
+            files: [],
+            notes: act.notes || 'Created via Flip AI voice assistant',
+            statusOverride: 'AUTO',
+            isPinned: false,
+            lastActive: Date.now(),
+          };
+          const updatedList = [newCust, ...customers];
+          setCustomers(updatedList);
+          saveRecord('KMaster_C', updatedList);
+          setJobModalCustomer(newCust);
+          setActiveEditingJob(newJob);
+        }
+        showToast(`✔ Created estimate for ${custName}!`);
+      } else if (act.type === 'add_note') {
+        const newNote: FieldNote = {
+          id: Date.now() + Math.floor(Math.random() * 1000),
+          title: act.title || 'Note from Flip AI',
+          body: act.body || '',
+          category: act.category || 'General Reminder',
+          date: new Date().toLocaleDateString(),
+        };
+        setNotes((prev) => {
+          const updated = [newNote, ...prev];
+          saveRecord('KMaster_Notes', updated);
+          return updated;
+        });
+        showToast(`📝 Saved Note: "${newNote.title}"`);
+      } else if (act.type === 'add_shopping_items' && Array.isArray(act.items)) {
+        const newItems: ShoppingItem[] = act.items.map((item: any) => ({
+          id: Date.now() + Math.floor(Math.random() * 10000),
+          name: item.name ? (item.store ? `${item.name} (${item.store})` : item.name) : 'Painting Supply',
+          qty: String(item.qty || '1'),
+          checked: false,
+        }));
+        setShoppingList((prev) => {
+          const updated = [...prev, ...newItems];
+          saveRecord('KMaster_Shopping', updated);
+          return updated;
+        });
+        showToast(`🛒 Added ${newItems.length} item${newItems.length > 1 ? 's' : ''} to Shopping List`);
+      } else if (act.type === 'log_expense') {
+        const newExp: ExpenseEntry = {
+          id: Date.now() + Math.floor(Math.random() * 1000),
+          date: new Date().toISOString().split('T')[0],
+          vendor: act.vendor || 'Supplier',
+          category: act.category || 'Materials',
+          amount: Number(act.amount) || 0,
+        };
+        setExpenses((prev) => {
+          const updated = [newExp, ...prev];
+          saveRecord('KMaster_Exp', updated);
+          return updated;
+        });
+        showToast(`💵 Logged $${newExp.amount.toFixed(2)} at ${newExp.vendor}`);
+      } else if (act.type === 'log_mileage') {
+        const newMil: MileageEntry = {
+          id: Date.now() + Math.floor(Math.random() * 1000),
+          date: new Date().toISOString().split('T')[0],
+          purpose: act.purpose || 'Job site estimate',
+          miles: Number(act.miles) || 0,
+          vehicle: 'Work Van',
+        };
+        setMileage((prev) => {
+          const updated = [newMil, ...prev];
+          saveRecord('KMaster_Mil', updated);
+          return updated;
+        });
+        showToast(`🚗 Logged ${newMil.miles} miles for ${newMil.purpose}`);
+      } else if (act.type === 'navigate') {
+        const target = (act.target || '').toLowerCase();
+        if (['dash', 'sched', 'weather', 'notes', 'tools', 'email'].includes(target)) {
+          setActiveTab(target as TabType);
+        } else if (target === 'calculator' || target === 'calc') {
+          setCalcOpen(true);
+        } else if (target === 'tax_report' || target === 'tax') {
+          setTaxReportOpen(true);
+        } else if (target === 'price_book' || target === 'pricebook') {
+          setPriceBookOpen(true);
+        } else if (target === 'mileage') {
+          setMileageOpen(true);
+        } else if (target === 'expenses' || target === 'expense') {
+          setExpenseOpen(true);
+        } else if (target === 'shopping' || target === 'shopping_list') {
+          setShoppingListOpen(true);
+        } else if (target === 'color_db' || target === 'paint_db') {
+          setColorDbOpen(true);
+        } else if (target === 'settings') {
+          setSettingsOpen(true);
+        } else if (target === 'cloud_sync') {
+          setCloudSyncOpen(true);
+        }
+      }
+    });
+  };
+
   return (
     <div className="min-h-screen bg-[var(--bg)] text-[var(--text)] transition-colors duration-200">
       {/* Toast Banner */}
@@ -882,6 +1069,7 @@ export default function App() {
         onOpenNewCustomer={() => setCustomerModalOpen(true)}
         onNavigateTab={(tab) => setActiveTab(tab)}
         onOpenCalc={() => setCalcOpen(true)}
+        onOpenAiAssistant={() => setAiAssistantOpen(true)}
         onOpenCloudSync={() => setCloudSyncOpen(true)}
         onOpenApkInstaller={() => setApkInstallerOpen(true)}
       />
@@ -902,7 +1090,6 @@ export default function App() {
               if (c) setActiveFolderCustomer(c);
             }}
             onTogglePin={handleTogglePin}
-            onOpenVoiceEstimator={() => setGlobalVoiceModalOpen(true)}
           />
         )}
 
@@ -1345,93 +1532,20 @@ export default function App() {
         />
       )}
 
-      {/* Global Voice Estimator Modal (Opened from Dashboard) */}
-      {globalVoiceModalOpen && (
-        <VoiceEstimatorModal
-          currentJob={{
-            id: Date.now(),
-            title: 'Voice Walkthrough',
-            date: new Date().toLocaleDateString(),
-            status: 'PENDING',
-            showLaborTotal: true,
-            showOverallTotal: false,
-            matsIncluded: false,
-            paintRate: '1.00',
-            repairRate: constants.repairRate,
-            disc: 0,
-            discType: 'PCT',
-            discLabel: '',
-            matVal: 0,
-            sunVal: 0,
-            depo: 0,
-            payments: [],
-            prepScope: '',
-            scope: '',
-            rooms: [],
-            repairs: [],
-            rtMiles: 0,
-            workDays: 1,
-            schedDate: '',
-            schedEndDate: '',
-            clientSig: '',
-          }}
+      {/* Universal Flip Gemini AI Assistant Modal */}
+      {aiAssistantOpen && (
+        <AiAssistantModal
+          isOpen={aiAssistantOpen}
+          onClose={() => setAiAssistantOpen(false)}
+          customers={customers}
+          notes={notes}
+          expenses={expenses}
+          mileage={mileage}
+          shoppingList={shoppingList}
           constants={constants}
-          onClose={() => setGlobalVoiceModalOpen(false)}
-          onApplyAdditions={(rooms, repairs, prepScope, scope) => {
-            const custName = prompt(
-              'Enter customer name to create estimate for:',
-              'New Walkthrough Quote'
-            );
-            if (custName && custName.trim()) {
-              const newCustId = Date.now();
-              const newJob: JobProject = {
-                id: newCustId + 1,
-                title: 'Estimate & Walkthrough Notes',
-                date: new Date().toLocaleDateString(),
-                status: 'PENDING',
-                showLaborTotal: true,
-                showOverallTotal: false,
-                matsIncluded: false,
-                paintRate: '1.00',
-                repairRate: constants.repairRate,
-                disc: 0,
-                discType: 'PCT',
-                discLabel: '',
-                matVal: 0,
-                sunVal: 0,
-                depo: 0,
-                payments: [],
-                prepScope: prepScope || '',
-                scope: scope || '',
-                rooms,
-                repairs,
-                rtMiles: 0,
-                workDays: 1,
-                schedDate: '',
-                schedEndDate: '',
-                clientSig: '',
-              };
-
-              const newCust: Customer = {
-                id: newCustId,
-                name: custName.trim(),
-                phone: '',
-                email: '',
-                address: '',
-                jobs: [newJob],
-                files: [],
-                notes: '',
-                statusOverride: 'AUTO',
-                lastActive: Date.now(),
-              };
-
-              handleSaveCustomer(newCust);
-              setJobModalCustomer(newCust);
-              setActiveEditingJob(newJob);
-              showToast('✔ Estimate created with your spoken notes!');
-            }
-            setGlobalVoiceModalOpen(false);
-          }}
+          currentTab={activeTab}
+          weatherLocation={currentLocation?.name || 'West Bend, WI'}
+          onExecuteActions={handleExecuteAiActions}
           onToast={showToast}
         />
       )}

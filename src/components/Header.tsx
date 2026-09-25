@@ -1,9 +1,11 @@
 import React, { useState } from 'react';
 import { PrintSettings } from '../types';
+import { User } from 'firebase/auth';
 
 interface HeaderProps {
   settings: PrintSettings;
   isBackupDue: boolean;
+  currentUser?: User | null;
   onBackup: () => void;
   onRestore: (file: File) => void;
   onOpenNewCustomer: () => void;
@@ -11,12 +13,14 @@ interface HeaderProps {
   onOpenCalc: () => void;
   onOpenAiAssistant?: () => void;
   onOpenCloudSync?: () => void;
+  onOpenAccountModal?: () => void;
   onOpenApkInstaller?: () => void;
 }
 
 export const Header: React.FC<HeaderProps> = ({
   settings,
   isBackupDue,
+  currentUser,
   onBackup,
   onRestore,
   onOpenNewCustomer,
@@ -24,6 +28,7 @@ export const Header: React.FC<HeaderProps> = ({
   onOpenCalc,
   onOpenAiAssistant,
   onOpenCloudSync,
+  onOpenAccountModal,
   onOpenApkInstaller,
 }) => {
   return (
@@ -74,7 +79,7 @@ export const Header: React.FC<HeaderProps> = ({
           </div>
         </div>
 
-        {/* Center / Right: Floating AI Assistant Bubble */}
+        {/* Center / Right: Floating AI Assistant Bubble & Account / Sync */}
         <div className="flex items-center gap-1.5 sm:gap-2">
           {onOpenAiAssistant && (
             <button
@@ -89,6 +94,26 @@ export const Header: React.FC<HeaderProps> = ({
                 <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-black opacity-75"></span>
                 <span className="relative inline-flex rounded-full h-2 w-2 bg-black"></span>
               </span>
+            </button>
+          )}
+
+          {/* Account Login Button */}
+          {onOpenAccountModal && (
+            <button
+              type="button"
+              onClick={onOpenAccountModal}
+              className={`px-2 sm:px-2.5 py-1.5 rounded-lg text-[11px] font-bold border transition-transform active:scale-95 cursor-pointer flex items-center gap-1.5 ${
+                currentUser
+                  ? 'border-emerald-500/40 bg-emerald-950/40 text-emerald-300 hover:bg-emerald-900/60'
+                  : 'border-purple-500/40 bg-purple-950/40 text-purple-300 hover:bg-purple-900/60'
+              }`}
+              title={currentUser ? `Signed in as ${currentUser.email || 'Josh Krueger'}` : 'Sign in with Email or Google'}
+            >
+              <span className="text-xs">👤</span>
+              <span className="hidden sm:inline font-bold">
+                {currentUser ? (currentUser.email ? currentUser.email.split('@')[0] : 'Logged In') : 'Login'}
+              </span>
+              {currentUser && <span className="w-1.5 h-1.5 rounded-full bg-emerald-400"></span>}
             </button>
           )}
 

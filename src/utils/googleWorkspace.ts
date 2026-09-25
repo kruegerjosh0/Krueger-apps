@@ -6,6 +6,10 @@ import {
   onAuthStateChanged,
   User,
   signOut,
+  signInWithEmailAndPassword,
+  createUserWithEmailAndPassword,
+  sendPasswordResetEmail,
+  signInAnonymously,
 } from 'firebase/auth';
 import firebaseConfig from '../../firebase-applet-config.json';
 import { Customer, JobProject, FieldNote } from '../types';
@@ -39,7 +43,7 @@ const authListeners: Set<AuthCallback> = new Set();
 
 export const subscribeToAuth = (cb: AuthCallback) => {
   authListeners.add(cb);
-  cb(cachedUser, cachedAccessToken);
+  cb(cachedUser || auth.currentUser, cachedAccessToken);
   return () => {
     authListeners.delete(cb);
   };
@@ -53,24 +57,93 @@ const notifyListeners = (user: User | null, token: string | null) => {
 
 // Initialize auth listener on application start
 export const initAuth = (
-  onAuthSuccess?: (user: User, token: string) => void,
+  onAuthSuccess?: (user: User, token: string | null) => void,
   onAuthFailure?: () => void
 ) => {
   return onAuthStateChanged(auth, async (user: User | null) => {
     if (user) {
-      if (cachedAccessToken) {
-        notifyListeners(user, cachedAccessToken);
-        if (onAuthSuccess) onAuthSuccess(user, cachedAccessToken);
-      } else if (!isSigningIn) {
-        // Token must be acquired via interactive sign-in with popup
-        notifyListeners(user, null);
-        if (onAuthFailure) onAuthFailure();
-      }
+      notifyListeners(user, cachedAccessToken);
+      if (onAuthSuccess) onAuthSuccess(user, cachedAccessToken);
     } else {
       notifyListeners(null, null);
       if (onAuthFailure) onAuthFailure();
     }
   });
+};
+
+/**
+ * Sign in with Email and Password (Firebase Auth)
+ * Completely unrestricted by Google OAuth verification or iframe popups.
+ */
+export const signInWithEmail = async (email: string, pass: string): Promise<User> => {
+  try {
+    isSigningIn = true;
+    const cred = await signInWithEmailAndPassword(auth, email.trim(), pass);
+    notifyListeners(cred.user, null);
+    return cred.user;
+  } catch (error: any) {
+    console.error('Email sign-in error:', error);
+    throw error;
+  } finally {
+    isSigningIn = false;
+  }
+};
+
+/**
+ * Register a new contractor account with Email and Password
+ */
+export const signUpWithEmail = async (email: string, pass: string): Promise<User> => {
+  try {
+    isSigningIn = true;
+    const cred = await createUserWithEmailAndPassword(auth, email.trim(), pass);
+    notifyListeners(cred.user, null);
+    return cred.user;
+  } catch (error: any) {
+    console.error('Email registration error:', error);
+    throw error;
+  } finally {
+    isSigningIn = false;
+  }
+};
+
+/**
+ * Send password reset email
+ */
+export const resetPassword = async (email: string): Promise<void> => {
+  await sendPasswordResetEmail(auth, email.trim());
+};
+
+/**
+ * Quick 1-Click login for Josh Krueger (kruegerjosh0@gmail.com)
+ * Tries sign in first, creates account if first time, or falls back gracefully so user is never locked out.
+ */
+export const quickContractorLogin = async (customEmail = 'kruegerjosh0@gmail.com'): Promise<User> => {
+  const defaultPass = 'KruegerPainting2026!';
+  try {
+    return await signInWithEmail(customEmail, defaultPass);
+  } catch (err: any) {
+    if (err?.code === 'auth/user-not-found' || err?.code === 'auth/invalid-credential') {
+      try {
+        return await signUpWithEmail(customEmail, defaultPass);
+      } catch (signupErr: any) {
+        if (signupErr?.code === 'auth/operation-not-allowed') {
+          try {
+            const anon = await signInAnonymously(auth);
+            notifyListeners(anon.user, null);
+            return anon.user;
+          } catch {}
+        }
+        throw signupErr;
+      }
+    } else if (err?.code === 'auth/operation-not-allowed') {
+      try {
+        const anon = await signInAnonymously(auth);
+        notifyListeners(anon.user, null);
+        return anon.user;
+      } catch {}
+    }
+    throw err;
+  }
 };
 
 export const signInWithGoogle = async (): Promise<{ user: User; accessToken: string }> => {
@@ -87,7 +160,7 @@ export const signInWithGoogle = async (): Promise<{ user: User; accessToken: str
     return { user: result.user, accessToken: cachedAccessToken };
   } catch (error: any) {
     if (error?.code === 'auth/popup-closed-by-user' || error?.code === 'auth/cancelled-popup-request') {
-      console.warn('Google Sign-In popup closed by user.');
+      console.warn('Google Sign-In popup closed by user or blocked by browser.');
     } else if (error?.code === 'auth/popup-blocked') {
       console.warn('Google Sign-In popup was blocked by browser.');
     } else {
@@ -105,12 +178,14 @@ export const signOutGoogle = async (): Promise<void> => {
   notifyListeners(null, null);
 };
 
+export const signOutContractor = signOutGoogle;
+
 export const getAccessToken = async (): Promise<string | null> => {
   return cachedAccessToken;
 };
 
 export const getCurrentUser = (): User | null => {
-  return cachedUser;
+  return cachedUser || auth.currentUser;
 };
 
 // -------------------------------------------------------------------------

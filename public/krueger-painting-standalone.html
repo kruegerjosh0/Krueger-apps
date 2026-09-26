@@ -1,0 +1,1454 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>Krueger Painting OS - Offline Standalone</title>
+  <meta name="description" content="Krueger Painting Operating System - Complete Offline Single-File Contractor App">
+  <meta name="theme-color" content="#231709">
+  <style>
+    :root {
+      --bg: #07080a;
+      --surface: #121318;
+      --surface-subtle: #181a22;
+      --border: #262936;
+      --accent: #f1c40f;
+      --accent-secondary: #0a84ff;
+      --accent-tertiary: #30d158;
+      --danger: #ef4444;
+      --text: #f0f2f8;
+      --text-muted: #8e95a5;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+      padding-bottom: 74px;
+      user-select: none;
+      -webkit-font-smoothing: antialiased;
+    }
+    input, textarea, select {
+      user-select: text;
+      font-family: inherit;
+    }
+    a { color: inherit; text-decoration: none; }
+    button { font-family: inherit; cursor: pointer; border: none; }
+
+    /* Layout & Header */
+    .app-header {
+      position: sticky;
+      top: 0;
+      z-index: 40;
+      background: rgba(18, 19, 24, 0.94);
+      backdrop-filter: blur(12px);
+      -webkit-backdrop-filter: blur(12px);
+      border-bottom: 1px solid var(--border);
+      padding: 10px 14px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    .brand-logo {
+      width: 36px;
+      height: 36px;
+      border-radius: 50%;
+      background: #f1c40f;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-weight: 900;
+      color: #231709;
+      font-size: 18px;
+      border: 2px solid #231709;
+      box-shadow: 0 2px 6px rgba(0,0,0,0.4);
+    }
+    .brand-title {
+      font-size: 14px;
+      font-weight: 900;
+      letter-spacing: 0.5px;
+      color: #fff;
+    }
+    .brand-sub {
+      font-size: 9px;
+      color: var(--accent);
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+    }
+    .header-actions {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .badge-offline {
+      background: #1c2e1f;
+      border: 1px solid rgba(48, 209, 88, 0.4);
+      color: #30d158;
+      font-size: 9px;
+      font-weight: 800;
+      padding: 3px 7px;
+      border-radius: 6px;
+      text-transform: uppercase;
+    }
+
+    /* Container */
+    .main-content {
+      max-width: 900px;
+      margin: 0 auto;
+      padding: 12px;
+    }
+
+    /* Bottom Navigation Bar */
+    .bottom-nav {
+      position: fixed;
+      bottom: 0;
+      left: 0;
+      right: 0;
+      height: 64px;
+      background: rgba(18, 19, 24, 0.96);
+      backdrop-filter: blur(14px);
+      -webkit-backdrop-filter: blur(14px);
+      border-top: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      justify-content: space-around;
+      z-index: 45;
+      padding-bottom: env(safe-area-inset-bottom, 0px);
+    }
+    .nav-btn {
+      flex: 1;
+      height: 100%;
+      background: transparent;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 3px;
+      color: var(--text-muted);
+      transition: all 0.15s ease;
+    }
+    .nav-btn .icon {
+      font-size: 18px;
+    }
+    .nav-btn .label {
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: 0.2px;
+    }
+    .nav-btn.active {
+      color: var(--accent);
+    }
+
+    /* UI Cards */
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      padding: 14px;
+      margin-bottom: 12px;
+      box-shadow: 0 4px 16px rgba(0,0,0,0.25);
+    }
+    .card-title {
+      font-size: 11px;
+      font-weight: 800;
+      text-transform: uppercase;
+      letter-spacing: 0.8px;
+      color: var(--accent);
+      margin-bottom: 10px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    /* Buttons */
+    .btn {
+      padding: 8px 14px;
+      border-radius: 10px;
+      font-size: 11px;
+      font-weight: 800;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      transition: transform 0.1s, opacity 0.15s;
+    }
+    .btn:active { transform: scale(0.96); }
+    .btn-primary { background: var(--accent); color: #231709; }
+    .btn-secondary { background: var(--accent-secondary); color: #fff; }
+    .btn-success { background: var(--accent-tertiary); color: #fff; }
+    .btn-danger { background: var(--danger); color: #fff; }
+    .btn-subtle { background: var(--surface-subtle); color: var(--text); border: 1px solid var(--border); }
+    .btn-block { width: 100%; display: flex; }
+
+    /* Inputs */
+    .form-group {
+      margin-bottom: 10px;
+    }
+    .form-label {
+      display: block;
+      font-size: 9px;
+      font-weight: 800;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      color: var(--text-muted);
+      margin-bottom: 4px;
+    }
+    .form-input, .form-select, .form-textarea {
+      width: 100%;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      color: var(--text);
+      border-radius: 8px;
+      padding: 8px 10px;
+      font-size: 12px;
+      outline: none;
+      transition: border-color 0.15s;
+    }
+    .form-input:focus, .form-select:focus, .form-textarea:focus {
+      border-color: var(--accent);
+    }
+    .grid-2 {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+    }
+    .grid-3 {
+      display: grid;
+      grid-template-columns: 1fr 1fr 1fr;
+      gap: 8px;
+    }
+
+    /* Modals & Folder Stack */
+    .modal-backdrop {
+      position: fixed;
+      inset: 0;
+      background: rgba(0, 0, 0, 0.85);
+      backdrop-filter: blur(8px);
+      -webkit-backdrop-filter: blur(8px);
+      display: none;
+      align-items: center;
+      justify-content: center;
+      padding: 12px;
+      overflow-y: auto;
+    }
+    .modal-backdrop.open {
+      display: flex;
+    }
+    /* Hierarchy Stacking */
+    #folderModal { z-index: 50; }
+    #jobModal { z-index: 60; }
+    #docPreviewModal { z-index: 70; }
+    #customerModal { z-index: 55; }
+    #toolModal { z-index: 55; }
+
+    .modal-box {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 18px;
+      width: 100%;
+      max-width: 680px;
+      max-height: 90vh;
+      overflow-y: auto;
+      padding: 16px;
+      box-shadow: 0 12px 36px rgba(0,0,0,0.6);
+      margin: auto;
+    }
+    .modal-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      border-bottom: 1px solid var(--border);
+      padding-bottom: 10px;
+      margin-bottom: 12px;
+    }
+    .modal-header-title {
+      font-size: 14px;
+      font-weight: 900;
+      color: var(--text);
+    }
+    .modal-header-sub {
+      font-size: 9px;
+      font-weight: 800;
+      text-transform: uppercase;
+      color: var(--accent);
+    }
+
+    /* Customer List Items */
+    .cust-item {
+      background: var(--surface-subtle);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 10px 12px;
+      margin-bottom: 8px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      cursor: pointer;
+      transition: background 0.15s, border-color 0.15s;
+    }
+    .cust-item:hover {
+      background: #20232e;
+      border-color: var(--accent);
+    }
+    .cust-name {
+      font-size: 13px;
+      font-weight: 800;
+      color: #fff;
+    }
+    .cust-sub {
+      font-size: 10px;
+      color: var(--text-muted);
+      margin-top: 2px;
+    }
+    .status-pill {
+      font-size: 8px;
+      font-weight: 900;
+      text-transform: uppercase;
+      padding: 2px 7px;
+      border-radius: 6px;
+      background: var(--accent);
+      color: #000;
+    }
+
+    /* Toast Notification */
+    .toast {
+      position: fixed;
+      bottom: 74px;
+      left: 50%;
+      transform: translateX(-50%);
+      background: #231709;
+      border: 1px solid var(--accent);
+      color: #fff;
+      font-size: 11px;
+      font-weight: 800;
+      padding: 8px 16px;
+      border-radius: 30px;
+      box-shadow: 0 4px 16px rgba(0,0,0,0.5);
+      z-index: 100;
+      pointer-events: none;
+      opacity: 0;
+      transition: opacity 0.2s, transform 0.2s;
+    }
+    .toast.show {
+      opacity: 1;
+      transform: translateX(-50%) translateY(-6px);
+    }
+
+    /* Printable Document Container (True PDF Print Styling) */
+    .doc-print-area {
+      background: #ffffff;
+      color: #111111;
+      border-radius: 10px;
+      padding: 24px;
+      font-family: Arial, Helvetica, sans-serif;
+      font-size: 11px;
+      line-height: 1.4;
+      box-shadow: 0 4px 20px rgba(0,0,0,0.4);
+    }
+    .doc-print-header {
+      border-bottom: 2px solid #231709;
+      padding-bottom: 12px;
+      margin-bottom: 16px;
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+    }
+    .doc-logo-title {
+      font-size: 20px;
+      font-weight: 900;
+      color: #231709;
+      letter-spacing: 0.5px;
+    }
+    .doc-logo-sub {
+      font-size: 9px;
+      font-weight: 800;
+      color: #b8860b;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+    .doc-table {
+      width: 100%;
+      border-collapse: collapse;
+      margin: 12px 0;
+    }
+    .doc-table th {
+      background: #231709;
+      color: #ffffff;
+      font-size: 9.5px;
+      font-weight: 800;
+      text-align: left;
+      padding: 6px 8px;
+    }
+    .doc-table td {
+      border-bottom: 1px solid #e2e8f0;
+      padding: 6px 8px;
+      font-size: 10.5px;
+    }
+    .doc-total-box {
+      background: #f8fafc;
+      border: 1px solid #cbd5e1;
+      border-radius: 8px;
+      padding: 10px;
+      margin-top: 14px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    @media print {
+      body * { visibility: hidden; }
+      #docPreviewModal, #docPreviewModal * { visibility: visible; }
+      #docPreviewModal { position: absolute; left: 0; top: 0; width: 100%; background: #fff; padding: 0; }
+      .doc-print-area { box-shadow: none; padding: 0; border: none; }
+      .no-print { display: none !important; }
+    }
+  </style>
+</head>
+<body>
+
+  <!-- Top App Header -->
+  <header class="app-header">
+    <div class="brand">
+      <div class="brand-logo">K</div>
+      <div>
+        <div class="brand-title">KRUEGER PAINTING</div>
+        <div class="brand-sub">Offline Contractor OS</div>
+      </div>
+    </div>
+    <div class="header-actions">
+      <span class="badge-offline">⚡ Local Phone File</span>
+      <button class="btn btn-subtle" onclick="openNewCustomerModal()" style="padding: 5px 9px;">+ Client</button>
+    </div>
+  </header>
+
+  <!-- Main View Container -->
+  <main class="main-content">
+    
+    <!-- TAB 1: DASHBOARD -->
+    <div id="view-dashboard" class="tab-pane">
+      <div class="card" style="background: linear-gradient(135deg, #231709, #121318); border-color: rgba(241,196,15,0.4);">
+        <div style="font-size: 18px; font-weight: 900; color: #fff;">Field Command Hub</div>
+        <div style="font-size: 11px; color: var(--accent); margin-top: 2px; font-weight: 700;">West Bend &amp; SE Wisconsin Operating System</div>
+        
+        <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-top: 14px;">
+          <div style="background: rgba(0,0,0,0.3); padding: 8px; border-radius: 10px; text-align: center;">
+            <div style="font-size: 18px; font-weight: 900; color: #fff;" id="dash-cust-count">0</div>
+            <div style="font-size: 8.5px; font-weight: 800; color: var(--text-muted); text-transform: uppercase;">Active Clients</div>
+          </div>
+          <div style="background: rgba(0,0,0,0.3); padding: 8px; border-radius: 10px; text-align: center;">
+            <div style="font-size: 18px; font-weight: 900; color: var(--accent-tertiary);" id="dash-job-count">0</div>
+            <div style="font-size: 8.5px; font-weight: 800; color: var(--text-muted); text-transform: uppercase;">Projects</div>
+          </div>
+          <div style="background: rgba(0,0,0,0.3); padding: 8px; border-radius: 10px; text-align: center;">
+            <div style="font-size: 18px; font-weight: 900; color: var(--accent);" id="dash-revenue">$0</div>
+            <div style="font-size: 8.5px; font-weight: 800; color: var(--text-muted); text-transform: uppercase;">Pipeline</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Quick Actions -->
+      <div class="grid-2">
+        <button class="btn btn-primary btn-block" onclick="openNewCustomerModal()" style="padding: 12px;">
+          <span>👤</span>
+          <span>New Customer Folder</span>
+        </button>
+        <button class="btn btn-secondary btn-block" onclick="switchTab('weather')" style="padding: 12px;">
+          <span>⛅</span>
+          <span>Spray &amp; Cure Weather</span>
+        </button>
+      </div>
+
+      <!-- Recent Customers -->
+      <div class="card" style="margin-top: 12px;">
+        <div class="card-title">
+          <span>Recent Customer Files</span>
+          <button class="btn btn-subtle" onclick="switchTab('customers')" style="padding: 3px 8px; font-size: 9px;">View All</button>
+        </div>
+        <div id="dash-customer-list">
+          <!-- Populated by JS -->
+        </div>
+      </div>
+    </div>
+
+    <!-- TAB 2: CUSTOMERS CRM -->
+    <div id="view-customers" class="tab-pane" style="display: none;">
+      <div class="card">
+        <div class="card-title">
+          <span>Customer File Cabinet</span>
+          <button class="btn btn-primary" onclick="openNewCustomerModal()">+ New Customer</button>
+        </div>
+        <input type="text" id="cust-search" placeholder="🔍 Search by name, phone, or street address..." class="form-input" oninput="renderCustomerList()" style="margin-bottom: 10px;">
+        <div id="crm-customer-list">
+          <!-- Populated by JS -->
+        </div>
+      </div>
+    </div>
+
+    <!-- TAB 3: CALENDAR / SCHEDULE -->
+    <div id="view-calendar" class="tab-pane" style="display: none;">
+      <div class="card">
+        <div class="card-title">
+          <span>Scheduled Projects Agenda</span>
+          <button class="btn btn-subtle" onclick="exportCalendarIcs()">📥 Export .ICS</button>
+        </div>
+        <div id="schedule-job-list">
+          <!-- Populated by JS -->
+        </div>
+      </div>
+    </div>
+
+    <!-- TAB 4: WEATHER & SPRAY FORECAST -->
+    <div id="view-weather" class="tab-pane" style="display: none;">
+      <div class="card">
+        <div class="card-title">
+          <span>Wisconsin Spray &amp; Cure Advisory</span>
+          <button class="btn btn-primary" onclick="refreshLiveWeather()">🔄 Refresh</button>
+        </div>
+        <div class="grid-3" style="margin-bottom: 12px;">
+          <button class="btn btn-subtle" onclick="loadCityWeather('West Bend', 43.4253, -88.1834)">West Bend</button>
+          <button class="btn btn-subtle" onclick="loadCityWeather('Milwaukee', 43.0389, -87.9065)">Milwaukee</button>
+          <button class="btn btn-subtle" onclick="loadCityWeather('Fond du Lac', 43.773, -88.447)">Fond du Lac</button>
+        </div>
+        <div id="weather-advisory-box" style="padding: 12px; border-radius: 12px; background: rgba(48,209,88,0.15); border: 1px solid rgba(48,209,88,0.4); margin-bottom: 12px;">
+          <div style="font-size: 13px; font-weight: 900; color: #30d158;" id="weather-title">Calculating Spray Conditions...</div>
+          <div style="font-size: 10.5px; color: var(--text-muted); margin-top: 3px;" id="weather-sub">Ideal exterior coating parameters: 50°F–85°F, Humidity &lt; 70%, Wind &lt; 15mph.</div>
+        </div>
+        <div class="grid-3" id="weather-metrics">
+          <div style="background: var(--surface-subtle); padding: 10px; border-radius: 10px; text-align: center; border: 1px solid var(--border);">
+            <div style="font-size: 9px; font-weight: 800; color: var(--text-muted); text-transform: uppercase;">Temperature</div>
+            <div style="font-size: 18px; font-weight: 900; color: #fff;" id="wx-temp">--°F</div>
+          </div>
+          <div style="background: var(--surface-subtle); padding: 10px; border-radius: 10px; text-align: center; border: 1px solid var(--border);">
+            <div style="font-size: 9px; font-weight: 800; color: var(--text-muted); text-transform: uppercase;">Humidity</div>
+            <div style="font-size: 18px; font-weight: 900; color: #fff;" id="wx-humidity">--%</div>
+          </div>
+          <div style="background: var(--surface-subtle); padding: 10px; border-radius: 10px; text-align: center; border: 1px solid var(--border);">
+            <div style="font-size: 9px; font-weight: 800; color: var(--text-muted); text-transform: uppercase;">Wind Speed</div>
+            <div style="font-size: 18px; font-weight: 900; color: #fff;" id="wx-wind">-- mph</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- TAB 5: TOOLS -->
+    <div id="view-tools" class="tab-pane" style="display: none;">
+      <!-- Paint Calculator -->
+      <div class="card">
+        <div class="card-title">
+          <span>📐 Paint Gallon Calculator</span>
+        </div>
+        <div class="grid-3">
+          <div class="form-group">
+            <label class="form-label">Length (Ft)</label>
+            <input type="number" id="calc-len" value="14" class="form-input" oninput="runPaintCalc()">
+          </div>
+          <div class="form-group">
+            <label class="form-label">Width (Ft)</label>
+            <input type="number" id="calc-wid" value="16" class="form-input" oninput="runPaintCalc()">
+          </div>
+          <div class="form-group">
+            <label class="form-label">Height (Ft)</label>
+            <input type="number" id="calc-hgt" value="9" class="form-input" oninput="runPaintCalc()">
+          </div>
+        </div>
+        <div style="background: var(--surface-subtle); border: 1px solid var(--border); border-radius: 10px; padding: 10px; margin-top: 6px; display: flex; justify-content: space-between; align-items: center;">
+          <div>
+            <div style="font-size: 10px; color: var(--text-muted); font-weight: 700;">Wall Area: <b id="calc-wall-sqft" style="color: #fff;">540 sqft</b></div>
+            <div style="font-size: 10px; color: var(--text-muted); font-weight: 700;">Ceiling Area: <b id="calc-ceil-sqft" style="color: #fff;">224 sqft</b></div>
+          </div>
+          <div style="text-align: right;">
+            <div style="font-size: 16px; font-weight: 900; color: var(--accent);" id="calc-gals">3.1 Gallons</div>
+            <div style="font-size: 8.5px; font-weight: 800; color: var(--text-muted); text-transform: uppercase;">2 Full Coats (350 sqft/gal)</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Backup & Restore -->
+      <div class="card">
+        <div class="card-title">
+          <span>💾 Backup &amp; Device Storage</span>
+        </div>
+        <p style="font-size: 11px; color: var(--text-muted); margin-bottom: 10px;">
+          All your customers, jobs, and notes are stored permanently inside this browser on your device. Download a physical backup file anytime:
+        </p>
+        <div class="grid-2">
+          <button class="btn btn-primary" onclick="exportDataBackup()">📥 Export Backup JSON</button>
+          <label class="btn btn-subtle" style="cursor: pointer; text-align: center;">
+            📤 Restore Backup
+            <input type="file" accept=".json" onchange="importDataBackup(event)" style="display: none;">
+          </label>
+        </div>
+      </div>
+    </div>
+
+  </main>
+
+  <!-- Bottom Navigation -->
+  <nav class="bottom-nav">
+    <button class="nav-btn active" onclick="switchTab('dashboard')">
+      <span class="icon">📊</span>
+      <span class="label">Home</span>
+    </button>
+    <button class="nav-btn" onclick="switchTab('customers')">
+      <span class="icon">👥</span>
+      <span class="label">Clients</span>
+    </button>
+    <button class="nav-btn" onclick="switchTab('calendar')">
+      <span class="icon">📅</span>
+      <span class="label">Schedule</span>
+    </button>
+    <button class="nav-btn" onclick="switchTab('weather')">
+      <span class="icon">⛅</span>
+      <span class="label">Weather</span>
+    </button>
+    <button class="nav-btn" onclick="switchTab('tools')">
+      <span class="icon">🧰</span>
+      <span class="label">Tools</span>
+    </button>
+  </nav>
+
+  <!-- MODAL: Customer File Cabinet (Folder View - Layer 50) -->
+  <div id="folderModal" class="modal-backdrop">
+    <div class="modal-box">
+      <div class="modal-header">
+        <div>
+          <span class="modal-header-sub">Customer File Cabinet</span>
+          <h2 class="modal-header-title" id="folder-name">Client Name</h2>
+        </div>
+        <div style="display: flex; gap: 6px;">
+          <button class="btn btn-danger" onclick="deleteCurrentCustomer()" style="padding: 4px 8px; font-size: 10px;">Delete</button>
+          <button class="btn btn-subtle" onclick="closeFolderModal()">✕ Close</button>
+        </div>
+      </div>
+
+      <!-- Quick Communication Buttons -->
+      <div class="grid-3" style="margin-bottom: 12px;">
+        <a id="btn-call" href="#" class="btn btn-subtle">📞 Call</a>
+        <a id="btn-sms" href="#" class="btn btn-subtle">💬 Text</a>
+        <a id="btn-map" href="#" target="_blank" class="btn btn-subtle">🗺️ Map</a>
+      </div>
+
+      <!-- Client Details Form -->
+      <div class="form-group">
+        <label class="form-label">Address</label>
+        <input type="text" id="folder-address" class="form-input" onchange="updateFolderCustomer()">
+      </div>
+      <div class="grid-2">
+        <div class="form-group">
+          <label class="form-label">Phone</label>
+          <input type="tel" id="folder-phone" class="form-input" onchange="updateFolderCustomer()">
+        </div>
+        <div class="form-group">
+          <label class="form-label">Email</label>
+          <input type="email" id="folder-email" class="form-input" onchange="updateFolderCustomer()">
+        </div>
+      </div>
+      <div class="form-group">
+        <label class="form-label">Site Notes &amp; Gate Codes</label>
+        <textarea id="folder-notes" rows="2" class="form-textarea" onchange="updateFolderCustomer()"></textarea>
+      </div>
+
+      <!-- Projects Section -->
+      <div style="border-top: 1px solid var(--border); padding-top: 12px; margin-top: 14px;">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
+          <span style="font-size: 11px; font-weight: 800; text-transform: uppercase; color: var(--accent);">Projects &amp; Estimates</span>
+          <button class="btn btn-primary" onclick="openNewJobModal()">+ New Project</button>
+        </div>
+        <div id="folder-jobs-list">
+          <!-- Populated by JS -->
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- MODAL: Job & Estimate Editor (Stack Layer 60 - Overlays Folder) -->
+  <div id="jobModal" class="modal-backdrop">
+    <div class="modal-box">
+      <div class="modal-header">
+        <div>
+          <span class="modal-header-sub">Project &amp; Estimate Editor</span>
+          <h2 class="modal-header-title" id="job-modal-title">New Project</h2>
+        </div>
+        <button class="btn btn-subtle" onclick="closeJobModal()">✕ Back to Folder</button>
+      </div>
+
+      <div class="form-group">
+        <label class="form-label">Project Name / Scope</label>
+        <input type="text" id="job-title" class="form-input" placeholder="e.g. Interior Living Room &amp; Hallways">
+      </div>
+      <div class="grid-2">
+        <div class="form-group">
+          <label class="form-label">Status</label>
+          <select id="job-status" class="form-select">
+            <option value="PENDING">PENDING</option>
+            <option value="SCHEDULED">SCHEDULED</option>
+            <option value="ACTIVE">ACTIVE</option>
+            <option value="COMPLETED">COMPLETED</option>
+            <option value="PAID">PAID</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Scheduled Date</label>
+          <input type="date" id="job-date" class="form-input">
+        </div>
+      </div>
+
+      <!-- Rooms / Labor Areas -->
+      <div style="margin-top: 10px;">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+          <span class="form-label">Rooms &amp; Labor Areas</span>
+          <button type="button" class="btn btn-subtle" onclick="addJobRoomRow()" style="padding: 2px 7px; font-size: 9px;">+ Room</button>
+        </div>
+        <div id="job-rooms-container">
+          <!-- Populated dynamically -->
+        </div>
+      </div>
+
+      <!-- Materials & Sundries -->
+      <div class="grid-2" style="margin-top: 10px;">
+        <div class="form-group">
+          <label class="form-label">Materials &amp; Paint ($)</label>
+          <input type="number" id="job-mats" class="form-input" value="0" oninput="calcJobTotals()">
+        </div>
+        <div class="form-group">
+          <label class="form-label">Discount ($)</label>
+          <input type="number" id="job-disc" class="form-input" value="0" oninput="calcJobTotals()">
+        </div>
+      </div>
+
+      <!-- Summary Total Box -->
+      <div style="background: #121318; border: 2px solid var(--accent); border-radius: 12px; padding: 12px; text-align: center; margin: 14px 0;">
+        <div style="font-size: 10px; font-weight: 800; color: var(--accent); text-transform: uppercase;">Total Project Gross</div>
+        <div style="font-size: 30px; font-weight: 900; color: #fff;" id="job-gross-display">$0</div>
+      </div>
+
+      <div class="grid-2">
+        <button class="btn btn-primary" onclick="saveJobAndClose()" style="padding: 12px;">Save Project</button>
+        <button class="btn btn-success" onclick="saveAndPreviewEstimate()" style="padding: 12px;">📄 View Estimate PDF</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- MODAL: Printable Document Preview (Stack Layer 70 - Overlays Job & Folder) -->
+  <div id="docPreviewModal" class="modal-backdrop">
+    <div class="modal-box" style="max-width: 780px;">
+      <div class="modal-header no-print">
+        <div>
+          <span class="modal-header-sub" id="doc-type-badge">Estimate PDF</span>
+          <h2 class="modal-header-title">Document Inspector</h2>
+        </div>
+        <div style="display: flex; gap: 8px;">
+          <button class="btn btn-success" onclick="window.print()">🖨️ Print / Save as PDF</button>
+          <button class="btn btn-subtle" onclick="closeDocPreviewModal()">✕ Close Preview</button>
+        </div>
+      </div>
+
+      <!-- Printable Sheet -->
+      <div class="doc-print-area" id="doc-printable-content">
+        <div class="doc-print-header">
+          <div>
+            <div class="doc-logo-title">KRUEGER PAINTING</div>
+            <div class="doc-logo-sub">Interior &amp; Exterior Quality Finishing</div>
+            <div style="font-size: 9.5px; color: #555; margin-top: 4px;">
+              N630 Moraine Dr., Campbellsport, WI 53010<br>
+              Phone: (262) 443-1199 • kruegerpaintingwi@gmail.com
+            </div>
+          </div>
+          <div style="text-align: right;">
+            <div style="font-size: 16px; font-weight: 900; color: #231709;" id="doc-sheet-type">OFFICIAL ESTIMATE</div>
+            <div style="font-size: 10px; color: #666; margin-top: 2px;">Date: <b id="doc-sheet-date">2026-09-26</b></div>
+            <div style="font-size: 10px; color: #666;">Status: <b id="doc-sheet-status">PENDING</b></div>
+          </div>
+        </div>
+
+        <div style="background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 6px; padding: 10px; margin-bottom: 14px;">
+          <div style="font-size: 9px; font-weight: 800; color: #b8860b; text-transform: uppercase;">Customer Information</div>
+          <div style="font-size: 12px; font-weight: 900; color: #000;" id="doc-client-name">Client Name</div>
+          <div style="font-size: 10.5px; color: #333;" id="doc-client-address">Address</div>
+          <div style="font-size: 10.5px; color: #333;" id="doc-client-phone">Phone</div>
+        </div>
+
+        <div style="font-size: 10px; font-weight: 800; text-transform: uppercase; color: #231709; margin-bottom: 4px;">Itemized Project Scope</div>
+        <table class="doc-table">
+          <thead>
+            <tr>
+              <th>Description / Area</th>
+              <th style="width: 100px; text-align: right;">Labor Amount</th>
+            </tr>
+          </thead>
+          <tbody id="doc-table-body">
+            <!-- Dynamically populated -->
+          </tbody>
+        </table>
+
+        <div class="doc-total-box">
+          <div>
+            <div style="font-size: 9.5px; font-weight: 800; text-transform: uppercase; color: #666;">Standard 2-Coat System</div>
+            <div style="font-size: 9.5px; color: #555;">High-grade coatings, clean tape lines &amp; surface prep.</div>
+          </div>
+          <div style="text-align: right;">
+            <div style="font-size: 9px; font-weight: 800; text-transform: uppercase; color: #666;">Grand Total</div>
+            <div style="font-size: 22px; font-weight: 900; color: #231709;" id="doc-sheet-total">$0</div>
+          </div>
+        </div>
+
+        <div style="margin-top: 24px; padding-top: 14px; border-top: 1px dashed #cbd5e1; display: flex; justify-content: space-between;">
+          <div style="width: 45%;">
+            <div style="border-bottom: 1px solid #000; height: 32px;"></div>
+            <div style="font-size: 9px; color: #666; margin-top: 4px; font-weight: bold;">Authorized Signature (Josh Krueger)</div>
+          </div>
+          <div style="width: 45%;">
+            <div style="border-bottom: 1px solid #000; height: 32px;"></div>
+            <div style="font-size: 9px; color: #666; margin-top: 4px; font-weight: bold;">Client Acceptance / Date</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- MODAL: Add New Customer -->
+  <div id="customerModal" class="modal-backdrop">
+    <div class="modal-box" style="max-width: 480px;">
+      <div class="modal-header">
+        <div>
+          <span class="modal-header-sub">New Account</span>
+          <h2 class="modal-header-title">Add Customer File</h2>
+        </div>
+        <button class="btn btn-subtle" onclick="closeNewCustomerModal()">✕</button>
+      </div>
+
+      <div class="form-group">
+        <label class="form-label">Client Full Name</label>
+        <input type="text" id="new-cust-name" class="form-input" placeholder="e.g. John &amp; Sarah Smith" required>
+      </div>
+      <div class="form-group">
+        <label class="form-label">Street Address &amp; City</label>
+        <input type="text" id="new-cust-address" class="form-input" placeholder="e.g. 1245 Main St, West Bend, WI">
+      </div>
+      <div class="grid-2">
+        <div class="form-group">
+          <label class="form-label">Phone Number</label>
+          <input type="tel" id="new-cust-phone" class="form-input" placeholder="(262) 555-0199">
+        </div>
+        <div class="form-group">
+          <label class="form-label">Email</label>
+          <input type="email" id="new-cust-email" class="form-input" placeholder="client@gmail.com">
+        </div>
+      </div>
+      <div class="form-group">
+        <label class="form-label">Initial Notes</label>
+        <textarea id="new-cust-notes" rows="2" class="form-textarea" placeholder="Interior repaint, exterior trim, gate code..."></textarea>
+      </div>
+
+      <button class="btn btn-primary btn-block" onclick="saveNewCustomer()" style="padding: 12px; margin-top: 10px;">Create Customer Folder</button>
+    </div>
+  </div>
+
+  <!-- Toast Element -->
+  <div id="app-toast" class="toast">Notice message</div>
+
+  <!-- Standalone JavaScript Logic (100% Offline, Pure Vanilla JS, No Build Tools) -->
+  <script>
+    // LocalStorage Keys
+    const DB_KEY_CUSTOMERS = 'KMaster_C';
+    const DB_KEY_NOTES = 'KMaster_Notes';
+    const DB_KEY_EXPENSES = 'KMaster_Exp';
+    const DB_KEY_MILEAGE = 'KMaster_Mil';
+
+    // In-memory state
+    let customers = [];
+    let activeCustomer = null;
+    let activeJob = null;
+
+    // Toast helper
+    function showToast(msg) {
+      const toast = document.getElementById('app-toast');
+      toast.textContent = msg;
+      toast.classList.add('show');
+      setTimeout(() => toast.classList.remove('show'), 2800);
+    }
+
+    // Load data on startup
+    function initApp() {
+      try {
+        const stored = localStorage.getItem(DB_KEY_CUSTOMERS);
+        if (stored) {
+          customers = JSON.parse(stored);
+        } else {
+          // Default initial sample customer so app is ready out of the box
+          customers = [
+            {
+              id: Date.now(),
+              name: 'Sample Client (West Bend)',
+              address: '725 S 6th Ave, West Bend, WI 53095',
+              phone: '262-443-1199',
+              email: 'kruegerpaintingwi@gmail.com',
+              notes: 'Key in lockbox under back porch. Watch out for golden retriever.',
+              statusOverride: 'ACTIVE',
+              jobs: [
+                {
+                  id: 101,
+                  title: 'Living Room & Kitchen Repaint',
+                  date: '2026-09-26',
+                  status: 'SCHEDULED',
+                  rooms: [
+                    { n: 'Living Room Walls & Baseboards', r: 850 },
+                    { n: 'Kitchen Walls & Ceiling', r: 650 }
+                  ],
+                  matVal: 180,
+                  disc: 50
+                }
+              ]
+            }
+          ];
+          saveCustomers();
+        }
+      } catch (e) {
+        customers = [];
+      }
+      renderDashboard();
+      renderCustomerList();
+      renderScheduleList();
+      runPaintCalc();
+      refreshLiveWeather();
+    }
+
+    function saveCustomers() {
+      try {
+        localStorage.setItem(DB_KEY_CUSTOMERS, JSON.stringify(customers));
+      } catch (err) {
+        console.error('Storage error:', err);
+      }
+    }
+
+    // Navigation Tab Switcher
+    function switchTab(tabId) {
+      document.querySelectorAll('.tab-pane').forEach(el => el.style.display = 'none');
+      document.querySelectorAll('.nav-btn').forEach(btn => btn.classList.remove('active'));
+
+      const targetPane = document.getElementById('view-' + tabId);
+      if (targetPane) targetPane.style.display = 'block';
+
+      const navButtons = document.querySelectorAll('.bottom-nav .nav-btn');
+      const tabOrder = ['dashboard', 'customers', 'calendar', 'weather', 'tools'];
+      const idx = tabOrder.indexOf(tabId);
+      if (idx !== -1 && navButtons[idx]) {
+        navButtons[idx].classList.add('active');
+      }
+
+      if (tabId === 'dashboard') renderDashboard();
+      if (tabId === 'customers') renderCustomerList();
+      if (tabId === 'calendar') renderScheduleList();
+    }
+
+    // Dashboard Render
+    function renderDashboard() {
+      let totalJobs = 0;
+      let totalRevenue = 0;
+
+      customers.forEach(c => {
+        (c.jobs || []).forEach(j => {
+          totalJobs++;
+          let gross = 0;
+          (j.rooms || []).forEach(r => gross += (Number(r.r) || 0));
+          gross += (Number(j.matVal) || 0);
+          gross -= (Number(j.disc) || 0);
+          totalRevenue += gross;
+        });
+      });
+
+      document.getElementById('dash-cust-count').textContent = customers.length;
+      document.getElementById('dash-job-count').textContent = totalJobs;
+      document.getElementById('dash-revenue').textContent = '$' + totalRevenue.toLocaleString();
+
+      const listContainer = document.getElementById('dash-customer-list');
+      listContainer.innerHTML = '';
+
+      if (customers.length === 0) {
+        listContainer.innerHTML = '<div style="font-size: 11px; color: var(--text-muted); text-align: center; padding: 12px;">No customers yet. Tap "+ Client" above.</div>';
+        return;
+      }
+
+      customers.slice(0, 5).forEach(c => {
+        const item = document.createElement('div');
+        item.className = 'cust-item';
+        item.onclick = () => openFolderModal(c.id);
+        item.innerHTML = `
+          <div>
+            <div class="cust-name">${c.name}</div>
+            <div class="cust-sub">📍 ${c.address || 'No address logged'} • 📞 ${c.phone || 'No phone'}</div>
+          </div>
+          <span class="status-pill">${(c.jobs && c.jobs[0] ? c.jobs[0].status : 'NEW')}</span>
+        `;
+        listContainer.appendChild(item);
+      });
+    }
+
+    // Customer CRM List Render
+    function renderCustomerList() {
+      const listContainer = document.getElementById('crm-customer-list');
+      const search = (document.getElementById('cust-search').value || '').toLowerCase();
+      listContainer.innerHTML = '';
+
+      const filtered = customers.filter(c => 
+        (c.name || '').toLowerCase().includes(search) ||
+        (c.address || '').toLowerCase().includes(search) ||
+        (c.phone || '').includes(search)
+      );
+
+      if (filtered.length === 0) {
+        listContainer.innerHTML = '<div style="text-align: center; padding: 20px; font-size: 12px; color: var(--text-muted);">No matching customer folders found.</div>';
+        return;
+      }
+
+      filtered.forEach(c => {
+        const item = document.createElement('div');
+        item.className = 'cust-item';
+        item.onclick = () => openFolderModal(c.id);
+        item.innerHTML = `
+          <div>
+            <div class="cust-name">${c.name}</div>
+            <div class="cust-sub">📍 ${c.address || 'No address logged'}</div>
+            <div class="cust-sub" style="color: var(--accent);">Projects: ${(c.jobs || []).length} logged</div>
+          </div>
+          <button class="btn btn-subtle" style="padding: 4px 8px; font-size: 10px;">📂 Open</button>
+        `;
+        listContainer.appendChild(item);
+      });
+    }
+
+    // Schedule Agenda Render
+    function renderScheduleList() {
+      const container = document.getElementById('schedule-job-list');
+      container.innerHTML = '';
+
+      const scheduledJobs = [];
+      customers.forEach(c => {
+        (c.jobs || []).forEach(j => {
+          if (j.date) {
+            scheduledJobs.push({ customer: c, job: j });
+          }
+        });
+      });
+
+      scheduledJobs.sort((a, b) => (a.job.date > b.job.date ? 1 : -1));
+
+      if (scheduledJobs.length === 0) {
+        container.innerHTML = '<div style="text-align: center; padding: 20px; font-size: 12px; color: var(--text-muted);">No dates scheduled yet. Open a customer project to set start dates.</div>';
+        return;
+      }
+
+      scheduledJobs.forEach(item => {
+        const row = document.createElement('div');
+        row.className = 'cust-item';
+        row.onclick = () => openFolderModal(item.customer.id);
+        row.innerHTML = `
+          <div>
+            <div class="cust-name">${item.customer.name}</div>
+            <div class="cust-sub" style="color: var(--accent); font-weight: bold;">📅 Scheduled: ${item.job.date}</div>
+            <div class="cust-sub">${item.job.title || 'Project'} • 📍 ${item.customer.address}</div>
+          </div>
+          <span class="status-pill">${item.job.status}</span>
+        `;
+        container.appendChild(row);
+      });
+    }
+
+    // NEW CUSTOMER MODAL
+    function openNewCustomerModal() {
+      document.getElementById('new-cust-name').value = '';
+      document.getElementById('new-cust-address').value = '';
+      document.getElementById('new-cust-phone').value = '';
+      document.getElementById('new-cust-email').value = '';
+      document.getElementById('new-cust-notes').value = '';
+      document.getElementById('customerModal').classList.add('open');
+    }
+    function closeNewCustomerModal() {
+      document.getElementById('customerModal').classList.remove('open');
+    }
+    function saveNewCustomer() {
+      const name = document.getElementById('new-cust-name').value.trim();
+      if (!name) {
+        alert('Please enter client name');
+        return;
+      }
+      const newCust = {
+        id: Date.now(),
+        name: name,
+        address: document.getElementById('new-cust-address').value.trim(),
+        phone: document.getElementById('new-cust-phone').value.trim(),
+        email: document.getElementById('new-cust-email').value.trim(),
+        notes: document.getElementById('new-cust-notes').value.trim(),
+        jobs: []
+      };
+      customers.unshift(newCust);
+      saveCustomers();
+      closeNewCustomerModal();
+      showToast('✔ Customer Folder Created');
+      openFolderModal(newCust.id);
+    }
+
+    // FOLDER MODAL (Customer File Cabinet - Layer 50)
+    function openFolderModal(custId) {
+      activeCustomer = customers.find(c => c.id === custId);
+      if (!activeCustomer) return;
+
+      document.getElementById('folder-name').textContent = activeCustomer.name;
+      document.getElementById('folder-address').value = activeCustomer.address || '';
+      document.getElementById('folder-phone').value = activeCustomer.phone || '';
+      document.getElementById('folder-email').value = activeCustomer.email || '';
+      document.getElementById('folder-notes').value = activeCustomer.notes || '';
+
+      // Set communications
+      document.getElementById('btn-call').href = `tel:${activeCustomer.phone}`;
+      document.getElementById('btn-sms').href = `sms:${activeCustomer.phone}?body=${encodeURIComponent('Hi ' + activeCustomer.name + ', this is Josh from Krueger Painting.')}`;
+      document.getElementById('btn-map').href = `https://maps.google.com/?q=${encodeURIComponent(activeCustomer.address)}`;
+
+      renderFolderJobs();
+      document.getElementById('folderModal').classList.add('open');
+    }
+    function closeFolderModal() {
+      document.getElementById('folderModal').classList.remove('open');
+      renderDashboard();
+      renderCustomerList();
+      renderScheduleList();
+    }
+    function updateFolderCustomer() {
+      if (!activeCustomer) return;
+      activeCustomer.address = document.getElementById('folder-address').value.trim();
+      activeCustomer.phone = document.getElementById('folder-phone').value.trim();
+      activeCustomer.email = document.getElementById('folder-email').value.trim();
+      activeCustomer.notes = document.getElementById('folder-notes').value.trim();
+      saveCustomers();
+      showToast('Saved changes');
+    }
+    function deleteCurrentCustomer() {
+      if (!activeCustomer) return;
+      if (confirm('Delete folder for ' + activeCustomer.name + '?')) {
+        customers = customers.filter(c => c.id !== activeCustomer.id);
+        saveCustomers();
+        closeFolderModal();
+        showToast('Folder deleted');
+      }
+    }
+    function renderFolderJobs() {
+      const container = document.getElementById('folder-jobs-list');
+      container.innerHTML = '';
+
+      if (!activeCustomer.jobs || activeCustomer.jobs.length === 0) {
+        container.innerHTML = '<div style="text-align: center; padding: 14px; font-size: 11px; color: var(--text-muted);">No projects yet. Tap "+ New Project" above.</div>';
+        return;
+      }
+
+      activeCustomer.jobs.forEach(j => {
+        let gross = 0;
+        (j.rooms || []).forEach(r => gross += (Number(r.r) || 0));
+        gross += (Number(j.matVal) || 0);
+        gross -= (Number(j.disc) || 0);
+
+        const card = document.createElement('div');
+        card.style.cssText = 'background: var(--surface-subtle); border: 1px solid var(--border); border-radius: 12px; padding: 10px; margin-bottom: 8px;';
+        card.innerHTML = `
+          <div style="display: flex; justify-content: space-between; align-items: flex-start;">
+            <div>
+              <div style="font-size: 13px; font-weight: 800; color: #fff;">${j.title || 'Project'}</div>
+              <div style="font-size: 10px; color: var(--text-muted); margin-top: 2px;">📅 ${j.date || 'No Date'} • <span class="status-pill">${j.status}</span></div>
+            </div>
+            <div style="font-size: 16px; font-weight: 900; color: var(--accent);">$${gross}</div>
+          </div>
+          <div style="display: flex; gap: 6px; margin-top: 10px;">
+            <button class="btn btn-primary" onclick="openDocPreviewModal(${j.id}, 'ESTIMATE')" style="flex: 1; padding: 6px;">📄 Est PDF</button>
+            <button class="btn btn-success" onclick="openDocPreviewModal(${j.id}, 'BILL')" style="flex: 1; padding: 6px;">💳 Bill PDF</button>
+            <button class="btn btn-subtle" onclick="editJobModal(${j.id})" style="padding: 6px 12px;">Edit</button>
+          </div>
+        `;
+        container.appendChild(card);
+      });
+    }
+
+    // JOB MODAL (Stack Layer 60 - Overlays Folder Modal)
+    function openNewJobModal() {
+      activeJob = {
+        id: Date.now(),
+        title: 'Interior Painting',
+        date: new Date().toISOString().split('T')[0],
+        status: 'PENDING',
+        rooms: [{ n: 'Main Living Room', r: 650 }],
+        matVal: 150,
+        disc: 0
+      };
+      populateJobForm();
+      document.getElementById('jobModal').classList.add('open');
+    }
+    function editJobModal(jobId) {
+      if (!activeCustomer) return;
+      activeJob = activeCustomer.jobs.find(j => j.id === jobId);
+      if (!activeJob) return;
+      populateJobForm();
+      document.getElementById('jobModal').classList.add('open');
+    }
+    function closeJobModal() {
+      document.getElementById('jobModal').classList.remove('open');
+      renderFolderJobs(); // Updates underneath without leaving folder!
+    }
+    function populateJobForm() {
+      document.getElementById('job-title').value = activeJob.title || '';
+      document.getElementById('job-status').value = activeJob.status || 'PENDING';
+      document.getElementById('job-date').value = activeJob.date || '';
+      document.getElementById('job-mats').value = activeJob.matVal || 0;
+      document.getElementById('job-disc').value = activeJob.disc || 0;
+
+      const container = document.getElementById('job-rooms-container');
+      container.innerHTML = '';
+      (activeJob.rooms || []).forEach((r, idx) => {
+        addJobRoomRow(r.n, r.r);
+      });
+      calcJobTotals();
+    }
+    function addJobRoomRow(name = '', rate = 0) {
+      const container = document.getElementById('job-rooms-container');
+      const div = document.createElement('div');
+      div.className = 'grid-2';
+      div.style.marginBottom = '6px';
+      div.innerHTML = `
+        <input type="text" class="form-input room-name" value="${name}" placeholder="Room / Area name" oninput="calcJobTotals()">
+        <div style="display: flex; gap: 4px;">
+          <input type="number" class="form-input room-rate" value="${rate}" placeholder="$ Labor" oninput="calcJobTotals()">
+          <button type="button" class="btn btn-danger" onclick="this.parentElement.parentElement.remove(); calcJobTotals();" style="padding: 2px 6px;">✕</button>
+        </div>
+      `;
+      container.appendChild(div);
+      calcJobTotals();
+    }
+    function calcJobTotals() {
+      let labor = 0;
+      document.querySelectorAll('#job-rooms-container .room-rate').forEach(input => {
+        labor += (parseFloat(input.value) || 0);
+      });
+      const mats = parseFloat(document.getElementById('job-mats').value) || 0;
+      const disc = parseFloat(document.getElementById('job-disc').value) || 0;
+      const gross = Math.max(0, Math.round(labor + mats - disc));
+      document.getElementById('job-gross-display').textContent = '$' + gross;
+      return gross;
+    }
+    function saveJobAndClose() {
+      if (!activeCustomer || !activeJob) return;
+      activeJob.title = document.getElementById('job-title').value.trim() || 'Project';
+      activeJob.status = document.getElementById('job-status').value;
+      activeJob.date = document.getElementById('job-date').value;
+      activeJob.matVal = parseFloat(document.getElementById('job-mats').value) || 0;
+      activeJob.disc = parseFloat(document.getElementById('job-disc').value) || 0;
+
+      const rooms = [];
+      const rows = document.querySelectorAll('#job-rooms-container > div');
+      rows.forEach(r => {
+        const n = r.querySelector('.room-name').value.trim();
+        const rate = parseFloat(r.querySelector('.room-rate').value) || 0;
+        if (n || rate) rooms.push({ n: n || 'Area', r: rate });
+      });
+      activeJob.rooms = rooms;
+
+      const existsIdx = (activeCustomer.jobs || []).findIndex(j => j.id === activeJob.id);
+      if (existsIdx >= 0) {
+        activeCustomer.jobs[existsIdx] = activeJob;
+      } else {
+        if (!activeCustomer.jobs) activeCustomer.jobs = [];
+        activeCustomer.jobs.push(activeJob);
+      }
+
+      saveCustomers();
+      closeJobModal();
+      showToast('✔ Project Saved in Folder');
+    }
+    function saveAndPreviewEstimate() {
+      saveJobAndClose();
+      openDocPreviewModal(activeJob.id, 'ESTIMATE');
+    }
+
+    // TRUE PRINTABLE ESTIMATE / BILL PREVIEW (Stack Layer 70 - Overlays Everything)
+    function openDocPreviewModal(jobId, type = 'ESTIMATE') {
+      if (!activeCustomer) return;
+      const job = activeCustomer.jobs.find(j => j.id === jobId);
+      if (!job) return;
+
+      document.getElementById('doc-type-badge').textContent = type === 'BILL' ? 'Official Bill / Invoice' : 'Official Estimate';
+      document.getElementById('doc-sheet-type').textContent = type === 'BILL' ? 'INVOICE / BILL' : 'PROJECT ESTIMATE';
+      document.getElementById('doc-sheet-date').textContent = job.date || new Date().toISOString().split('T')[0];
+      document.getElementById('doc-sheet-status').textContent = job.status;
+
+      document.getElementById('doc-client-name').textContent = activeCustomer.name;
+      document.getElementById('doc-client-address').textContent = activeCustomer.address || 'Local Site';
+      document.getElementById('doc-client-phone').textContent = activeCustomer.phone || '';
+
+      const tableBody = document.getElementById('doc-table-body');
+      tableBody.innerHTML = '';
+
+      let laborTotal = 0;
+      (job.rooms || []).forEach(r => {
+        laborTotal += (Number(r.r) || 0);
+        const tr = document.createElement('tr');
+        tr.innerHTML = `
+          <td><b>${r.n}</b><br><span style="font-size: 9px; color: #666;">Standard 2-coat finish &amp; prep</span></td>
+          <td style="text-align: right; font-weight: bold;">$${Number(r.r) || 0}</td>
+        `;
+        tableBody.appendChild(tr);
+      });
+
+      if (job.matVal > 0) {
+        const tr = document.createElement('tr');
+        tr.innerHTML = `
+          <td><b>Materials &amp; Premium Coatings</b></td>
+          <td style="text-align: right; font-weight: bold;">$${job.matVal}</td>
+        `;
+        tableBody.appendChild(tr);
+      }
+
+      if (job.disc > 0) {
+        const tr = document.createElement('tr');
+        tr.innerHTML = `
+          <td style="color: #c00;"><b>Promotional Courtesy Discount</b></td>
+          <td style="text-align: right; font-weight: bold; color: #c00;">-$${job.disc}</td>
+        `;
+        tableBody.appendChild(tr);
+      }
+
+      const gross = Math.max(0, Math.round(laborTotal + (Number(job.matVal) || 0) - (Number(job.disc) || 0)));
+      document.getElementById('doc-sheet-total').textContent = '$' + gross.toLocaleString();
+
+      document.getElementById('docPreviewModal').classList.add('open');
+    }
+    function closeDocPreviewModal() {
+      // Closes ONLY the top overlay. User is STILL in their customer folder!
+      document.getElementById('docPreviewModal').classList.remove('open');
+    }
+
+    // Paint Calculator Helper
+    function runPaintCalc() {
+      const len = parseFloat(document.getElementById('calc-len').value) || 0;
+      const wid = parseFloat(document.getElementById('calc-wid').value) || 0;
+      const hgt = parseFloat(document.getElementById('calc-hgt').value) || 0;
+
+      const perimeter = (len + wid) * 2;
+      const wallSqft = Math.round(perimeter * hgt);
+      const ceilSqft = Math.round(len * wid);
+      const totalSqft = wallSqft + ceilSqft;
+
+      // 2 coats at 350 sqft/gal
+      const gals = (totalSqft * 2 / 350).toFixed(1);
+
+      document.getElementById('calc-wall-sqft').textContent = wallSqft + ' sqft';
+      document.getElementById('calc-ceil-sqft').textContent = ceilSqft + ' sqft';
+      document.getElementById('calc-gals').textContent = gals + ' Gallons';
+    }
+
+    // Live Weather via Open-Meteo (No API Key Required, 100% Free & Works in Browser)
+    async function loadCityWeather(name, lat, lon) {
+      document.getElementById('weather-title').textContent = `Checking ${name} weather...`;
+      try {
+        const res = await fetch(`https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&current=temperature_2m,relative_humidity_2m,precipitation,wind_speed_10m&temperature_unit=fahrenheit&wind_speed_unit=mph`);
+        const data = await res.json();
+        const cur = data.current;
+
+        const temp = Math.round(cur.temperature_2m);
+        const hum = Math.round(cur.relative_humidity_2m);
+        const wind = Math.round(cur.wind_speed_10m);
+
+        document.getElementById('wx-temp').textContent = temp + '°F';
+        document.getElementById('wx-humidity').textContent = hum + '%';
+        document.getElementById('wx-wind').textContent = wind + ' mph';
+
+        const titleEl = document.getElementById('weather-title');
+        const boxEl = document.getElementById('weather-advisory-box');
+
+        if (cur.precipitation > 0) {
+          titleEl.textContent = `⚠️ Active Rain Warning in ${name}`;
+          titleEl.style.color = '#ef4444';
+          boxEl.style.borderColor = '#ef4444';
+        } else if (temp >= 50 && temp <= 85 && hum <= 75 && wind <= 15) {
+          titleEl.textContent = `✔ Ideal Exterior Spray Conditions in ${name}`;
+          titleEl.style.color = '#30d158';
+          boxEl.style.borderColor = '#30d158';
+        } else if (temp < 50) {
+          titleEl.textContent = `❄️ Cold Advisory in ${name} (${temp}°F) - Interior Work Recommended`;
+          titleEl.style.color = '#0a84ff';
+          boxEl.style.borderColor = '#0a84ff';
+        } else {
+          titleEl.textContent = `Caution: High Humidity (${hum}%) or Winds (${wind}mph) in ${name}`;
+          titleEl.style.color = '#f1c40f';
+          boxEl.style.borderColor = '#f1c40f';
+        }
+      } catch (err) {
+        document.getElementById('weather-title').textContent = `Offline Mode: Last known conditions for ${name}`;
+      }
+    }
+    function refreshLiveWeather() {
+      loadCityWeather('West Bend', 43.4253, -88.1834);
+    }
+
+    // Export .ICS Calendar format
+    function exportCalendarIcs() {
+      let ics = "BEGIN:VCALENDAR\nVERSION:2.0\nPRODID:-//Krueger Painting//EN\n";
+      customers.forEach(c => {
+        (c.jobs || []).forEach(j => {
+          if (j.date) {
+            const dt = j.date.replace(/-/g, '');
+            ics += `BEGIN:VEVENT\nSUMMARY:Krueger Job: ${c.name}\nDESCRIPTION:${j.title} - ${c.address}\nDTSTART;VALUE=DATE:${dt}\nDTEND;VALUE=DATE:${dt}\nEND:VEVENT\n`;
+          }
+        });
+      });
+      ics += "END:VCALENDAR";
+      const blob = new Blob([ics], { type: 'text/calendar' });
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = 'krueger-painting-schedule.ics';
+      a.click();
+      showToast('✔ Calendar .ICS Downloaded');
+    }
+
+    // Backup & Restore
+    function exportDataBackup() {
+      const data = {
+        customers: customers,
+        exportedAt: new Date().toISOString()
+      };
+      const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = `krueger-painting-backup-${new Date().toISOString().split('T')[0]}.json`;
+      a.click();
+      showToast('✔ Backup JSON Exported');
+    }
+    function importDataBackup(e) {
+      const file = e.target.files[0];
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onload = (evt) => {
+        try {
+          const parsed = JSON.parse(evt.target.result);
+          if (Array.isArray(parsed.customers)) {
+            customers = parsed.customers;
+            saveCustomers();
+            initApp();
+            showToast('✔ Restored all customer data!');
+          } else {
+            alert('Invalid backup file format');
+          }
+        } catch (err) {
+          alert('Failed to read backup file');
+        }
+      };
+      reader.readAsText(file);
+    }
+
+    // Run on startup
+    window.addEventListener('DOMContentLoaded', initApp);
+  </script>
+</body>
+</html>

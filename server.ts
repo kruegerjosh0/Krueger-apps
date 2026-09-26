@@ -582,27 +582,20 @@ app.get('/api/export-project-zip', async (_req, res) => {
   }
 });
 
-// Standalone 1-Click HTML File Export Endpoint (Single file, no folders, double-click to run in Chrome)
-app.get('/api/export-single-html', async (_req, res) => {
+// Direct Standalone Web View Route
+app.get('/standalone', (_req, res) => {
+  const standalonePath = path.resolve(__dirname, 'public', 'krueger-painting-standalone.html');
+  res.setHeader('Content-Type', 'text/html; charset=utf-8');
+  res.sendFile(standalonePath);
+});
+
+// Standalone 1-Click HTML File Export Endpoint (Single file, no folders, tap to run offline in Chrome)
+app.get('/api/export-single-html', (_req, res) => {
   try {
-    const { exec } = await import('child_process');
-    const singlefilePath = path.resolve(__dirname, 'dist-singlefile', 'index.html');
-    const fs = await import('fs');
-
-    res.setHeader('Content-Type', 'application/octet-stream');
+    const standalonePath = path.resolve(__dirname, 'public', 'krueger-painting-standalone.html');
+    res.setHeader('Content-Type', 'text/html; charset=utf-8');
     res.setHeader('Content-Disposition', 'attachment; filename="krueger-painting-app.html"');
-
-    if (fs.existsSync(singlefilePath)) {
-      return res.download(singlefilePath, 'krueger-painting-app.html');
-    }
-
-    exec('npm run build:singlefile', { cwd: path.resolve(__dirname) }, (err) => {
-      if (err) {
-        console.error('Singlefile build error:', err);
-        return res.status(500).json({ error: 'Failed to generate standalone HTML' });
-      }
-      res.download(singlefilePath, 'krueger-painting-app.html');
-    });
+    res.sendFile(standalonePath);
   } catch (error: any) {
     res.status(500).json({ error: error.message || 'Export failed' });
   }

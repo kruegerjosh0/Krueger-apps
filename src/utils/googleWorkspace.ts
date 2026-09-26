@@ -18,14 +18,16 @@ import { Customer, JobProject, FieldNote } from '../types';
 const app = getApps().length === 0 ? initializeApp(firebaseConfig) : getApp();
 export const auth = getAuth(app);
 
-export const GOOGLE_WORKSPACE_SCOPES: string[] = [];
+export const GOOGLE_WORKSPACE_SCOPES: string[] = [
+  'https://www.googleapis.com/auth/calendar.events',
+];
 
 const provider = new GoogleAuthProvider();
 GOOGLE_WORKSPACE_SCOPES.forEach((scope) => {
   provider.addScope(scope);
 });
 provider.setCustomParameters({
-  prompt: 'select_account',
+  prompt: 'consent select_account',
 });
 
 // Flag to track sign-in state
@@ -186,6 +188,105 @@ export const getCurrentUser = (): User | null => {
 };
 
 // -------------------------------------------------------------------------
+// GOOGLE CALENDAR DIRECT URL & ICS SYNC (Mobile & Web Universal)
+// -------------------------------------------------------------------------
+export const createGoogleCalendarUrl = (
+  customerName: string,
+  job: JobProject,
+  address?: string,
+  phone?: string
+): string => {
+  const cleanStart = (job.schedDate || '').trim();
+  const sFormatted = cleanStart.replace(/-/g, '');
+  const cleanEnd = (job.schedEndDate || job.schedDate || '').trim();
+  let eFormatted = sFormatted;
+
+  if (cleanEnd) {
+    try {
+      const parts = cleanEnd.split('-').map(Number);
+      if (parts.length === 3) {
+        // Safe local date addition (exclusive next day for all-day events in Google Calendar)
+        const d = new Date(parts[0], parts[1] - 1, parts[2] + 1);
+        const y = d.getFullYear();
+        const m = String(d.getMonth() + 1).padStart(2, '0');
+        const day = String(d.getDate()).padStart(2, '0');
+        eFormatted = `${y}${m}${day}`;
+      } else {
+        eFormatted = cleanEnd.replace(/-/g, '');
+      }
+    } catch {
+      eFormatted = cleanEnd.replace(/-/g, '');
+    }
+  }
+
+  const title = `🎨 Krueger Painting: ${customerName} - ${job.title || 'Painting Project'}`;
+  const details = [
+    `Client: ${customerName}`,
+    phone ? `Phone: ${phone}` : '',
+    address ? `Site Address: ${address}` : '',
+    `Status: ${job.status}`,
+    job.scope ? `\nScope of Work:\n${job.scope}` : '',
+    job.prepScope ? `\nPrep Work:\n${job.prepScope}` : '',
+    `\nCreated via Krueger Painting OS`,
+  ]
+    .filter(Boolean)
+    .join('\n');
+
+  return `https://calendar.google.com/calendar/render?action=TEMPLATE&text=${encodeURIComponent(
+    title
+  )}&dates=${sFormatted}/${eFormatted}&details=${encodeURIComponent(details)}&location=${encodeURIComponent(
+    address || ''
+  )}`;
+};
+
+export const generateIcsContent = (customers: Customer[]): string => {
+  const lines: string[] = [
+    'BEGIN:VCALENDAR',
+    'VERSION:2.0',
+    'PRODID:-//Krueger Painting OS//EN',
+    'CALSCALE:GREGORIAN',
+    'METHOD:PUBLISH',
+    'X-WR-CALNAME:Krueger Painting Schedule',
+  ];
+
+  customers.forEach((c) => {
+    (c.jobs || []).forEach((j) => {
+      if (j.schedDate) {
+        const start = j.schedDate.replace(/-/g, '');
+        const endDate = j.schedEndDate || j.schedDate;
+        let end = start;
+        try {
+          const d = new Date(endDate + 'T00:00:00');
+          d.setDate(d.getDate() + 1);
+          end = d.toISOString().split('T')[0].replace(/-/g, '');
+        } catch {
+          end = endDate.replace(/-/g, '');
+        }
+
+        const summary = `🎨 ${c.name} - ${j.title || 'Painting'} (${j.status})`;
+        const desc = `Client: ${c.name}\\nPhone: ${c.phone || 'N/A'}\\nStatus: ${j.status}\\nScope: ${
+          j.scope ? j.scope.replace(/\n/g, ' ') : 'Painting Project'
+        }\\nKrueger Painting OS`;
+
+        lines.push('BEGIN:VEVENT');
+        lines.push(`UID:krueger-job-${j.id}-${start}@kruegerpainting.com`);
+        lines.push(`DTSTAMP:${new Date().toISOString().replace(/[-:]/g, '').split('.')[0]}Z`);
+        lines.push(`SUMMARY:${summary}`);
+        lines.push(`DESCRIPTION:${desc}`);
+        if (c.address) lines.push(`LOCATION:${c.address}`);
+        lines.push(`DTSTART;VALUE=DATE:${start}`);
+        lines.push(`DTEND;VALUE=DATE:${end}`);
+        lines.push('STATUS:CONFIRMED');
+        lines.push('END:VEVENT');
+      }
+    });
+  });
+
+  lines.push('END:VCALENDAR');
+  return lines.join('\r\n');
+};
+
+// -------------------------------------------------------------------------
 // GOOGLE CALENDAR API INTEGRATION
 // -------------------------------------------------------------------------
 export interface GoogleCalendarEvent {
@@ -196,12 +297,17 @@ export interface GoogleCalendarEvent {
   start: {
     dateTime?: string;
     date?: string;
+    timeZone?: string;
   };
   end: {
     dateTime?: string;
     date?: string;
+    timeZone?: string;
   };
   htmlLink?: string;
+  status?: string;
+  colorId?: string;
+  calendarName?: string;
 }
 
 export const fetchGoogleCalendarEvents = async (
@@ -211,29 +317,200 @@ export const fetchGoogleCalendarEvents = async (
   const token = await getAccessToken();
   if (!token) throw new Error('Not connected to Google Workspace.');
 
-  const now = new Date();
-  const timeMin = startDate
-    ? new Date(startDate).toISOString()
-    : new Date(now.getFullYear(), now.getMonth() - 1, 1).toISOString();
-  const timeMax = endDate
-    ? new Date(endDate).toISOString()
-    : new Date(now.getFullYear(), now.getMonth() + 3, 28).toISOString();
+  // If startDate / endDate provided, ensure wide window to capture all time zones
+  let timeMin: string;
+  let timeMax: string;
 
-  const url = `https://www.googleapis.com/calendar/v3/calendars/primary/events?timeMin=${encodeURIComponent(
-    timeMin
-  )}&timeMax=${encodeURIComponent(timeMax)}&singleEvents=true&orderBy=startTime&maxResults=100`;
+  if (startDate) {
+    const dMin = new Date(startDate);
+    // Rewind 2 days to avoid time zone / UTC date boundary cutoff
+    dMin.setHours(0, 0, 0, 0);
+    dMin.setDate(dMin.getDate() - 2);
+    timeMin = dMin.toISOString();
+  } else {
+    const dMin = new Date();
+    dMin.setDate(dMin.getDate() - 30);
+    timeMin = dMin.toISOString();
+  }
 
-  const res = await fetch(url, {
-    headers: { Authorization: `Bearer ${token}` },
+  if (endDate) {
+    const dMax = new Date(endDate);
+    // Forward 3 days to avoid time zone / exclusive bounds cutoff
+    dMax.setHours(23, 59, 59, 999);
+    dMax.setDate(dMax.getDate() + 3);
+    timeMax = dMax.toISOString();
+  } else {
+    const dMax = new Date();
+    dMax.setDate(dMax.getDate() + 90);
+    timeMax = dMax.toISOString();
+  }
+
+  // Fetch events from a calendar by ID
+  const fetchFromCalendar = async (calId: string, calTitle?: string): Promise<GoogleCalendarEvent[]> => {
+    const url = `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(
+      calId
+    )}/events?timeMin=${encodeURIComponent(timeMin)}&timeMax=${encodeURIComponent(
+      timeMax
+    )}&singleEvents=true&orderBy=startTime&maxResults=250`;
+
+    const res = await fetch(url, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+
+    if (!res.ok) {
+      if (res.status === 401) {
+        cachedAccessToken = null;
+        notifyListeners(cachedUser, null);
+        throw new Error('Google Calendar connection expired. Please reconnect.');
+      }
+      return [];
+    }
+
+    const data = await res.json();
+    return ((data.items || []) as any[])
+      .filter((ev: any) => ev.status !== 'cancelled' && (ev.summary || ev.description))
+      .map((ev: any) => ({
+        id: ev.id,
+        summary: ev.summary || '(Untitled Event)',
+        description: ev.description,
+        location: ev.location,
+        start: ev.start || {},
+        end: ev.end || {},
+        htmlLink: ev.htmlLink,
+        status: ev.status,
+        colorId: ev.colorId,
+        calendarName: calTitle || (calId === 'primary' ? 'Primary' : undefined),
+      }));
+  };
+
+  const primaryEvents = await fetchFromCalendar('primary', 'My Calendar');
+
+  // Also query user's calendar list to include other calendars (work, personal, shared)
+  let allEvents = [...primaryEvents];
+  try {
+    const listRes = await fetch('https://www.googleapis.com/calendar/v3/users/me/calendarList', {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    if (listRes.ok) {
+      const listData = await listRes.json();
+      const calendars = (listData.items || []).filter(
+        (c: any) => !c.primary && c.selected !== false && c.id
+      );
+      // Fetch up to 5 non-primary calendars
+      for (const cal of calendars.slice(0, 5)) {
+        const secondary = await fetchFromCalendar(cal.id, cal.summary);
+        allEvents = allEvents.concat(secondary);
+      }
+    }
+  } catch {
+    // Primary calendar was already fetched successfully
+  }
+
+  // Deduplicate by event id
+  const seenIds = new Set<string>();
+  const uniqueEvents: GoogleCalendarEvent[] = [];
+  for (const ev of allEvents) {
+    if (!seenIds.has(ev.id)) {
+      seenIds.add(ev.id);
+      uniqueEvents.push(ev);
+    }
+  }
+
+  // Sort by startTime
+  uniqueEvents.sort((a, b) => {
+    const timeA = a.start?.dateTime || a.start?.date || '';
+    const timeB = b.start?.dateTime || b.start?.date || '';
+    return timeA.localeCompare(timeB);
+  });
+
+  return uniqueEvents;
+};
+
+export const createGoogleCalendarEvent = async (event: {
+  summary: string;
+  description?: string;
+  location?: string;
+  startDate: string; // YYYY-MM-DD
+  endDate?: string;
+  startTime?: string; // HH:MM
+  endTime?: string;
+  allDay?: boolean;
+}): Promise<GoogleCalendarEvent> => {
+  const token = await getAccessToken();
+  if (!token) throw new Error('Not connected to Google Workspace.');
+
+  let start: any = {};
+  let end: any = {};
+
+  if (event.allDay || !event.startTime) {
+    start = { date: event.startDate };
+    let endD = event.endDate || event.startDate;
+    try {
+      const d = new Date(endD + 'T00:00:00');
+      d.setDate(d.getDate() + 1);
+      endD = d.toISOString().split('T')[0];
+    } catch {
+      endD = event.startDate;
+    }
+    end = { date: endD };
+  } else {
+    const startIso = new Date(`${event.startDate}T${event.startTime}:00`).toISOString();
+    const endIso = event.endTime
+      ? new Date(`${event.endDate || event.startDate}T${event.endTime}:00`).toISOString()
+      : new Date(new Date(startIso).getTime() + 60 * 60 * 1000).toISOString();
+    start = { dateTime: startIso };
+    end = { dateTime: endIso };
+  }
+
+  const payload: any = {
+    summary: event.summary,
+    description: event.description || '',
+    location: event.location || '',
+    start,
+    end,
+    reminders: {
+      useDefault: true,
+    },
+  };
+
+  const res = await fetch('https://www.googleapis.com/calendar/v3/calendars/primary/events', {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${token}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(payload),
   });
 
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
-    throw new Error(err?.error?.message || `Calendar fetch failed (${res.status})`);
+    throw new Error(err?.error?.message || `Failed to create calendar event (${res.status})`);
   }
 
-  const data = await res.json();
-  return (data.items || []) as GoogleCalendarEvent[];
+  return await res.json();
+};
+
+export const deleteGoogleCalendarEvent = async (
+  eventId: string,
+  calendarId = 'primary'
+): Promise<void> => {
+  const token = await getAccessToken();
+  if (!token) throw new Error('Not connected to Google Workspace.');
+
+  const res = await fetch(
+    `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(
+      calendarId
+    )}/events/${encodeURIComponent(eventId)}`,
+    {
+      method: 'DELETE',
+      headers: { Authorization: `Bearer ${token}` },
+    }
+  );
+
+  if (!res.ok && res.status !== 404 && res.status !== 410) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err?.error?.message || `Failed to delete calendar event (${res.status})`);
+  }
 };
 
 export const syncJobToGoogleCalendar = async (

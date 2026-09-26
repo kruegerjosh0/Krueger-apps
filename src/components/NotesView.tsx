@@ -108,17 +108,17 @@ export const NotesView: React.FC<NotesViewProps> = ({
               key={note.id}
               className="bg-[var(--surface)] border border-[var(--border)] rounded-xl p-3.5 shadow-sm hover:border-[var(--accent)] transition-all"
             >
-              <div className="flex items-start justify-between gap-2 mb-2">
+              <div className="flex flex-wrap items-center justify-between gap-1.5 mb-2">
                 <span className="text-[9px] font-extrabold uppercase px-2 py-0.5 rounded bg-[var(--surface-subtle)] text-[var(--accent)] border border-[var(--border)]">
                   {note.category || 'General'}
                 </span>
 
-                <div className="flex items-center gap-1.5">
+                <div className="flex flex-wrap items-center gap-1.5">
                   {onSendNoteToEstimator && (
                     <button
                       type="button"
                       onClick={() => onSendNoteToEstimator(note)}
-                      className={`text-[10px] font-black px-2.5 py-1 rounded cursor-pointer transition-transform active:scale-95 flex items-center gap-1 ${
+                      className={`text-[10px] font-black px-2 py-1 rounded cursor-pointer transition-transform active:scale-95 flex items-center gap-1 ${
                         hasEstimateContent
                           ? 'bg-[#2c2317] border border-[#f1c40f] text-[#f1c40f] hover:bg-[#3d301f]'
                           : 'bg-[var(--surface-subtle)] hover:bg-[var(--border)] text-[var(--text)] border border-[var(--border)]'
@@ -126,7 +126,8 @@ export const NotesView: React.FC<NotesViewProps> = ({
                       title="Convert these room dimensions, paint, and repairs straight into an estimate quote"
                     >
                       <span>⚡</span>
-                      <span>Send to Estimator</span>
+                      <span className="hidden min-[380px]:inline">Send to </span>
+                      <span>Estimator</span>
                     </button>
                   )}
 

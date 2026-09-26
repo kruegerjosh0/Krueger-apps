@@ -749,3 +749,37 @@ export async function sharePdfFile(result: GeneratedPdfResult, title: string, te
     return true;
   }
 }
+
+/**
+ * Reconstructs a GeneratedPdfResult from a stored base64 data URL for instant overlay viewing
+ */
+export function dataUrlToPdfResult(
+  dataUrl: string,
+  fileName: string,
+  grossTotal = 0,
+  balanceDue = 0
+): GeneratedPdfResult {
+  let blob: Blob;
+  try {
+    const base64Data = dataUrl.includes(',') ? dataUrl.split(',')[1] : dataUrl;
+    const byteCharacters = atob(base64Data);
+    const byteNumbers = new Array(byteCharacters.length);
+    for (let i = 0; i < byteCharacters.length; i++) {
+      byteNumbers[i] = byteCharacters.charCodeAt(i);
+    }
+    const byteArray = new Uint8Array(byteNumbers);
+    blob = new Blob([byteArray], { type: 'application/pdf' });
+  } catch {
+    blob = new Blob([], { type: 'application/pdf' });
+  }
+  const blobUrl = URL.createObjectURL(blob);
+  return {
+    doc: null as any,
+    blob,
+    blobUrl,
+    dataUrl,
+    fileName,
+    grossTotal,
+    balanceDue,
+  };
+}

@@ -365,6 +365,38 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
           </div>
         </div>
 
+        {/* Developer & Codebase Export */}
+        <div className="bg-[var(--surface-subtle)] p-3.5 rounded-xl border border-[var(--border)] space-y-2.5">
+          <span className="text-[10px] font-bold text-[var(--accent)] uppercase block">
+            📦 Backups &amp; Codebase Exports
+          </span>
+          <p className="text-[11px] text-[var(--text-muted)] leading-relaxed">
+            Keep physical copies on your phone or computer anytime without relying on cloud services:
+          </p>
+
+          <div className="flex flex-wrap gap-2 pt-1">
+            <a
+              href="/api/export-single-html"
+              download="krueger-painting-app.html"
+              className="inline-flex items-center gap-1.5 px-3.5 py-2 bg-[#1c2e1f] hover:bg-[#253d29] border border-[#30d158]/60 text-[#30d158] font-bold text-xs rounded-xl shadow-xs transition-colors cursor-pointer"
+              title="One standalone HTML file. Tap or click to open immediately in Chrome with zero setup."
+            >
+              <span>📄</span>
+              <span>Download Standalone HTML (Click to Open)</span>
+            </a>
+
+            <a
+              href="/api/export-project-zip"
+              download="krueger-painting-os.zip"
+              className="inline-flex items-center gap-1.5 px-3.5 py-2 bg-[#2c2317] hover:bg-[#3b2b1d] border border-[#f1c40f]/60 text-[#f1c40f] font-bold text-xs rounded-xl shadow-xs transition-colors cursor-pointer"
+              title="Full developer source project with all subfolders for editing in VS Code or Cursor."
+            >
+              <span>📦</span>
+              <span>Download Source Code (ZIP)</span>
+            </a>
+          </div>
+        </div>
+
         <button
           type="button"
           onClick={handleSaveAll}

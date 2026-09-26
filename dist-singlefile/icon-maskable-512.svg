@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <rect width="512" height="512" fill="#231709"/>
+  <circle cx="256" cy="256" r="180" fill="#f4c430"/>
+  <circle cx="256" cy="256" r="166" fill="none" stroke="#3b2b1d" stroke-width="4"/>
+  <text x="256" y="226" font-family="system-ui, -apple-system, sans-serif" font-size="36" font-weight="900" fill="#231709" text-anchor="middle" letter-spacing="2">KRUEGER</text>
+  <text x="256" y="266" font-family="system-ui, -apple-system, sans-serif" font-size="28" font-weight="900" fill="#231709" text-anchor="middle" letter-spacing="1">PAINTING</text>
+  <text x="256" y="316" font-family="system-ui, -apple-system, sans-serif" font-size="22" font-weight="900" fill="#231709" text-anchor="middle">(262) 443-1199</text>
+</svg>

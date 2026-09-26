@@ -248,7 +248,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                   key={c.id}
                   className="bg-[var(--bg)] border border-[var(--border)] rounded-lg p-3 hover:border-[var(--accent)] transition-all"
                 >
-                  <div className="flex items-start justify-between gap-2">
+                  <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-2">
                     <div
                       onClick={() => onOpenFolder(c.id)}
                       className="flex-1 cursor-pointer hover:opacity-80 transition-opacity"
@@ -347,33 +347,34 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
   return (
     <div className="space-y-3.5 max-w-2xl mx-auto pb-20">
       {/* Weather Quick Banner with Location Selector & Follow Me Controls */}
+      {/* Weather Header Bar */}
       <div
         onClick={onOpenWeatherHub}
-        className="bg-[var(--surface)] border border-[var(--border)] rounded-xl p-3.5 shadow-sm border-l-4 border-l-[#f1c40f] flex items-center justify-between gap-3 cursor-pointer hover:border-[#f1c40f] transition-all active:scale-[0.99]"
+        className="bg-[var(--surface)] border border-[var(--border)] rounded-xl p-3 sm:p-3.5 shadow-sm border-l-4 border-l-[#f1c40f] flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 cursor-pointer hover:border-[#f1c40f] transition-all active:scale-[0.99]"
         title="Tap for 7-day contractor weather hub"
       >
-        <div className="flex-1">
+        <div className="flex-1 min-w-0">
           <div className="text-xs font-bold text-[var(--text)] flex items-center gap-1.5 flex-wrap">
             {isFollowingGps ? (
-              <span className="flex items-center gap-1 bg-[#1c2e1f] text-[#30d158] border border-[#30d158]/40 px-2 py-0.5 rounded text-[10px] font-black uppercase">
+              <span className="flex items-center gap-1 bg-[#1c2e1f] text-[#30d158] border border-[#30d158]/40 px-1.5 py-0.5 rounded text-[9px] sm:text-[10px] font-black uppercase shrink-0">
                 <span className="w-1.5 h-1.5 rounded-full bg-[#30d158] animate-pulse"></span>
-                🛰️ Following Live GPS
+                🛰️ Live GPS
               </span>
             ) : (
-              <span className="bg-[#2c2317] text-[#f1c40f] border border-[#f1c40f]/40 px-2 py-0.5 rounded text-[10px] font-bold">
-                📍 Fixed Location
+              <span className="bg-[#2c2317] text-[#f1c40f] border border-[#f1c40f]/40 px-1.5 py-0.5 rounded text-[9px] sm:text-[10px] font-bold shrink-0">
+                📍 Fixed Loc
               </span>
             )}
 
-            <span className="font-extrabold">
+            <span className="font-extrabold truncate">
               {currentWeather
                 ? `${currentLocation.name}: ${currentWeather.temp}°F • 💨 ${currentWeather.windSpeed} mph`
                 : `${currentLocation.name} Weather`}
             </span>
           </div>
 
-          <div className="text-[11px] text-[var(--text-muted)] mt-1 flex items-center gap-2">
-            <span>{currentWeather ? currentWeather.conditionText : 'Tap for full weather & spray forecast'}</span>
+          <div className="text-[10px] sm:text-[11px] text-[var(--text-muted)] mt-1 flex items-center gap-2 flex-wrap">
+            <span className="truncate">{currentWeather ? currentWeather.conditionText : 'Tap for spray forecast'}</span>
             {onToggleFollowMe && (
               <button
                 type="button"
@@ -381,23 +382,23 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                   e.stopPropagation();
                   onToggleFollowMe(!isFollowingGps);
                 }}
-                className={`text-[9px] font-bold px-2 py-0.5 rounded border transition-colors ${
+                className={`text-[8.5px] sm:text-[9px] font-bold px-1.5 py-0.5 rounded border transition-colors shrink-0 ${
                   isFollowingGps
                     ? 'bg-[#121318] text-gray-400 hover:text-white border-[var(--border)]'
                     : 'bg-[#30d158] text-white border-[#30d158] font-black'
                 }`}
               >
-                {isFollowingGps ? 'Pause GPS Follow' : '🛰️ Resume Follow Me'}
+                {isFollowingGps ? 'Pause GPS' : '🛰️ Resume GPS'}
               </button>
             )}
           </div>
         </div>
 
-        <div className="flex items-center gap-2">
+        <div className="flex items-center justify-between sm:justify-end gap-2 pt-1 sm:pt-0 border-t sm:border-t-0 border-[var(--border)]">
           {currentWeather && (
             <span
               style={{ backgroundColor: currentWeather.badgeBg }}
-              className="text-[9px] font-extrabold uppercase px-2 py-1 rounded text-white shadow-sm"
+              className="text-[8.5px] sm:text-[9px] font-extrabold uppercase px-2 py-0.5 rounded text-white shadow-xs"
             >
               {currentWeather.badgeText}
             </span>
@@ -407,26 +408,26 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
       </div>
 
       {/* Quick Dashboard Stat Tiles (Active Jobs, Scheduled, New Leads, Pending Bids) */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5 sm:gap-2">
         {/* Active Jobs */}
         <button
           type="button"
           onClick={() => handleStatTileClick('ACTIVE')}
-          className={`bg-[var(--surface)] hover:bg-[var(--surface-subtle)] border p-3 rounded-xl border-l-4 border-l-[#30d158] shadow-sm text-left transition-all active:scale-95 cursor-pointer ${
+          className={`bg-[var(--surface)] hover:bg-[var(--surface-subtle)] border p-2.5 sm:p-3 rounded-xl border-l-4 border-l-[#30d158] shadow-xs text-left transition-all active:scale-95 cursor-pointer ${
             selectedFilter === 'ACTIVE' ? 'ring-2 ring-[#30d158] border-[#30d158]' : 'border-[var(--border)]'
           }`}
         >
           <div className="flex items-center justify-between">
-            <span className="text-xl sm:text-2xl font-black text-[#30d158] block leading-none">
+            <span className="text-lg sm:text-2xl font-black text-[#30d158] block leading-none">
               {totalActiveJobs > 0 ? totalActiveJobs : activeCusts.length}
             </span>
             <span className="text-xs">🟢</span>
           </div>
-          <span className="text-[10px] uppercase font-extrabold text-[var(--text)] tracking-wider mt-1.5 block">
+          <span className="text-[9.5px] sm:text-[10px] uppercase font-extrabold text-[var(--text)] tracking-wider mt-1 block truncate">
             Active Jobs
           </span>
-          <span className="text-[9px] text-[var(--text-muted)]">
-            {activeCusts.length} client{activeCusts.length === 1 ? '' : 's'} underway
+          <span className="text-[8.5px] sm:text-[9px] text-[var(--text-muted)] truncate block">
+            {activeCusts.length} underway
           </span>
         </button>
 
@@ -434,21 +435,21 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
         <button
           type="button"
           onClick={() => handleStatTileClick('SCHEDULED')}
-          className={`bg-[var(--surface)] hover:bg-[var(--surface-subtle)] border p-3 rounded-xl border-l-4 border-l-[#0a84ff] shadow-sm text-left transition-all active:scale-95 cursor-pointer ${
+          className={`bg-[var(--surface)] hover:bg-[var(--surface-subtle)] border p-2.5 sm:p-3 rounded-xl border-l-4 border-l-[#0a84ff] shadow-xs text-left transition-all active:scale-95 cursor-pointer ${
             selectedFilter === 'SCHEDULED' ? 'ring-2 ring-[#0a84ff] border-[#0a84ff]' : 'border-[var(--border)]'
           }`}
         >
           <div className="flex items-center justify-between">
-            <span className="text-xl sm:text-2xl font-black text-[#0a84ff] block leading-none">
+            <span className="text-lg sm:text-2xl font-black text-[#0a84ff] block leading-none">
               {totalScheduledJobs > 0 ? totalScheduledJobs : scheduledCusts.length}
             </span>
             <span className="text-xs">📅</span>
           </div>
-          <span className="text-[10px] uppercase font-extrabold text-[var(--text)] tracking-wider mt-1.5 block">
+          <span className="text-[9.5px] sm:text-[10px] uppercase font-extrabold text-[var(--text)] tracking-wider mt-1 block truncate">
             Scheduled
           </span>
-          <span className="text-[9px] text-[var(--text-muted)]">
-            {scheduledCusts.length} upcoming on calendar
+          <span className="text-[8.5px] sm:text-[9px] text-[var(--text-muted)] truncate block">
+            {scheduledCusts.length} upcoming
           </span>
         </button>
 
@@ -456,41 +457,41 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
         <button
           type="button"
           onClick={() => handleStatTileClick('NEW')}
-          className={`bg-[var(--surface)] hover:bg-[var(--surface-subtle)] border p-3 rounded-xl border-l-4 border-l-[#f1c40f] shadow-sm text-left transition-all active:scale-95 cursor-pointer ${
+          className={`bg-[var(--surface)] hover:bg-[var(--surface-subtle)] border p-2.5 sm:p-3 rounded-xl border-l-4 border-l-[#f1c40f] shadow-xs text-left transition-all active:scale-95 cursor-pointer ${
             selectedFilter === 'NEW' ? 'ring-2 ring-[#f1c40f] border-[#f1c40f]' : 'border-[var(--border)]'
           }`}
         >
           <div className="flex items-center justify-between">
-            <span className="text-xl sm:text-2xl font-black text-[#f1c40f] block leading-none">
+            <span className="text-lg sm:text-2xl font-black text-[#f1c40f] block leading-none">
               {newCusts.length}
             </span>
             <span className="text-xs">✨</span>
           </div>
-          <span className="text-[10px] uppercase font-extrabold text-[var(--text)] tracking-wider mt-1.5 block">
+          <span className="text-[9.5px] sm:text-[10px] uppercase font-extrabold text-[var(--text)] tracking-wider mt-1 block truncate">
             New Leads
           </span>
-          <span className="text-[9px] text-[var(--text-muted)]">Recent inquiries</span>
+          <span className="text-[8.5px] sm:text-[9px] text-[var(--text-muted)] truncate block">Inquiries</span>
         </button>
 
         {/* Pending Bids */}
         <button
           type="button"
           onClick={() => handleStatTileClick('PENDING')}
-          className={`bg-[var(--surface)] hover:bg-[var(--surface-subtle)] border p-3 rounded-xl border-l-4 border-l-[var(--accent-secondary)] shadow-sm text-left transition-all active:scale-95 cursor-pointer ${
+          className={`bg-[var(--surface)] hover:bg-[var(--surface-subtle)] border p-2.5 sm:p-3 rounded-xl border-l-4 border-l-[var(--accent-secondary)] shadow-xs text-left transition-all active:scale-95 cursor-pointer ${
             selectedFilter === 'PENDING' ? 'ring-2 ring-[var(--accent-secondary)] border-[var(--accent-secondary)]' : 'border-[var(--border)]'
           }`}
         >
           <div className="flex items-center justify-between">
-            <span className="text-xl sm:text-2xl font-black text-[var(--accent-secondary)] block leading-none">
+            <span className="text-lg sm:text-2xl font-black text-[var(--accent-secondary)] block leading-none">
               {totalPendingJobs > 0 ? totalPendingJobs : pendingLeads.length}
             </span>
             <span className="text-xs">⏳</span>
           </div>
-          <span className="text-[10px] uppercase font-extrabold text-[var(--text)] tracking-wider mt-1.5 block">
+          <span className="text-[9.5px] sm:text-[10px] uppercase font-extrabold text-[var(--text)] tracking-wider mt-1 block truncate">
             Pending Bids
           </span>
-          <span className="text-[9px] text-[var(--text-muted)]">
-            {pendingLeads.length} awaiting decision
+          <span className="text-[8.5px] sm:text-[9px] text-[var(--text-muted)] truncate block">
+            {pendingLeads.length} awaiting
           </span>
         </button>
       </div>

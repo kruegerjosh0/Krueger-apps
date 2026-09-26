@@ -7,6 +7,7 @@ import {
   updateGoogleContact,
   fetchGoogleContacts,
   GoogleContactPerson,
+  createGoogleCalendarUrl,
 } from '../../utils/googleWorkspace';
 
 interface FolderViewModalProps {
@@ -18,6 +19,7 @@ interface FolderViewModalProps {
   onDeleteJob: (jobId: number) => void;
   onGenerateDoc: (job: JobProject, type: 'ESTIMATE' | 'BILL' | 'MASTER RECORD') => void;
   onViewImage: (dataUrl: string) => void;
+  onViewDocFile?: (file: { name: string; data: string; tag?: string }) => void;
   onGenerateCollage: () => void;
   onScheduleEstimate: () => void;
   onToast: (msg: string) => void;
@@ -32,6 +34,7 @@ export const FolderViewModal: React.FC<FolderViewModalProps> = ({
   onDeleteJob,
   onGenerateDoc,
   onViewImage,
+  onViewDocFile,
   onGenerateCollage,
   onScheduleEstimate,
   onToast,
@@ -166,29 +169,29 @@ export const FolderViewModal: React.FC<FolderViewModalProps> = ({
   const mapUrl = `http://maps.google.com/?q=${encodeURIComponent(address || '')}`;
 
   return (
-    <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-sm flex flex-col p-3 sm:p-5 overflow-y-auto animate-in fade-in">
-      <div className="max-w-2xl w-full mx-auto bg-[var(--surface)] border border-[var(--border)] rounded-2xl p-4 sm:p-5 shadow-2xl space-y-4 my-auto">
+    <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-sm flex flex-col p-2 sm:p-5 overflow-y-auto animate-in fade-in">
+      <div className="max-w-2xl w-full mx-auto bg-[var(--surface)] border border-[var(--border)] rounded-2xl p-3 sm:p-5 shadow-2xl space-y-3.5 my-auto">
         {/* Top Header */}
-        <div className="flex items-center justify-between border-b border-[var(--border)] pb-3">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between border-b border-[var(--border)] pb-2.5 gap-2">
           <div>
             <span className="text-[10px] font-extrabold uppercase tracking-wide text-[var(--accent)]">
               Customer File Cabinet
             </span>
-            <h2 className="text-base sm:text-lg font-black text-[var(--text)]">{name}</h2>
+            <h2 className="text-sm sm:text-lg font-black text-[var(--text)]">{name}</h2>
           </div>
 
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-1.5 shrink-0">
             <button
               type="button"
               onClick={onScheduleEstimate}
-              className="bg-[var(--accent)] hover:opacity-95 text-white font-extrabold text-[11px] px-3 py-1.5 rounded-lg shadow cursor-pointer transition-transform active:scale-95"
+              className="bg-[var(--accent)] hover:opacity-95 text-white font-extrabold text-[10.5px] sm:text-[11px] px-2.5 sm:px-3 py-1.5 rounded-lg shadow cursor-pointer transition-transform active:scale-95"
             >
-              📅 Schedule Estimate
+              📅 Schedule Est
             </button>
             <button
               type="button"
               onClick={onClose}
-              className="bg-[var(--surface-subtle)] hover:bg-[var(--border)] text-[var(--text)] font-bold text-xs px-3 py-1.5 rounded-lg border border-[var(--border)] cursor-pointer"
+              className="bg-[var(--surface-subtle)] hover:bg-[var(--border)] text-[var(--text)] font-bold text-xs px-2.5 sm:px-3 py-1.5 rounded-lg border border-[var(--border)] cursor-pointer"
             >
               ✕ Close
             </button>
@@ -270,23 +273,23 @@ export const FolderViewModal: React.FC<FolderViewModalProps> = ({
         </div>
 
         {/* Quick Communication Bar */}
-        <div className="grid grid-cols-3 sm:grid-cols-6 gap-1.5">
+        <div className="grid grid-cols-3 sm:grid-cols-6 gap-1">
           <a
             href={`tel:${phone}`}
-            className="py-2 px-1 text-center bg-[var(--surface-subtle)] hover:bg-[var(--accent)] hover:text-white rounded-lg border border-[var(--border)] text-[10px] font-bold text-[var(--text)] flex items-center justify-center gap-1 transition-colors"
+            className="py-1.5 px-0.5 text-center bg-[var(--surface-subtle)] hover:bg-[var(--accent)] hover:text-white rounded-lg border border-[var(--border)] text-[9.5px] sm:text-[10px] font-bold text-[var(--text)] flex items-center justify-center gap-1 transition-colors"
           >
             📞 Call
           </a>
           <a
             href={`sms:${phone}`}
-            className="py-2 px-1 text-center bg-[var(--surface-subtle)] hover:bg-[var(--accent)] hover:text-white rounded-lg border border-[var(--border)] text-[10px] font-bold text-[var(--text)] flex items-center justify-center gap-1 transition-colors"
+            className="py-1.5 px-0.5 text-center bg-[var(--surface-subtle)] hover:bg-[var(--accent)] hover:text-white rounded-lg border border-[var(--border)] text-[9.5px] sm:text-[10px] font-bold text-[var(--text)] flex items-center justify-center gap-1 transition-colors"
           >
             💬 Text
           </a>
           <button
             type="button"
             onClick={sendEtaSms}
-            className="py-2 px-1 text-center bg-[var(--accent-secondary)] text-white rounded-lg text-[10px] font-bold flex items-center justify-center gap-1 cursor-pointer transition-transform active:scale-95"
+            className="py-1.5 px-0.5 text-center bg-[var(--accent-secondary)] text-white rounded-lg text-[9.5px] sm:text-[10px] font-bold flex items-center justify-center gap-1 cursor-pointer transition-transform active:scale-95"
           >
             🚗 ETA Text
           </button>
@@ -294,21 +297,21 @@ export const FolderViewModal: React.FC<FolderViewModalProps> = ({
             href={mapUrl}
             target="_blank"
             rel="noreferrer"
-            className="py-2 px-1 text-center bg-[var(--surface-subtle)] hover:bg-[var(--accent)] hover:text-white rounded-lg border border-[var(--border)] text-[10px] font-bold text-[var(--text)] flex items-center justify-center gap-1 transition-colors"
+            className="py-1.5 px-0.5 text-center bg-[var(--surface-subtle)] hover:bg-[var(--accent)] hover:text-white rounded-lg border border-[var(--border)] text-[9.5px] sm:text-[10px] font-bold text-[var(--text)] flex items-center justify-center gap-1 transition-colors"
           >
             🗺️ Map
           </a>
           <button
             type="button"
             onClick={() => sendReviewRequest('SMS')}
-            className="py-2 px-1 text-center bg-purple-600 text-white rounded-lg text-[10px] font-bold flex items-center justify-center gap-1 cursor-pointer transition-transform active:scale-95"
+            className="py-1.5 px-0.5 text-center bg-purple-600 text-white rounded-lg text-[9.5px] sm:text-[10px] font-bold flex items-center justify-center gap-1 cursor-pointer transition-transform active:scale-95"
           >
             💬 SMS Rev
           </button>
           <button
             type="button"
             onClick={() => sendReviewRequest('EMAIL')}
-            className="py-2 px-1 text-center bg-purple-600 text-white rounded-lg text-[10px] font-bold flex items-center justify-center gap-1 cursor-pointer transition-transform active:scale-95"
+            className="py-1.5 px-0.5 text-center bg-purple-600 text-white rounded-lg text-[9.5px] sm:text-[10px] font-bold flex items-center justify-center gap-1 cursor-pointer transition-transform active:scale-95"
           >
             📧 Email Rev
           </button>
@@ -405,13 +408,20 @@ export const FolderViewModal: React.FC<FolderViewModalProps> = ({
                   />
                 ) : (
                   <div
-                    onClick={() => onViewImage(f.data)}
-                    className="w-full h-16 flex flex-col items-center justify-center p-1 text-center cursor-pointer"
+                    onClick={() => {
+                      if (onViewDocFile) {
+                        onViewDocFile(f);
+                      } else {
+                        onViewImage(f.data);
+                      }
+                    }}
+                    className="w-full h-16 flex flex-col items-center justify-center p-1 text-center cursor-pointer hover:bg-[var(--border)] rounded transition-colors group/doc"
                   >
-                    <span className="text-xl">📄</span>
+                    <span className="text-xl group-hover/doc:scale-110 transition-transform">📄</span>
                     <span className="text-[8px] text-[var(--accent)] truncate max-w-full font-bold">
                       {f.name}
                     </span>
+                    <span className="text-[7px] text-[var(--text-muted)] font-semibold">Tap to View</span>
                   </div>
                 )}
               </div>
@@ -512,8 +522,8 @@ export const FolderViewModal: React.FC<FolderViewModalProps> = ({
                     <span className="text-base font-black text-[var(--accent)]">${gross}</span>
                   </div>
 
-                  {/* Document Generation Buttons */}
-                  <div className="grid grid-cols-4 gap-1.5 pt-1">
+                  {/* Document Generation & Calendar Buttons */}
+                  <div className="grid grid-cols-2 min-[440px]:grid-cols-3 sm:grid-cols-5 gap-1.5 pt-1">
                     <button
                       type="button"
                       onClick={() => onGenerateDoc(j, 'ESTIMATE')}
@@ -532,6 +542,31 @@ export const FolderViewModal: React.FC<FolderViewModalProps> = ({
                       <span>💳</span>
                       <span>Bill PDF</span>
                     </button>
+                    {j.schedDate ? (
+                      <a
+                        href={createGoogleCalendarUrl(customer.name, j, customer.address, customer.phone)}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="py-1.5 bg-[#4285f4] hover:bg-[#3367d6] text-white font-extrabold text-[10px] rounded-lg cursor-pointer transition-transform active:scale-95 flex items-center justify-center gap-1 shadow-sm"
+                        title="Add directly to phone Google Calendar app"
+                      >
+                        <span>📅</span>
+                        <span>Cal</span>
+                      </a>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          onOpenJobModal(j);
+                          onToast('Set a start date to sync this project to Google Calendar');
+                        }}
+                        className="py-1.5 bg-[var(--surface-subtle)] hover:bg-[var(--border)] border border-[var(--border)] text-gray-400 font-bold text-[10px] rounded-lg cursor-pointer flex items-center justify-center gap-1"
+                        title="Set start date first to sync to calendar"
+                      >
+                        <span>📅</span>
+                        <span>Cal</span>
+                      </button>
+                    )}
                     <button
                       type="button"
                       onClick={() => onOpenJobModal(j)}

@@ -31,15 +31,17 @@ export const Header: React.FC<HeaderProps> = ({
   onOpenAccountModal,
   onOpenApkInstaller,
 }) => {
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+
   return (
-    <header className="sticky top-0 z-40 bg-[var(--surface)] backdrop-blur-md border-b-2 border-[var(--accent)] px-3 sm:px-4 py-2.5 sm:py-3 shadow-lg">
-      <div className="max-w-4xl mx-auto flex items-center justify-between gap-2 sm:gap-3">
-        {/* Left: Logo */}
-        <div className="flex items-center gap-2.5 sm:gap-3">
+    <header className="sticky top-0 z-40 bg-[var(--surface)] backdrop-blur-md border-b-2 border-[var(--accent)] px-2 sm:px-4 py-2 sm:py-2.5 shadow-lg w-full max-w-full overflow-hidden">
+      <div className="max-w-4xl mx-auto flex items-center justify-between gap-1.5 sm:gap-3">
+        {/* Left: Logo & Brand */}
+        <div className="flex items-center gap-2 min-w-0 flex-1">
           <button
             type="button"
             onClick={onOpenAiAssistant}
-            className="w-9 h-9 sm:w-10 sm:h-10 rounded-full border-2 border-[var(--accent)] bg-[var(--surface-subtle)] flex items-center justify-center shadow-md hover:scale-105 active:scale-95 transition-all cursor-pointer p-0.5"
+            className="w-8 h-8 sm:w-10 sm:h-10 shrink-0 rounded-full border-2 border-[var(--accent)] bg-[var(--surface-subtle)] flex items-center justify-center shadow-md hover:scale-105 active:scale-95 transition-all cursor-pointer p-0.5"
             title="Tap to talk with Flip Gemini AI"
           >
             <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 300 300" className="w-full h-full">
@@ -69,30 +71,30 @@ export const Header: React.FC<HeaderProps> = ({
             </svg>
           </button>
 
-          <div>
-            <h1 className="text-xs sm:text-sm font-extrabold uppercase tracking-wider text-[var(--accent)] leading-tight">
-              Krueger Painting OS
+          <div className="min-w-0 truncate">
+            <h1 className="text-xs sm:text-sm font-extrabold uppercase tracking-wide text-[var(--accent)] leading-tight truncate">
+              Krueger Painting
             </h1>
-            <span className="text-[9.5px] sm:text-[10px] uppercase font-semibold text-[var(--text-muted)] tracking-wider block">
-              {settings.motto || 'Precision & Quality'}
+            <span className="text-[9px] sm:text-[10px] uppercase font-semibold text-[var(--text-muted)] tracking-wider truncate block">
+              {settings.motto || 'OS'}
             </span>
           </div>
         </div>
 
-        {/* Center / Right: Floating AI Assistant Bubble & Account / Sync */}
-        <div className="flex items-center gap-1.5 sm:gap-2">
+        {/* Center / Right: Actions */}
+        <div className="flex items-center gap-1 sm:gap-2 shrink-0">
           {onOpenAiAssistant && (
             <button
               type="button"
               onClick={onOpenAiAssistant}
-              className="relative flex items-center gap-1.5 px-3 py-1.5 sm:px-3.5 sm:py-2 rounded-full bg-gradient-to-r from-amber-500 via-yellow-400 to-amber-500 text-black font-black text-xs shadow-lg hover:shadow-amber-500/40 hover:scale-105 active:scale-95 transition-all cursor-pointer ring-2 ring-amber-400/60"
-              title="Talk to Flip Gemini AI Assistant (Voice & Chat)"
+              className="relative flex items-center gap-1 px-2 sm:px-3.5 py-1.5 rounded-full bg-gradient-to-r from-amber-500 via-yellow-400 to-amber-500 text-black font-black text-[11px] sm:text-xs shadow-md hover:scale-105 active:scale-95 transition-all cursor-pointer ring-1.5 sm:ring-2 ring-amber-400/60"
+              title="Talk to Flip Gemini AI Assistant"
             >
-              <span className="text-sm">✨</span>
-              <span className="font-black uppercase tracking-wide">Flip AI</span>
-              <span className="flex h-2 w-2 relative">
+              <span className="text-xs sm:text-sm">✨</span>
+              <span className="font-black uppercase tracking-wide text-[10px] sm:text-xs">Flip</span>
+              <span className="flex h-1.5 w-1.5 sm:h-2 sm:w-2 relative">
                 <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-black opacity-75"></span>
-                <span className="relative inline-flex rounded-full h-2 w-2 bg-black"></span>
+                <span className="relative inline-flex rounded-full h-1.5 w-1.5 sm:h-2 sm:w-2 bg-black"></span>
               </span>
             </button>
           )}
@@ -102,49 +104,52 @@ export const Header: React.FC<HeaderProps> = ({
             <button
               type="button"
               onClick={onOpenAccountModal}
-              className={`px-2 sm:px-2.5 py-1.5 rounded-lg text-[11px] font-bold border transition-transform active:scale-95 cursor-pointer flex items-center gap-1.5 ${
+              className={`px-1.5 sm:px-2.5 py-1.5 rounded-lg text-[10px] sm:text-[11px] font-bold border transition-transform active:scale-95 cursor-pointer flex items-center gap-1 ${
                 currentUser
                   ? 'border-emerald-500/40 bg-emerald-950/40 text-emerald-300 hover:bg-emerald-900/60'
                   : 'border-purple-500/40 bg-purple-950/40 text-purple-300 hover:bg-purple-900/60'
               }`}
-              title={currentUser ? `Signed in as ${currentUser.email || 'Josh Krueger'}` : 'Sign in with Email or Google'}
+              title={currentUser ? `Signed in as ${currentUser.email || 'Josh Krueger'}` : 'Sign in'}
             >
               <span className="text-xs">👤</span>
-              <span className="hidden sm:inline font-bold">
+              <span className="hidden md:inline font-bold">
                 {currentUser ? (currentUser.email ? currentUser.email.split('@')[0] : 'Logged In') : 'Login'}
               </span>
               {currentUser && <span className="w-1.5 h-1.5 rounded-full bg-emerald-400"></span>}
             </button>
           )}
 
+          {/* Cloud Sync Button (visible on screens >= 370px) */}
           {onOpenCloudSync && (
             <button
               type="button"
               onClick={onOpenCloudSync}
-              className="px-2 sm:px-2.5 py-1.5 rounded-lg text-[11px] font-bold border border-purple-500/40 bg-purple-950/40 text-purple-300 hover:bg-purple-900/60 transition-transform active:scale-95 cursor-pointer flex items-center gap-1"
-              title="Cloud Sync & Multi-Device Access"
+              className="hidden min-[370px]:flex px-1.5 sm:px-2.5 py-1.5 rounded-lg text-[10px] sm:text-[11px] font-bold border border-purple-500/40 bg-purple-950/40 text-purple-300 hover:bg-purple-900/60 transition-transform active:scale-95 cursor-pointer items-center gap-1"
+              title="Cloud Sync"
             >
               <span>☁️</span>
-              <span className="hidden md:inline">Sync</span>
+              <span className="hidden lg:inline">Sync</span>
             </button>
           )}
 
+          {/* App Button (visible on tablet/desktop) */}
           {onOpenApkInstaller && (
             <button
               type="button"
               onClick={onOpenApkInstaller}
-              className="px-2 sm:px-2.5 py-1.5 rounded-lg text-[11px] font-bold border border-blue-500/40 bg-blue-950/40 text-blue-300 hover:bg-blue-900/60 transition-transform active:scale-95 cursor-pointer flex items-center gap-1"
+              className="hidden sm:flex px-2 sm:px-2.5 py-1.5 rounded-lg text-[11px] font-bold border border-blue-500/40 bg-blue-950/40 text-blue-300 hover:bg-blue-900/60 transition-transform active:scale-95 cursor-pointer items-center gap-1"
               title="Install Android App / APK"
             >
               <span>📱</span>
-              <span className="hidden md:inline">App</span>
+              <span className="hidden lg:inline">App</span>
             </button>
           )}
 
+          {/* Backup Button (visible on tablet/desktop) */}
           <button
             type="button"
             onClick={onBackup}
-            className={`px-2.5 sm:px-3 py-1.5 rounded-lg text-[11px] font-bold border transition-transform active:scale-95 cursor-pointer ${
+            className={`hidden sm:inline-flex px-2.5 sm:px-3 py-1.5 rounded-lg text-[11px] font-bold border transition-transform active:scale-95 cursor-pointer ${
               isBackupDue
                 ? 'bg-red-600 border-red-600 text-white animate-pulse'
                 : 'bg-[var(--surface-subtle)] border-[var(--border)] text-[var(--text)] hover:border-[var(--accent)]'
@@ -153,7 +158,8 @@ export const Header: React.FC<HeaderProps> = ({
             {isBackupDue ? '⚠️ Backup' : 'Backup'}
           </button>
 
-          <label className="px-2.5 sm:px-3 py-1.5 rounded-lg text-[11px] font-bold border border-[var(--border)] bg-[var(--surface-subtle)] text-[var(--text)] hover:border-[var(--accent)] transition-transform active:scale-95 cursor-pointer">
+          {/* Restore Button (visible on tablet/desktop) */}
+          <label className="hidden sm:inline-flex px-2.5 sm:px-3 py-1.5 rounded-lg text-[11px] font-bold border border-[var(--border)] bg-[var(--surface-subtle)] text-[var(--text)] hover:border-[var(--accent)] transition-transform active:scale-95 cursor-pointer">
             Restore
             <input
               type="file"
@@ -167,6 +173,76 @@ export const Header: React.FC<HeaderProps> = ({
               }}
             />
           </label>
+
+          {/* Mobile Overflow Menu Button (< sm / folded phones) */}
+          <div className="relative sm:hidden">
+            <button
+              type="button"
+              onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
+              className="px-2 py-1.5 rounded-lg text-xs font-bold border border-[var(--border)] bg-[var(--surface-subtle)] text-[var(--text)] hover:border-[var(--accent)] cursor-pointer"
+              title="More Options"
+            >
+              ⋯
+            </button>
+
+            {mobileMenuOpen && (
+              <div className="absolute right-0 top-full mt-1.5 w-40 bg-[var(--surface)] border border-[var(--border)] rounded-xl shadow-2xl p-1.5 z-50 space-y-1 animate-in fade-in">
+                {onOpenCloudSync && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setMobileMenuOpen(false);
+                      onOpenCloudSync();
+                    }}
+                    className="w-full text-left px-2.5 py-1.5 text-xs font-bold text-purple-300 hover:bg-[var(--surface-subtle)] rounded-lg flex items-center gap-1.5"
+                  >
+                    <span>☁️</span>
+                    <span>Cloud Sync</span>
+                  </button>
+                )}
+                {onOpenApkInstaller && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setMobileMenuOpen(false);
+                      onOpenApkInstaller();
+                    }}
+                    className="w-full text-left px-2.5 py-1.5 text-xs font-bold text-blue-300 hover:bg-[var(--surface-subtle)] rounded-lg flex items-center gap-1.5"
+                  >
+                    <span>📱</span>
+                    <span>Android APK App</span>
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={() => {
+                    setMobileMenuOpen(false);
+                    onBackup();
+                  }}
+                  className="w-full text-left px-2.5 py-1.5 text-xs font-bold text-[var(--text)] hover:bg-[var(--surface-subtle)] rounded-lg flex items-center gap-1.5"
+                >
+                  <span>💾</span>
+                  <span>Backup System</span>
+                </button>
+                <label className="w-full text-left px-2.5 py-1.5 text-xs font-bold text-[var(--text)] hover:bg-[var(--surface-subtle)] rounded-lg flex items-center gap-1.5 cursor-pointer">
+                  <span>📂</span>
+                  <span>Restore Backup</span>
+                  <input
+                    type="file"
+                    accept=".json"
+                    className="hidden"
+                    onChange={(e) => {
+                      setMobileMenuOpen(false);
+                      if (e.target.files && e.target.files[0]) {
+                        onRestore(e.target.files[0]);
+                        e.target.value = '';
+                      }
+                    }}
+                  />
+                </label>
+              </div>
+            )}
+          </div>
         </div>
       </div>
     </header>

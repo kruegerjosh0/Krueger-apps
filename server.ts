@@ -563,6 +563,51 @@ app.get('/api/radar-status', async (_req, res) => {
   }
 });
 
+// Full Project Codebase ZIP Export Endpoint
+app.get('/api/export-project-zip', async (_req, res) => {
+  try {
+    const { exec } = await import('child_process');
+    const zipPath = path.resolve('/tmp', 'krueger-painting-os.zip');
+    const pyCommand = `python3 -c "import zipfile, os; exclude_dirs = {'node_modules', 'dist', 'dist-singlefile', '.git', '.cache'}; with zipfile.ZipFile('${zipPath}', 'w', zipfile.ZIP_DEFLATED) as zipf: [zipf.write(os.path.join(root, file), os.path.relpath(os.path.join(root, file), '.')) for root, dirs, files in os.walk('.') if not dirs.intersection_update([d for d in dirs if d not in exclude_dirs]) for file in files if not file.endswith('.pyc')]"`;
+
+    exec(pyCommand, { cwd: path.resolve(__dirname) }, (err) => {
+      if (err) {
+        console.error('ZIP generation error:', err);
+        return res.status(500).json({ error: 'Failed to generate codebase zip file' });
+      }
+      res.download(zipPath, 'krueger-painting-os.zip');
+    });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message || 'Export failed' });
+  }
+});
+
+// Standalone 1-Click HTML File Export Endpoint (Single file, no folders, double-click to run in Chrome)
+app.get('/api/export-single-html', async (_req, res) => {
+  try {
+    const { exec } = await import('child_process');
+    const singlefilePath = path.resolve(__dirname, 'dist-singlefile', 'index.html');
+    const fs = await import('fs');
+
+    res.setHeader('Content-Type', 'application/octet-stream');
+    res.setHeader('Content-Disposition', 'attachment; filename="krueger-painting-app.html"');
+
+    if (fs.existsSync(singlefilePath)) {
+      return res.download(singlefilePath, 'krueger-painting-app.html');
+    }
+
+    exec('npm run build:singlefile', { cwd: path.resolve(__dirname) }, (err) => {
+      if (err) {
+        console.error('Singlefile build error:', err);
+        return res.status(500).json({ error: 'Failed to generate standalone HTML' });
+      }
+      res.download(singlefilePath, 'krueger-painting-app.html');
+    });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message || 'Export failed' });
+  }
+});
+
 // Setup Vite in Dev or Serve Static in Prod
 async function startServer() {
   if (process.env.NODE_ENV === 'production') {

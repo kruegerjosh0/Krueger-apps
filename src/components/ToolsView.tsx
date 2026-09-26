@@ -31,7 +31,26 @@ export const ToolsView: React.FC<ToolsViewProps> = ({
   onOpenCloudSync,
   onOpenApkInstaller,
 }) => {
+  const triggerDownload = (url: string, filename: string) => {
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = filename;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
+  const handleExportSingleHtml = () => {
+    triggerDownload('/api/export-single-html', 'krueger-painting-app.html');
+  };
+
+  const handleExportZip = () => {
+    triggerDownload('/api/export-project-zip', 'krueger-painting-os.zip');
+  };
+
   const tools = [
+    { title: 'Single-File HTML', icon: '📄', desc: '1-click file. Tap or click to open anywhere in Chrome', action: handleExportSingleHtml },
+    { title: 'Export Code (ZIP)', icon: '📦', desc: 'Download full app project for external editing', action: handleExportZip },
     { title: 'Cloud Sync', icon: '☁️', desc: 'Sync files across devices', action: onOpenCloudSync || onOpenSettings },
     { title: 'Android APK / App', icon: '📱', desc: 'Install native Android app', action: onOpenApkInstaller || onOpenSettings },
     { title: 'Tax Report', icon: '📊', desc: 'Monthly gross & IRS deductions', action: onOpenTaxReport },
@@ -58,19 +77,21 @@ export const ToolsView: React.FC<ToolsViewProps> = ({
         </p>
       </div>
 
-      <div className="grid grid-cols-2 sm:grid-cols-3 gap-2.5">
+      <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 sm:gap-2.5">
         {tools.map((t) => (
           <button
             key={t.title}
             type="button"
             onClick={t.action}
-            className="bg-[var(--surface)] hover:border-[var(--accent)] border border-[var(--border)] p-4 rounded-xl flex flex-col items-center justify-center text-center gap-1.5 shadow-sm transition-all active:scale-95 cursor-pointer"
+            className="bg-[var(--surface)] hover:border-[var(--accent)] border border-[var(--border)] p-3 sm:p-4 rounded-xl flex flex-col items-center justify-center text-center gap-1 sm:gap-1.5 shadow-sm transition-all active:scale-95 cursor-pointer"
           >
-            <span className="text-2xl">{t.icon}</span>
-            <span className="font-extrabold text-xs uppercase tracking-wide text-[var(--text)]">
+            <span className="text-xl sm:text-2xl">{t.icon}</span>
+            <span className="font-extrabold text-[11px] sm:text-xs uppercase tracking-wide text-[var(--text)] truncate max-w-full">
               {t.title}
             </span>
-            <span className="text-[10px] text-[var(--text-muted)] leading-tight">{t.desc}</span>
+            <span className="text-[9.5px] sm:text-[10px] text-[var(--text-muted)] leading-tight line-clamp-2">
+              {t.desc}
+            </span>
           </button>
         ))}
       </div>

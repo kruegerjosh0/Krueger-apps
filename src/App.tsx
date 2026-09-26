@@ -22,7 +22,7 @@ import {
   DEFAULT_SYSTEM_CONSTANTS,
   generateDailyBackupJson,
 } from './utils/db';
-import { generateEstimateOrBillPdf, GeneratedPdfResult } from './utils/pdfGenerator';
+import { generateEstimateOrBillPdf, GeneratedPdfResult, dataUrlToPdfResult } from './utils/pdfGenerator';
 import {
   fetchFullWeather,
   DEFAULT_WISCONSIN_PRESETS,
@@ -66,7 +66,12 @@ import {
   saveWorkspaceToCloud,
   CloudWorkspacePayload,
 } from './utils/firebaseSync';
-import { subscribeToAuth, auth } from './utils/googleWorkspace';
+import {
+  subscribeToAuth,
+  auth,
+  GoogleCalendarEvent,
+  deleteGoogleCalendarEvent,
+} from './utils/googleWorkspace';
 
 export default function App() {
   const [activeTab, setActiveTab] = useState<TabType>('dash');
@@ -120,8 +125,9 @@ export default function App() {
 
   const [dayPopupDate, setDayPopupDate] = useState<string | null>(null);
   const [dayPopupJobs, setDayPopupJobs] = useState<
-    { customerName: string; customerId: number; job: JobProject }[]
+    { customerName: string; customerId: number; job: JobProject; address?: string; phone?: string }[]
   >([]);
+  const [dayPopupGoogleEvents, setDayPopupGoogleEvents] = useState<GoogleCalendarEvent[]>([]);
   const [viewerImageUrl, setViewerImageUrl] = useState<string | null>(null);
 
   const [editingNote, setEditingNote] = useState<FieldNote | null>(null);
@@ -481,6 +487,24 @@ export default function App() {
     handleUpdateCustomer(updatedCust);
   };
 
+  // View Document / Saved PDF from Customer Files
+  const handleViewDocFile = (file: { name: string; data: string; tag?: string }) => {
+    if (file.data.startsWith('data:application/pdf') || file.name.toLowerCase().endsWith('.pdf')) {
+      const isBill = file.tag === 'BILL' || file.name.toLowerCase().includes('invoice') || file.name.toLowerCase().includes('bill');
+      const docType: 'ESTIMATE' | 'BILL' | 'MASTER RECORD' = isBill ? 'BILL' : 'ESTIMATE';
+      const pdfResult = dataUrlToPdfResult(
+        file.data,
+        file.name,
+        0,
+        0
+      );
+      setPdfPreviewResult(pdfResult);
+      setPdfPreviewCustomer(activeFolderCustomer);
+    } else {
+      setViewerImageUrl(file.data);
+    }
+  };
+
   // Schedule Estimate Quick Action
   const handleScheduleEstimate = (cust: Customer) => {
     const todayStr = new Date().toISOString().split('T')[0];
@@ -605,13 +629,15 @@ export default function App() {
     bImg.src = beforeFiles[beforeFiles.length - 1].data;
   };
 
-  // Calendar .ICS Export
-  const handleExportAllJobsIcs = () => {
+  // Calendar .ICS Export & Google Calendar Sync
+  const handleExportAllJobsIcs = async () => {
     const icsContent = [
       'BEGIN:VCALENDAR',
       'VERSION:2.0',
       'PRODID:-//Krueger Painting OS//EN',
       'CALSCALE:GREGORIAN',
+      'METHOD:PUBLISH',
+      'X-WR-CALNAME:Krueger Painting Schedule',
     ];
 
     let count = 0;
@@ -619,13 +645,29 @@ export default function App() {
       (c.jobs || []).forEach((j) => {
         if (j.schedDate) {
           const start = j.schedDate.replace(/-/g, '');
-          const end = (j.schedEndDate || j.schedDate).replace(/-/g, '');
+          const endDate = j.schedEndDate || j.schedDate;
+          let end = start;
+          try {
+            const d = new Date(endDate + 'T00:00:00');
+            d.setDate(d.getDate() + 1);
+            end = d.toISOString().split('T')[0].replace(/-/g, '');
+          } catch {
+            end = endDate.replace(/-/g, '');
+          }
+
           icsContent.push('BEGIN:VEVENT');
-          icsContent.push(`SUMMARY:Krueger Painting - ${c.name} (${j.status})`);
-          icsContent.push(`DESCRIPTION:Scope: ${j.scope ? j.scope.replace(/\n/g, ' ') : 'Painting Project'}\\nPhone: ${c.phone || 'N/A'}`);
-          icsContent.push(`LOCATION:${c.address || ''}`);
+          icsContent.push(`UID:krueger-${j.id}-${start}@kruegerpainting.com`);
+          icsContent.push(`DTSTAMP:${new Date().toISOString().replace(/[-:]/g, '').split('.')[0]}Z`);
+          icsContent.push(`SUMMARY:🎨 Krueger Painting - ${c.name} (${j.status})`);
+          icsContent.push(
+            `DESCRIPTION:Client: ${c.name}\\nPhone: ${c.phone || 'N/A'}\\nStatus: ${j.status}\\nScope: ${
+              j.scope ? j.scope.replace(/\n/g, ' ') : 'Painting Project'
+            }\\nKrueger Painting OS`
+          );
+          if (c.address) icsContent.push(`LOCATION:${c.address}`);
           icsContent.push(`DTSTART;VALUE=DATE:${start}`);
           icsContent.push(`DTEND;VALUE=DATE:${end}`);
+          icsContent.push('STATUS:CONFIRMED');
           icsContent.push('END:VEVENT');
           count++;
         }
@@ -638,14 +680,37 @@ export default function App() {
       return;
     }
 
-    const blob = new Blob([icsContent.join('\r\n')], { type: 'text/calendar;charset=utf-8' });
+    const icsString = icsContent.join('\r\n');
+
+    // On mobile devices, attempt native share to Google Calendar
+    if (typeof navigator !== 'undefined' && navigator.share) {
+      try {
+        const file = new File([icsString], 'Krueger_Schedule_Sync.ics', { type: 'text/calendar' });
+        if (navigator.canShare && navigator.canShare({ files: [file] })) {
+          await navigator.share({
+            title: 'Krueger Painting Schedule',
+            text: `Import ${count} scheduled jobs into Google Calendar`,
+            files: [file],
+          });
+          showToast('✔ Opened Calendar Import on Device');
+          return;
+        }
+      } catch (err: any) {
+        if (err.name !== 'AbortError') {
+          console.warn('Native calendar share error:', err);
+        }
+      }
+    }
+
+    // Direct download fallback
+    const blob = new Blob([icsString], { type: 'text/calendar;charset=utf-8' });
     const link = document.createElement('a');
     link.href = URL.createObjectURL(blob);
     link.download = 'Krueger_Schedule_Sync.ics';
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
-    showToast('✔ Calendar Sync Exported');
+    showToast('✔ Calendar Sync (.ICS) Downloaded');
   };
 
   // Backup & Restore
@@ -1074,7 +1139,7 @@ export default function App() {
       />
 
       {/* Main Tab Content */}
-      <main className="p-4 max-w-4xl mx-auto">
+      <main className="p-2 sm:p-4 max-w-4xl mx-auto w-full overflow-x-hidden">
         {activeTab === 'dash' && (
           <DashboardView
             customers={customers}
@@ -1099,11 +1164,13 @@ export default function App() {
               const c = customers.find((x) => x.id === cId);
               if (c) setActiveFolderCustomer(c);
             }}
-            onOpenDayPopup={(dateStr, dayJobs) => {
+            onOpenDayPopup={(dateStr, dayJobs, dayGoogleEvents) => {
               setDayPopupDate(dateStr);
               setDayPopupJobs(dayJobs);
+              setDayPopupGoogleEvents(dayGoogleEvents || []);
             }}
             onExportAllJobsIcs={handleExportAllJobsIcs}
+            onToast={showToast}
           />
         )}
 
@@ -1159,20 +1226,6 @@ export default function App() {
 
       {/* MODALS */}
 
-      {/* True PDF Preview Modal */}
-      {pdfPreviewResult && (
-        <PdfPreviewModal
-          pdfResult={pdfPreviewResult}
-          customer={pdfPreviewCustomer}
-          onClose={() => {
-            setPdfPreviewResult(null);
-            setPdfPreviewCustomer(null);
-          }}
-          onSaveToCustomerFiles={handleArchivePdfToCustomer}
-          onToast={showToast}
-        />
-      )}
-
       {/* Customer Modal */}
       {customerModalOpen && (
         <CustomerModal
@@ -1181,7 +1234,7 @@ export default function App() {
         />
       )}
 
-      {/* Customer Folder View Modal */}
+      {/* Customer Folder View Modal (Base Cabinet Drawer) */}
       {activeFolderCustomer && (
         <FolderViewModal
           customer={activeFolderCustomer}
@@ -1195,13 +1248,14 @@ export default function App() {
           onDeleteJob={handleDeleteJob}
           onGenerateDoc={handleGenerateDoc}
           onViewImage={setViewerImageUrl}
+          onViewDocFile={handleViewDocFile}
           onGenerateCollage={() => handleGenerateBeforeAfterCollage(activeFolderCustomer)}
           onScheduleEstimate={() => handleScheduleEstimate(activeFolderCustomer)}
           onToast={showToast}
         />
       )}
 
-      {/* Job / Estimate Editor Modal */}
+      {/* Job / Estimate Editor Modal (Overlay Stack Layer 2) */}
       {jobModalCustomer && (
         <JobModal
           customer={jobModalCustomer}
@@ -1216,10 +1270,24 @@ export default function App() {
         />
       )}
 
+      {/* True PDF Preview Modal (Top Overlay Stack Layer 3 - Guaranteed on top of Customer Folder & Job Editor) */}
+      {pdfPreviewResult && (
+        <PdfPreviewModal
+          pdfResult={pdfPreviewResult}
+          customer={pdfPreviewCustomer}
+          onClose={() => {
+            setPdfPreviewResult(null);
+            setPdfPreviewCustomer(null);
+          }}
+          onSaveToCustomerFiles={handleArchivePdfToCustomer}
+          onToast={showToast}
+        />
+      )}
+
       {/* Note Editor Modal */}
       {noteModalOpen && (
-        <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in">
-          <div className="bg-[var(--surface)] border border-[var(--border)] rounded-2xl w-full max-w-md p-5 shadow-2xl space-y-3">
+        <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-sm flex items-center justify-center p-2.5 sm:p-4 animate-in fade-in">
+          <div className="bg-[var(--surface)] border border-[var(--border)] rounded-2xl w-full max-w-md p-3.5 sm:p-5 shadow-2xl space-y-3">
             <div className="flex items-center justify-between border-b border-[var(--border)] pb-2.5">
               <h3 className="font-extrabold text-sm text-[var(--accent)]">
                 {editingNote ? 'Edit Field Note' : 'New Field Note'}
@@ -1542,12 +1610,25 @@ export default function App() {
         <DayPopupModal
           dateStr={dayPopupDate}
           jobs={dayPopupJobs}
+          googleEvents={dayPopupGoogleEvents}
           onOpenFolder={(cId) => {
             setDayPopupDate(null);
             const c = customers.find((x) => x.id === cId);
             if (c) setActiveFolderCustomer(c);
           }}
-          onClose={() => setDayPopupDate(null)}
+          onDeleteGoogleEvent={async (eventId, summary) => {
+            try {
+              await deleteGoogleCalendarEvent(eventId);
+              setDayPopupGoogleEvents((prev) => prev.filter((e) => e.id !== eventId));
+              showToast(`✔ Deleted "${summary}" from Google Calendar`);
+            } catch (err: any) {
+              showToast(`Failed to delete event: ${err.message}`);
+            }
+          }}
+          onClose={() => {
+            setDayPopupDate(null);
+            setDayPopupGoogleEvents([]);
+          }}
         />
       )}
 

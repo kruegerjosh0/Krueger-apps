@@ -389,15 +389,15 @@ export const JobModal: React.FC<JobModalProps> = ({
   };
 
   return (
-    <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-sm flex flex-col p-3 sm:p-5 overflow-y-auto animate-in fade-in">
-      <div className="max-w-2xl w-full mx-auto bg-[var(--surface)] border border-[var(--border)] rounded-2xl p-4 sm:p-5 shadow-2xl space-y-4 my-auto">
+    <div className="fixed inset-0 z-[60] bg-black/85 backdrop-blur-sm flex flex-col p-2 sm:p-5 overflow-y-auto animate-in fade-in">
+      <div className="max-w-2xl w-full mx-auto bg-[var(--surface)] border border-[var(--border)] rounded-2xl p-3 sm:p-5 shadow-2xl space-y-3.5 my-auto">
         {/* Modal Header */}
-        <div className="flex items-center justify-between border-b border-[var(--border)] pb-3">
+        <div className="flex items-center justify-between border-b border-[var(--border)] pb-2.5">
           <div>
             <span className="text-[10px] font-extrabold uppercase tracking-wide text-[#f1c40f]">
               {job ? 'Edit Project & Estimate' : 'New Project & Estimate'}
             </span>
-            <h2 className="text-base font-black text-[var(--text)]">
+            <h2 className="text-sm sm:text-base font-black text-[var(--text)]">
               {customer.name}
             </h2>
           </div>
@@ -405,7 +405,7 @@ export const JobModal: React.FC<JobModalProps> = ({
             <button
               type="button"
               onClick={onClose}
-              className="bg-[var(--surface-subtle)] hover:bg-[var(--border)] text-[var(--text)] font-bold text-xs px-3 py-1.5 rounded-lg border border-[var(--border)] cursor-pointer"
+              className="bg-[var(--surface-subtle)] hover:bg-[var(--border)] text-[var(--text)] font-bold text-xs px-2.5 py-1.5 rounded-lg border border-[var(--border)] cursor-pointer"
             >
               ✕ Back
             </button>
@@ -427,7 +427,7 @@ export const JobModal: React.FC<JobModalProps> = ({
             />
           </div>
 
-          <div className="grid grid-cols-3 gap-2">
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
             <div>
               <label className="text-[9px] uppercase font-bold text-[var(--text-muted)] tracking-wider block mb-1">
                 Status
@@ -1135,18 +1135,18 @@ export const JobModal: React.FC<JobModalProps> = ({
         </details>
 
         {/* Totals Summary Card */}
-        <div className="bg-[#121318] border-2 border-[#f1c40f] rounded-xl p-4 text-center shadow-lg space-y-2">
-          <div className="text-xs uppercase font-extrabold text-[#f1c40f] tracking-wider">
+        <div className="bg-[#121318] border-2 border-[#f1c40f] rounded-xl p-3 sm:p-4 text-center shadow-lg space-y-2">
+          <div className="text-[11px] sm:text-xs uppercase font-extrabold text-[#f1c40f] tracking-wider">
             Project Estimate Summary
           </div>
           <div className="text-3xl sm:text-4xl font-black text-white">
             ${grossTotal}
           </div>
-          <div className="flex justify-center items-center gap-3 text-xs font-bold">
+          <div className="flex flex-wrap justify-center items-center gap-x-3 gap-y-1 text-[11px] sm:text-xs font-bold">
             <span className="text-gray-300">
               Paint: {totalPaintGals} Gal ({matsIncluded ? 'INCLUDED' : `$${effectiveMatCost}`})
             </span>
-            <span className="text-gray-500">•</span>
+            <span className="text-gray-500 hidden min-[360px]:inline">•</span>
             <span className="text-red-400">Balance Due: ${balanceDue}</span>
           </div>
         </div>

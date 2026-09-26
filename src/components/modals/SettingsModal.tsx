@@ -14,6 +14,7 @@ interface SettingsModalProps {
   onRemoveLogo?: () => void;
   onClose: () => void;
   onToast: (msg: string) => void;
+  onOpenDataBackup?: () => void;
 }
 
 export const SettingsModal: React.FC<SettingsModalProps> = ({
@@ -29,6 +30,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   onRemoveLogo,
   onClose,
   onToast,
+  onOpenDataBackup,
 }) => {
   const [motto, setMotto] = useState(settings.motto || '');
   const [hdr, setHdr] = useState(settings.hdr || '');
@@ -368,11 +370,25 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
         {/* Developer & Codebase Export */}
         <div className="bg-[var(--surface-subtle)] p-3.5 rounded-xl border border-[var(--border)] space-y-2.5">
           <span className="text-[10px] font-bold text-[var(--accent)] uppercase block">
-            📦 Backups &amp; Codebase Exports
+            💾 Database Backups &amp; Single-File App
           </span>
           <p className="text-[11px] text-[var(--text-muted)] leading-relaxed">
-            Keep physical copies on your phone or computer anytime without relying on cloud services:
+            Backup your entire client database to your phone or Google Drive anytime, or download the offline single-file HTML app:
           </p>
+
+          {onOpenDataBackup && (
+            <button
+              type="button"
+              onClick={() => {
+                onClose();
+                onOpenDataBackup();
+              }}
+              className="w-full py-2.5 px-3.5 bg-[var(--accent)] hover:opacity-95 text-[#231709] font-black text-xs rounded-xl shadow-xs flex items-center justify-center gap-2 cursor-pointer transition-transform active:scale-98"
+            >
+              <span>💾</span>
+              <span>Backup to Phone or Google Drive (.JSON)</span>
+            </button>
+          )}
 
           <div className="flex flex-wrap gap-2 pt-1">
             <a

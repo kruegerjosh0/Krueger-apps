@@ -574,16 +574,38 @@
       <div class="card">
         <div class="card-title">
           <span>💾 Backup &amp; Device Storage</span>
+          <span style="font-size: 9px; color: var(--accent-tertiary); font-weight: 800;">100% LOCAL &amp; PRIVATE</span>
         </div>
-        <p style="font-size: 11px; color: var(--text-muted); margin-bottom: 10px;">
-          All your customers, jobs, and notes are stored permanently inside this browser on your device. Download a physical backup file anytime:
+        <p style="font-size: 11px; color: var(--text-muted); margin-bottom: 12px; line-height: 1.4;">
+          Your customer files and projects are stored inside your browser on this phone. Create physical backup copies anytime, save to Google Drive, or restore from a previous backup:
         </p>
-        <div class="grid-2">
-          <button class="btn btn-primary" onclick="exportDataBackup()">📥 Export Backup JSON</button>
-          <label class="btn btn-subtle" style="cursor: pointer; text-align: center;">
-            📤 Restore Backup
-            <input type="file" accept=".json" onchange="importDataBackup(event)" style="display: none;">
-          </label>
+
+        <div style="display: flex; flex-direction: column; gap: 8px;">
+          <button class="btn btn-primary" onclick="backupToPhone()" style="padding: 12px; justify-content: flex-start; gap: 10px;">
+            <span style="font-size: 16px;">📱</span>
+            <div style="text-align: left;">
+              <div style="font-weight: 900; font-size: 12px; color: #231709;">Backup to Phone (.JSON)</div>
+              <div style="font-size: 9px; opacity: 0.8; font-weight: normal;">Downloads physical database file to phone storage</div>
+            </div>
+          </button>
+
+          <button class="btn btn-secondary" onclick="backupToGoogleDrive()" style="padding: 12px; justify-content: flex-start; gap: 10px; background: #1a2332; border: 1px solid rgba(10,132,255,0.4); color: #0a84ff;">
+            <span style="font-size: 16px;">☁️</span>
+            <div style="text-align: left;">
+              <div style="font-weight: 900; font-size: 12px; color: #fff;">Backup to Google Drive</div>
+              <div style="font-size: 9px; color: rgba(255,255,255,0.7); font-weight: normal;">Share directly to your Google Drive account</div>
+            </div>
+          </button>
+
+          <input type="file" id="restore-file-input" accept=".json,application/json" onchange="importDataBackup(event)" style="display: none;">
+
+          <button class="btn btn-success" onclick="triggerRestore()" style="padding: 12px; justify-content: flex-start; gap: 10px; background: #1c2e1f; border: 1px solid rgba(48,209,88,0.4); color: #30d158;">
+            <span style="font-size: 16px;">📤</span>
+            <div style="text-align: left;">
+              <div style="font-weight: 900; font-size: 12px; color: #fff;">Restore from Phone or Google Drive (.JSON)</div>
+              <div style="font-size: 9px; color: rgba(255,255,255,0.7); font-weight: normal;">Select a previously saved backup file to restore</div>
+            </div>
+          </button>
         </div>
       </div>
     </div>
@@ -1412,19 +1434,71 @@
       showToast('✔ Calendar .ICS Downloaded');
     }
 
-    // Backup & Restore
-    function exportDataBackup() {
+    // 1. Backup to Phone (.JSON)
+    function backupToPhone() {
       const data = {
-        customers: customers,
-        exportedAt: new Date().toISOString()
+        version: '2.0',
+        appName: 'Krueger Painting OS',
+        exportedAt: new Date().toISOString(),
+        data: {
+          customers: customers
+        },
+        customers: customers
       };
       const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
       const a = document.createElement('a');
       a.href = URL.createObjectURL(blob);
-      a.download = `krueger-painting-backup-${new Date().toISOString().split('T')[0]}.json`;
+      const dateStr = new Date().toISOString().split('T')[0];
+      a.download = `krueger-painting-backup-${dateStr}.json`;
       a.click();
-      showToast('✔ Backup JSON Exported');
+      showToast('✔ Saved Backup JSON to Phone!');
     }
+
+    // 2. Backup to Google Drive (Web Share API)
+    async function backupToGoogleDrive() {
+      const data = {
+        version: '2.0',
+        appName: 'Krueger Painting OS',
+        exportedAt: new Date().toISOString(),
+        data: {
+          customers: customers
+        },
+        customers: customers
+      };
+      const jsonStr = JSON.stringify(data, null, 2);
+      const dateStr = new Date().toISOString().split('T')[0];
+      const filename = `krueger-painting-backup-${dateStr}.json`;
+
+      try {
+        const file = new File([jsonStr], filename, { type: 'application/json' });
+        if (navigator.canShare && navigator.canShare({ files: [file] })) {
+          await navigator.share({
+            title: 'Krueger Painting Backup',
+            text: `Krueger Painting Customer Database Backup (${dateStr})`,
+            files: [file]
+          });
+          showToast('✔ Shared to Google Drive!');
+          return;
+        }
+      } catch (err) {
+        if (err.name === 'AbortError') return;
+      }
+
+      // Fallback: download and open Google Drive
+      const blob = new Blob([jsonStr], { type: 'application/json' });
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = filename;
+      a.click();
+      showToast('✔ Downloaded JSON! Opening Google Drive to save...');
+      window.open('https://drive.google.com', '_blank');
+    }
+
+    // 3. Restore from Phone or Drive (.JSON)
+    function triggerRestore() {
+      document.getElementById('restore-file-input').click();
+    }
+
     function importDataBackup(e) {
       const file = e.target.files[0];
       if (!file) return;
@@ -1432,16 +1506,21 @@
       reader.onload = (evt) => {
         try {
           const parsed = JSON.parse(evt.target.result);
-          if (Array.isArray(parsed.customers)) {
-            customers = parsed.customers;
-            saveCustomers();
-            initApp();
-            showToast('✔ Restored all customer data!');
+          const targetCustomers = parsed.customers || (parsed.data && parsed.data.customers);
+          if (Array.isArray(targetCustomers)) {
+            if (confirm(`Restore ${targetCustomers.length} client files from this backup? This will update your database.`)) {
+              customers = targetCustomers;
+              saveCustomers();
+              initApp();
+              showToast(`✔ Restored ${customers.length} client folders!`);
+            }
           } else {
-            alert('Invalid backup file format');
+            alert('Invalid backup file format. Expected a Krueger Painting JSON backup.');
           }
         } catch (err) {
-          alert('Failed to read backup file');
+          alert('Failed to read backup file: ' + err.message);
+        } finally {
+          e.target.value = '';
         }
       };
       reader.readAsText(file);

@@ -50,8 +50,8 @@ export const ToolsView: React.FC<ToolsViewProps> = ({
 
   const tools = [
     { title: 'Single-File HTML', icon: '📄', desc: '1-click file. Tap or click to open anywhere in Chrome', action: handleExportSingleHtml },
+    { title: 'Backup & Restore', icon: '💾', desc: 'Save JSON to phone or Google Drive, or restore', action: onOpenCloudSync || onOpenSettings },
     { title: 'Export Code (ZIP)', icon: '📦', desc: 'Download full app project for external editing', action: handleExportZip },
-    { title: 'Cloud Sync', icon: '☁️', desc: 'Sync files across devices', action: onOpenCloudSync || onOpenSettings },
     { title: 'Android APK / App', icon: '📱', desc: 'Install native Android app', action: onOpenApkInstaller || onOpenSettings },
     { title: 'Tax Report', icon: '📊', desc: 'Monthly gross & IRS deductions', action: onOpenTaxReport },
     { title: 'Calculator', icon: '📐', desc: 'Net sqft & 2-coat paint gals', action: onOpenCalc },

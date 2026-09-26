@@ -119,16 +119,16 @@ export const Header: React.FC<HeaderProps> = ({
             </button>
           )}
 
-          {/* Cloud Sync Button (visible on screens >= 370px) */}
+          {/* Backup Button (visible on screens >= 370px) */}
           {onOpenCloudSync && (
             <button
               type="button"
               onClick={onOpenCloudSync}
-              className="hidden min-[370px]:flex px-1.5 sm:px-2.5 py-1.5 rounded-lg text-[10px] sm:text-[11px] font-bold border border-purple-500/40 bg-purple-950/40 text-purple-300 hover:bg-purple-900/60 transition-transform active:scale-95 cursor-pointer items-center gap-1"
-              title="Cloud Sync"
+              className="hidden min-[370px]:flex px-1.5 sm:px-2.5 py-1.5 rounded-lg text-[10px] sm:text-[11px] font-bold border border-[var(--accent)]/40 bg-[var(--accent)]/10 text-[var(--accent)] hover:bg-[var(--accent)]/20 transition-transform active:scale-95 cursor-pointer items-center gap-1"
+              title="Backup & Restore Data (Phone & Google Drive)"
             >
-              <span>☁️</span>
-              <span className="hidden lg:inline">Sync</span>
+              <span>💾</span>
+              <span className="hidden lg:inline">Backup</span>
             </button>
           )}
 

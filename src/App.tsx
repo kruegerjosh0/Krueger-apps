@@ -57,7 +57,7 @@ import { SettingsModal } from './components/modals/SettingsModal';
 import { DayPopupModal } from './components/modals/DayPopupModal';
 import { ImageViewerModal } from './components/modals/ImageViewerModal';
 import { AiAssistantModal, AiAction } from './components/modals/AiAssistantModal';
-import { CloudSyncModal } from './components/modals/CloudSyncModal';
+import { DataBackupModal } from './components/modals/DataBackupModal';
 import { AccountLoginModal } from './components/modals/AccountLoginModal';
 import { ApkInstallerModal } from './components/modals/ApkInstallerModal';
 import {
@@ -145,42 +145,22 @@ export default function App() {
     }, 2500);
   };
 
-  // Test Firestore connection on app mount
-  useEffect(() => {
-    testFirestoreConnection().catch(() => {});
-  }, []);
-
-  // Listen to Google/Firebase auth and subscribe to real-time Cloud Sync
-  useEffect(() => {
-    const unsubAuth = subscribeToAuth((user) => {
-      setCloudUser(user);
-    });
-    return () => unsubAuth();
-  }, []);
-
-  // Subscribe to real-time cloud data updates from other devices
-  useEffect(() => {
-    if (!cloudUser?.uid) return;
-
-    const unsubSync = subscribeToCloudWorkspace(cloudUser.uid, (remotePayload) => {
-      // Check if remote data is newer than local
-      const lastLocalSync = localStorage.getItem('KMaster_LastCloudSyncTimestamp') || '0';
-      const remoteTs = new Date(remotePayload.updatedAt).getTime();
-
-      if (remoteTs > parseInt(lastLocalSync, 10)) {
-        handleApplyRemoteWorkspace(remotePayload);
-        localStorage.setItem('KMaster_LastCloudSyncTimestamp', remoteTs.toString());
-        showToast(`☁️ Synced changes from ${remotePayload.deviceLabel}`);
-      }
-    });
-
-    return () => unsubSync();
-  }, [cloudUser?.uid]);
-
-  const handleApplyRemoteWorkspace = (payload: CloudWorkspacePayload) => {
+  // Handle restoring database from local or Google Drive JSON backup
+  const handleApplyBackup = (payload: {
+    customers?: Customer[];
+    notes?: FieldNote[];
+    expenses?: ExpenseEntry[];
+    mileage?: MileageEntry[];
+    shoppingList?: ShoppingItem[];
+    priceBook?: PriceBookItem[];
+    settings?: PrintSettings;
+    constants?: SystemConstants;
+  }) => {
+    let count = 0;
     if (payload.customers && Array.isArray(payload.customers)) {
       setCustomers(payload.customers);
       saveRecord('KMaster_C', payload.customers);
+      count = payload.customers.length;
     }
     if (payload.notes && Array.isArray(payload.notes)) {
       setNotes(payload.notes);
@@ -210,6 +190,7 @@ export default function App() {
       setConstants(payload.constants);
       saveRecord('KMaster_Constants', payload.constants);
     }
+    showToast(`✔ Restored ${count} Customers & All Workspace Data!`);
   };
 
   // Initial Load from IDB / LocalStorage
@@ -1584,6 +1565,7 @@ export default function App() {
           }}
           onClose={() => setSettingsOpen(false)}
           onToast={showToast}
+          onOpenDataBackup={() => setCloudSyncOpen(true)}
         />
       )}
 
@@ -1641,8 +1623,8 @@ export default function App() {
         />
       )}
 
-      {/* Cloud Sync & Cross-Device Modal */}
-      <CloudSyncModal
+      {/* Database Backup & Restore Modal (Phone & Google Drive) */}
+      <DataBackupModal
         isOpen={cloudSyncOpen}
         onClose={() => setCloudSyncOpen(false)}
         workspaceData={{
@@ -1655,7 +1637,7 @@ export default function App() {
           settings,
           constants,
         }}
-        onApplyRemoteWorkspace={handleApplyRemoteWorkspace}
+        onApplyBackup={handleApplyBackup}
         onToast={showToast}
       />
 

@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { PrintSettings } from '../types';
 import { User } from 'firebase/auth';
+import { usePWAInstall } from '../hooks/usePWAInstall';
 
 interface HeaderProps {
   settings: PrintSettings;
@@ -32,6 +33,15 @@ export const Header: React.FC<HeaderProps> = ({
   onOpenApkInstaller,
 }) => {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const { isInstallable, isInstalled, install } = usePWAInstall();
+
+  const handleInstallClick = async () => {
+    if (isInstallable) {
+      await install();
+    } else if (onOpenApkInstaller) {
+      onOpenApkInstaller();
+    }
+  };
 
   return (
     <header className="sticky top-0 z-40 bg-[var(--surface)] backdrop-blur-md border-b-2 border-[var(--accent)] px-2 sm:px-4 py-2 sm:py-2.5 shadow-lg w-full max-w-full overflow-hidden">
@@ -119,60 +129,31 @@ export const Header: React.FC<HeaderProps> = ({
             </button>
           )}
 
-          {/* Backup Button (visible on screens >= 370px) */}
+          {/* Install App Button */}
+          {!isInstalled && (
+            <button
+              type="button"
+              onClick={handleInstallClick}
+              className="flex px-2 sm:px-2.5 py-1.5 rounded-lg text-[10.5px] sm:text-[11px] font-black border border-emerald-500/50 bg-gradient-to-r from-emerald-500/20 to-teal-500/15 text-emerald-300 hover:bg-emerald-500/30 transition-transform active:scale-95 cursor-pointer items-center gap-1 shadow-xs"
+              title="Install Krueger Painting OS to this device"
+            >
+              <span>📱</span>
+              <span className="font-extrabold">{isInstallable ? 'Install' : 'Install App'}</span>
+            </button>
+          )}
+
+          {/* App & Data Backup Download Button (Visible on all screens) */}
           {onOpenCloudSync && (
             <button
               type="button"
               onClick={onOpenCloudSync}
-              className="hidden min-[370px]:flex px-1.5 sm:px-2.5 py-1.5 rounded-lg text-[10px] sm:text-[11px] font-bold border border-[var(--accent)]/40 bg-[var(--accent)]/10 text-[var(--accent)] hover:bg-[var(--accent)]/20 transition-transform active:scale-95 cursor-pointer items-center gap-1"
-              title="Backup & Restore Data (Phone & Google Drive)"
+              className="flex px-2 sm:px-2.5 py-1.5 rounded-lg text-[10.5px] sm:text-[11px] font-black border border-amber-500/50 bg-gradient-to-r from-amber-500/20 to-yellow-500/15 text-amber-300 hover:bg-amber-500/30 transition-transform active:scale-95 cursor-pointer items-center gap-1 shadow-xs"
+              title="Download Single-File HTML App or Backup Data"
             >
-              <span>💾</span>
-              <span className="hidden lg:inline">Backup</span>
+              <span>📥</span>
+              <span className="font-extrabold">App / Backup</span>
             </button>
           )}
-
-          {/* App Button (visible on tablet/desktop) */}
-          {onOpenApkInstaller && (
-            <button
-              type="button"
-              onClick={onOpenApkInstaller}
-              className="hidden sm:flex px-2 sm:px-2.5 py-1.5 rounded-lg text-[11px] font-bold border border-blue-500/40 bg-blue-950/40 text-blue-300 hover:bg-blue-900/60 transition-transform active:scale-95 cursor-pointer items-center gap-1"
-              title="Install Android App / APK"
-            >
-              <span>📱</span>
-              <span className="hidden lg:inline">App</span>
-            </button>
-          )}
-
-          {/* Backup Button (visible on tablet/desktop) */}
-          <button
-            type="button"
-            onClick={onBackup}
-            className={`hidden sm:inline-flex px-2.5 sm:px-3 py-1.5 rounded-lg text-[11px] font-bold border transition-transform active:scale-95 cursor-pointer ${
-              isBackupDue
-                ? 'bg-red-600 border-red-600 text-white animate-pulse'
-                : 'bg-[var(--surface-subtle)] border-[var(--border)] text-[var(--text)] hover:border-[var(--accent)]'
-            }`}
-          >
-            {isBackupDue ? '⚠️ Backup' : 'Backup'}
-          </button>
-
-          {/* Restore Button (visible on tablet/desktop) */}
-          <label className="hidden sm:inline-flex px-2.5 sm:px-3 py-1.5 rounded-lg text-[11px] font-bold border border-[var(--border)] bg-[var(--surface-subtle)] text-[var(--text)] hover:border-[var(--accent)] transition-transform active:scale-95 cursor-pointer">
-            Restore
-            <input
-              type="file"
-              accept=".json"
-              className="hidden"
-              onChange={(e) => {
-                if (e.target.files && e.target.files[0]) {
-                  onRestore(e.target.files[0]);
-                  e.target.value = '';
-                }
-              }}
-            />
-          </label>
 
           {/* Mobile Overflow Menu Button (< sm / folded phones) */}
           <div className="relative sm:hidden">
@@ -186,7 +167,7 @@ export const Header: React.FC<HeaderProps> = ({
             </button>
 
             {mobileMenuOpen && (
-              <div className="absolute right-0 top-full mt-1.5 w-40 bg-[var(--surface)] border border-[var(--border)] rounded-xl shadow-2xl p-1.5 z-50 space-y-1 animate-in fade-in">
+              <div className="absolute right-0 top-full mt-1.5 w-48 bg-[var(--surface)] border border-[var(--border)] rounded-xl shadow-2xl p-1.5 z-50 space-y-1 animate-in fade-in">
                 {onOpenCloudSync && (
                   <button
                     type="button"
@@ -194,10 +175,23 @@ export const Header: React.FC<HeaderProps> = ({
                       setMobileMenuOpen(false);
                       onOpenCloudSync();
                     }}
-                    className="w-full text-left px-2.5 py-1.5 text-xs font-bold text-purple-300 hover:bg-[var(--surface-subtle)] rounded-lg flex items-center gap-1.5"
+                    className="w-full text-left px-2.5 py-2 text-xs font-black text-amber-300 bg-amber-500/10 hover:bg-amber-500/20 rounded-lg flex items-center gap-2"
                   >
-                    <span>☁️</span>
-                    <span>Cloud Sync</span>
+                    <span>📥</span>
+                    <span>Download App (.html)</span>
+                  </button>
+                )}
+                {onOpenCloudSync && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setMobileMenuOpen(false);
+                      onOpenCloudSync();
+                    }}
+                    className="w-full text-left px-2.5 py-1.5 text-xs font-bold text-blue-300 hover:bg-[var(--surface-subtle)] rounded-lg flex items-center gap-2"
+                  >
+                    <span>💾</span>
+                    <span>Backup & Restore (JSON)</span>
                   </button>
                 )}
                 {onOpenApkInstaller && (
@@ -207,39 +201,12 @@ export const Header: React.FC<HeaderProps> = ({
                       setMobileMenuOpen(false);
                       onOpenApkInstaller();
                     }}
-                    className="w-full text-left px-2.5 py-1.5 text-xs font-bold text-blue-300 hover:bg-[var(--surface-subtle)] rounded-lg flex items-center gap-1.5"
+                    className="w-full text-left px-2.5 py-1.5 text-xs font-bold text-gray-300 hover:bg-[var(--surface-subtle)] rounded-lg flex items-center gap-2"
                   >
                     <span>📱</span>
                     <span>Android APK App</span>
                   </button>
                 )}
-                <button
-                  type="button"
-                  onClick={() => {
-                    setMobileMenuOpen(false);
-                    onBackup();
-                  }}
-                  className="w-full text-left px-2.5 py-1.5 text-xs font-bold text-[var(--text)] hover:bg-[var(--surface-subtle)] rounded-lg flex items-center gap-1.5"
-                >
-                  <span>💾</span>
-                  <span>Backup System</span>
-                </button>
-                <label className="w-full text-left px-2.5 py-1.5 text-xs font-bold text-[var(--text)] hover:bg-[var(--surface-subtle)] rounded-lg flex items-center gap-1.5 cursor-pointer">
-                  <span>📂</span>
-                  <span>Restore Backup</span>
-                  <input
-                    type="file"
-                    accept=".json"
-                    className="hidden"
-                    onChange={(e) => {
-                      setMobileMenuOpen(false);
-                      if (e.target.files && e.target.files[0]) {
-                        onRestore(e.target.files[0]);
-                        e.target.value = '';
-                      }
-                    }}
-                  />
-                </label>
               </div>
             )}
           </div>

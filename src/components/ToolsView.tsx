@@ -41,7 +41,11 @@ export const ToolsView: React.FC<ToolsViewProps> = ({
   };
 
   const handleExportSingleHtml = () => {
-    triggerDownload('/api/export-single-html', 'krueger-painting-app.html');
+    if (onOpenCloudSync) {
+      onOpenCloudSync();
+    } else {
+      triggerDownload('/api/export-single-html', 'krueger-painting-app.html');
+    }
   };
 
   const handleExportZip = () => {
@@ -49,10 +53,10 @@ export const ToolsView: React.FC<ToolsViewProps> = ({
   };
 
   const tools = [
-    { title: 'Single-File HTML', icon: '📄', desc: '1-click file. Tap or click to open anywhere in Chrome', action: handleExportSingleHtml },
+    { title: 'Install App (PWA)', icon: '📱', desc: '1-tap home screen app with offline caching', action: onOpenApkInstaller || onOpenSettings },
     { title: 'Backup & Restore', icon: '💾', desc: 'Save JSON to phone or Google Drive, or restore', action: onOpenCloudSync || onOpenSettings },
+    { title: 'Offline HTML File', icon: '📄', desc: 'Download single-file archive for PC or laptop', action: handleExportSingleHtml },
     { title: 'Export Code (ZIP)', icon: '📦', desc: 'Download full app project for external editing', action: handleExportZip },
-    { title: 'Android APK / App', icon: '📱', desc: 'Install native Android app', action: onOpenApkInstaller || onOpenSettings },
     { title: 'Tax Report', icon: '📊', desc: 'Monthly gross & IRS deductions', action: onOpenTaxReport },
     { title: 'Calculator', icon: '📐', desc: 'Net sqft & 2-coat paint gals', action: onOpenCalc },
     { title: 'Price Book', icon: '🏷️', desc: 'Sherwin & Menards prices', action: onOpenPriceBook },

@@ -20,6 +20,7 @@ import {
   saveRecord,
   DEFAULT_PRINT_SETTINGS,
   DEFAULT_SYSTEM_CONSTANTS,
+  DEFAULT_STARTER_CUSTOMERS,
   generateDailyBackupJson,
 } from './utils/db';
 import { generateEstimateOrBillPdf, GeneratedPdfResult, dataUrlToPdfResult } from './utils/pdfGenerator';
@@ -60,6 +61,7 @@ import { AiAssistantModal, AiAction } from './components/modals/AiAssistantModal
 import { DataBackupModal } from './components/modals/DataBackupModal';
 import { AccountLoginModal } from './components/modals/AccountLoginModal';
 import { ApkInstallerModal } from './components/modals/ApkInstallerModal';
+import { OfflineIndicator } from './components/OfflineIndicator';
 import {
   testFirestoreConnection,
   subscribeToCloudWorkspace,
@@ -208,32 +210,71 @@ export default function App() {
       setAccent3(a3);
       applyAccents(a1, a2, a3);
 
-      const loadedCustomers = await loadRecord<Customer[]>('KMaster_C', []);
-      setCustomers(loadedCustomers);
+      let activeCustomers = await loadRecord<Customer[]>('KMaster_C', []);
+      let activeNotes = await loadRecord<FieldNote[]>('KMaster_Notes', []);
+      let activeExpenses = await loadRecord<ExpenseEntry[]>('KMaster_Exp', []);
+      let activeMileage = await loadRecord<MileageEntry[]>('KMaster_Mil', []);
+      let activeShopping = await loadRecord<ShoppingItem[]>('KMaster_Shopping', []);
+      let activePriceBook = await loadRecord<PriceBookItem[]>('KMaster_PriceBook', []);
+      let activeWebPhotos = await loadRecord<WebPhoto[]>('KMaster_WebPhotos', []);
+      let activeSettings = await loadRecord<PrintSettings>('KMaster_Settings', DEFAULT_PRINT_SETTINGS);
+      let activeConstants = await loadRecord<SystemConstants>('KMaster_Constants', DEFAULT_SYSTEM_CONSTANTS);
 
-      const loadedNotes = await loadRecord<FieldNote[]>('KMaster_Notes', []);
-      setNotes(loadedNotes);
+      // Check if workspace data was injected into the standalone HTML file on export
+      const injectedWorkspace = typeof window !== 'undefined' ? (window as any).__INITIAL_KRUEGER_WORKSPACE__ : null;
+      const injectedCustomers = typeof window !== 'undefined' ? (window as any).__INITIAL_KRUEGER_CUSTOMERS__ : null;
 
-      const loadedExpenses = await loadRecord<ExpenseEntry[]>('KMaster_Exp', []);
-      setExpenses(loadedExpenses);
+      if (activeCustomers.length === 0) {
+        if (injectedWorkspace && Array.isArray(injectedWorkspace.customers) && injectedWorkspace.customers.length > 0) {
+          activeCustomers = injectedWorkspace.customers;
+          saveRecord('KMaster_C', activeCustomers);
+          if (Array.isArray(injectedWorkspace.notes)) {
+            activeNotes = injectedWorkspace.notes;
+            saveRecord('KMaster_Notes', activeNotes);
+          }
+          if (Array.isArray(injectedWorkspace.expenses)) {
+            activeExpenses = injectedWorkspace.expenses;
+            saveRecord('KMaster_Exp', activeExpenses);
+          }
+          if (Array.isArray(injectedWorkspace.mileage)) {
+            activeMileage = injectedWorkspace.mileage;
+            saveRecord('KMaster_Mil', activeMileage);
+          }
+          if (Array.isArray(injectedWorkspace.shoppingList)) {
+            activeShopping = injectedWorkspace.shoppingList;
+            saveRecord('KMaster_Shopping', activeShopping);
+          }
+          if (Array.isArray(injectedWorkspace.priceBook)) {
+            activePriceBook = injectedWorkspace.priceBook;
+            saveRecord('KMaster_PriceBook', activePriceBook);
+          }
+          if (injectedWorkspace.settings && injectedWorkspace.settings.hdr) {
+            activeSettings = injectedWorkspace.settings;
+            saveRecord('KMaster_Settings', activeSettings);
+          }
+          if (injectedWorkspace.constants && injectedWorkspace.constants.spreadRate) {
+            activeConstants = injectedWorkspace.constants;
+            saveRecord('KMaster_Constants', activeConstants);
+          }
+        } else if (Array.isArray(injectedCustomers) && injectedCustomers.length > 0) {
+          activeCustomers = injectedCustomers;
+          saveRecord('KMaster_C', activeCustomers);
+        } else {
+          // Provide realistic contractor starter data so dashboard active jobs match preview
+          activeCustomers = DEFAULT_STARTER_CUSTOMERS;
+          saveRecord('KMaster_C', activeCustomers);
+        }
+      }
 
-      const loadedMileage = await loadRecord<MileageEntry[]>('KMaster_Mil', []);
-      setMileage(loadedMileage);
-
-      const loadedShopping = await loadRecord<ShoppingItem[]>('KMaster_Shopping', []);
-      setShoppingList(loadedShopping);
-
-      const loadedPriceBook = await loadRecord<PriceBookItem[]>('KMaster_PriceBook', []);
-      setPriceBook(loadedPriceBook);
-
-      const loadedWebPhotos = await loadRecord<WebPhoto[]>('KMaster_WebPhotos', []);
-      setWebPhotos(loadedWebPhotos);
-
-      const loadedSettings = await loadRecord<PrintSettings>('KMaster_Settings', DEFAULT_PRINT_SETTINGS);
-      setSettings(loadedSettings);
-
-      const loadedConstants = await loadRecord<SystemConstants>('KMaster_Constants', DEFAULT_SYSTEM_CONSTANTS);
-      setConstants(loadedConstants);
+      setCustomers(activeCustomers);
+      setNotes(activeNotes);
+      setExpenses(activeExpenses);
+      setMileage(activeMileage);
+      setShoppingList(activeShopping);
+      setPriceBook(activePriceBook);
+      setWebPhotos(activeWebPhotos);
+      setSettings(activeSettings);
+      setConstants(activeConstants);
 
       const loadedLogo = await loadRecord<string | null>('KMaster_Logo', null);
       if (loadedLogo) {
@@ -1135,6 +1176,7 @@ export default function App() {
               if (c) setActiveFolderCustomer(c);
             }}
             onTogglePin={handleTogglePin}
+            onOpenBackupModal={() => setCloudSyncOpen(true)}
           />
         )}
 
@@ -1647,6 +1689,8 @@ export default function App() {
         onClose={() => setApkInstallerOpen(false)}
         onToast={showToast}
       />
+
+      <OfflineIndicator />
     </div>
   );
 }

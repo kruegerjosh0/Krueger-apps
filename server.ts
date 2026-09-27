@@ -1,5 +1,7 @@
 import express from 'express';
 import path from 'path';
+import fs from 'fs';
+import { execSync } from 'child_process';
 import { fileURLToPath } from 'url';
 import dotenv from 'dotenv';
 import { GoogleGenAI } from '@google/genai';
@@ -582,9 +584,33 @@ app.get('/api/export-project-zip', async (_req, res) => {
   }
 });
 
+// Helper to resolve or build the true single-file React app HTML
+function getSingleHtmlPath(): string {
+  const distSinglePath = path.resolve(__dirname, 'dist-singlefile', 'index.html');
+  const publicSinglePath = path.resolve(__dirname, 'public', 'krueger-painting-standalone.html');
+
+  if (fs.existsSync(distSinglePath)) {
+    return distSinglePath;
+  }
+  if (fs.existsSync(publicSinglePath)) {
+    return publicSinglePath;
+  }
+
+  // If not built yet, run build:singlefile on demand
+  try {
+    console.log('Building single-file HTML bundle on demand...');
+    execSync('npm run build:singlefile', { cwd: __dirname, stdio: 'inherit' });
+    if (fs.existsSync(distSinglePath)) return distSinglePath;
+  } catch (err: any) {
+    console.error('Failed to build single-file bundle:', err.message);
+  }
+
+  return publicSinglePath;
+}
+
 // Direct Standalone Web View Route
 app.get('/standalone', (_req, res) => {
-  const standalonePath = path.resolve(__dirname, 'public', 'krueger-painting-standalone.html');
+  const standalonePath = getSingleHtmlPath();
   res.setHeader('Content-Type', 'text/html; charset=utf-8');
   res.sendFile(standalonePath);
 });
@@ -592,7 +618,7 @@ app.get('/standalone', (_req, res) => {
 // Standalone 1-Click HTML File Export Endpoint (Single file, no folders, tap to run offline in Chrome)
 app.get('/api/export-single-html', (_req, res) => {
   try {
-    const standalonePath = path.resolve(__dirname, 'public', 'krueger-painting-standalone.html');
+    const standalonePath = getSingleHtmlPath();
     res.setHeader('Content-Type', 'text/html; charset=utf-8');
     res.setHeader('Content-Disposition', 'attachment; filename="krueger-painting-app.html"');
     res.sendFile(standalonePath);

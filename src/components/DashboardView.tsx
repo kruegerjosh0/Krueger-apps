@@ -11,6 +11,7 @@ interface DashboardViewProps {
   onOpenNewCustomer: () => void;
   onOpenFolder: (customerId: number) => void;
   onTogglePin: (customerId: number, e: React.MouseEvent) => void;
+  onOpenBackupModal?: () => void;
 }
 
 export const DashboardView: React.FC<DashboardViewProps> = ({
@@ -23,6 +24,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
   onOpenNewCustomer,
   onOpenFolder,
   onTogglePin,
+  onOpenBackupModal,
 }) => {
   const [searchQuery, setSearchQuery] = useState('');
   const [folderExpanded, setFolderExpanded] = useState<Record<string, boolean>>({});
@@ -406,6 +408,34 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
           <span className="text-xs text-[#f1c40f] font-bold">➔</span>
         </div>
       </div>
+
+      {/* 1-Tap Offline Single-File HTML App & Backup Quick Banner */}
+      {onOpenBackupModal && (
+        <div className="bg-gradient-to-r from-amber-500/15 via-yellow-500/10 to-[var(--surface)] border border-amber-500/40 rounded-xl p-3 flex items-center justify-between gap-2 shadow-xs">
+          <div className="flex items-center gap-2.5 min-w-0">
+            <span className="text-xl sm:text-2xl shrink-0">📱</span>
+            <div className="min-w-0">
+              <div className="font-extrabold text-xs text-white flex items-center gap-1.5 flex-wrap">
+                <span>Single-File HTML App &amp; Data Backup</span>
+                <span className="bg-amber-500 text-black text-[8.5px] uppercase font-black px-1.5 py-0.5 rounded shadow-xs">
+                  Offline Ready
+                </span>
+              </div>
+              <p className="text-[10.5px] text-amber-200/80 truncate">
+                Download .html file to phone or save customer database (.json)
+              </p>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={onOpenBackupModal}
+            className="shrink-0 px-2.5 sm:px-3 py-1.5 bg-gradient-to-r from-amber-400 to-yellow-500 text-black font-black text-[11px] rounded-lg shadow-sm hover:scale-105 active:scale-95 transition-all cursor-pointer flex items-center gap-1"
+          >
+            <span>📥</span>
+            <span>Download</span>
+          </button>
+        </div>
+      )}
 
       {/* Quick Dashboard Stat Tiles (Active Jobs, Scheduled, New Leads, Pending Bids) */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5 sm:gap-2">

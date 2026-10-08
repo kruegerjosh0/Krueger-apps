@@ -57,11 +57,11 @@ export const WeatherRadar: React.FC<WeatherRadarProps> = ({ currentLocation }) =
       attributionControl: false,
     });
 
-    // High-resolution OpenStreetMap base tiles
-    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    // High-resolution base tiles (CartoDB Voyager)
+    L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', {
       minZoom: 4,
       maxZoom: 18,
-      subdomains: ['a', 'b', 'c'],
+      subdomains: 'abcd',
     }).addTo(map);
 
     // Contractor Location Custom Job Site Marker

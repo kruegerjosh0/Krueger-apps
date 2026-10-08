@@ -38,7 +38,7 @@ export const DEFAULT_STARTER_CUSTOMERS: Customer[] = [
     email: 'miller.westbend@gmail.com',
     address: '1425 Main St, West Bend, WI 53095',
     notes: 'Gate code 4192. Golden retriever is friendly. Homeowner prefers Sherwin-Williams Emerald Satin.',
-    statusOverride: 'ACTIVE',
+    statusOverride: 'SCHEDULED',
     files: [],
     lastActive: Date.now(),
     lat: 43.4253,

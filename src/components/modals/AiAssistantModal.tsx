@@ -207,7 +207,7 @@ export const AiAssistantModal: React.FC<AiAssistantModalProps> = ({
         name: c.name,
         phone: c.phone,
         address: c.address,
-        status: c.statusOverride || 'ACTIVE',
+        status: c.statusOverride || 'SCHEDULED',
         jobCount: c.jobs?.length || 0,
       }));
 

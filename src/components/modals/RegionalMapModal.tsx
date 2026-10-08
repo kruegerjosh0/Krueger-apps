@@ -38,7 +38,7 @@ export const RegionalMapModal: React.FC<RegionalMapModalProps> = ({
       const lat = c.lat || 43.42 + (Math.random() - 0.5) * 0.1;
       const lng = c.lng || -88.18 + (Math.random() - 0.5) * 0.1;
 
-      const hasActive = (c.jobs || []).some((j) => j.status === 'ACTIVE');
+      const hasActive = (c.jobs || []).some((j) => j.status === 'SCHEDULED');
       const hasSched = (c.jobs || []).some((j) => j.status === 'SCHEDULED');
       const pinColor = hasActive ? '#30d158' : hasSched ? '#0a84ff' : '#bf5af2';
 

@@ -53,10 +53,7 @@ export const ToolsView: React.FC<ToolsViewProps> = ({
   };
 
   const tools = [
-    { title: 'Install App (PWA)', icon: '📱', desc: '1-tap home screen app with offline caching', action: onOpenApkInstaller || onOpenSettings },
     { title: 'Backup & Restore', icon: '💾', desc: 'Save JSON to phone or Google Drive, or restore', action: onOpenCloudSync || onOpenSettings },
-    { title: 'Offline HTML File', icon: '📄', desc: 'Download single-file archive for PC or laptop', action: handleExportSingleHtml },
-    { title: 'Export Code (ZIP)', icon: '📦', desc: 'Download full app project for external editing', action: handleExportZip },
     { title: 'Tax Report', icon: '📊', desc: 'Monthly gross & IRS deductions', action: onOpenTaxReport },
     { title: 'Calculator', icon: '📐', desc: 'Net sqft & 2-coat paint gals', action: onOpenCalc },
     { title: 'Price Book', icon: '🏷️', desc: 'Sherwin & Menards prices', action: onOpenPriceBook },
@@ -64,7 +61,6 @@ export const ToolsView: React.FC<ToolsViewProps> = ({
     { title: 'Mileage Log', icon: '🚗', desc: 'IRS 67¢/mi auto deduction', action: onOpenMileage },
     { title: 'Expenses & OCR', icon: '🧾', desc: 'Receipt scanner & ledger', action: onOpenExpenses },
     { title: 'Shopping List', icon: '🛒', desc: 'Tape, plastic & paint checklist', action: onOpenShoppingList },
-    { title: 'Web Photos', icon: '🌐', desc: 'Netlify HTML portfolio tags', action: onOpenWebPhotos },
     { title: 'Regional Map', icon: '🗺️', desc: 'All client sites plotted', action: onOpenRegionalMap },
     { title: 'Sync Calendar', icon: '📅', desc: 'Export jobs to phone cal (.ICS)', action: onSyncCalendar },
     { title: 'Settings', icon: '⚙️', desc: 'Themes, rates & print terms', action: onOpenSettings },

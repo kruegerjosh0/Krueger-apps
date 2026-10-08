@@ -32,8 +32,9 @@ export interface JobProject {
   id: number;
   title: string;
   date: string;
-  status: 'PENDING' | 'SCHEDULED' | 'ACTIVE' | 'COMPLETED' | 'PAID' | 'ON HOLD' | 'DECLINED' | 'OTHER';
+  status: 'PENDING' | 'SCHEDULED' | 'COMPLETED' | 'OTHER';
   showLaborTotal: boolean;
+  internalNotes?: string;
   showOverallTotal: boolean;
   matsIncluded: boolean;
   paintRate: string;

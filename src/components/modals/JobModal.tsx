@@ -27,6 +27,7 @@ export const JobModal: React.FC<JobModalProps> = ({
   const [showOverallTotal, setShowOverallTotal] = useState(job?.showOverallTotal ?? false);
   const [matsIncluded, setMatsIncluded] = useState(job?.matsIncluded ?? false);
 
+  const [internalNotes, setInternalNotes] = useState(job?.internalNotes || '');
   const [prepScope, setPrepScope] = useState(job?.prepScope || '');
   const [scope, setScope] = useState(job?.scope || '');
 
@@ -223,7 +224,7 @@ export const JobModal: React.FC<JobModalProps> = ({
   const handleAddRoom = () => {
     setRooms([
       ...rooms,
-      { n: 'Room / Area', r: 0, sp: true, prod: 'Emerald', color: '', sheen: 'Satin' },
+      { n: '', r: 0, sp: true, prod: 'Emerald', color: '', sheen: 'Satin' },
     ]);
   };
 
@@ -288,7 +289,7 @@ export const JobModal: React.FC<JobModalProps> = ({
         { date: new Date().toISOString().split('T')[0], amt: balanceDue },
       ]);
     }
-    setStatus('PAID');
+    setStatus('COMPLETED');
     onToast('✔ Job Marked as Paid in Full');
   };
 
@@ -373,6 +374,7 @@ export const JobModal: React.FC<JobModalProps> = ({
       sunVal,
       depo: 0,
       payments,
+      internalNotes,
       prepScope,
       scope,
       rooms,
@@ -439,11 +441,7 @@ export const JobModal: React.FC<JobModalProps> = ({
               >
                 <option value="PENDING">Pending</option>
                 <option value="SCHEDULED">Scheduled</option>
-                <option value="ACTIVE">Active</option>
                 <option value="COMPLETED">Completed</option>
-                <option value="PAID">Paid</option>
-                <option value="ON HOLD">On Hold</option>
-                <option value="DECLINED">Declined</option>
                 <option value="OTHER">Other</option>
               </select>
             </div>
@@ -499,6 +497,23 @@ export const JobModal: React.FC<JobModalProps> = ({
           )}
         </div>
 
+        {/* Internal Notes Accordion */}
+        <details open className="bg-[var(--surface-subtle)] border border-[var(--border)] rounded-xl overflow-hidden">
+          <summary className="px-3.5 py-2.5 font-bold text-xs text-[var(--text)] cursor-pointer flex justify-between">
+            <span>🔒 Internal Notes (Not on PDF)</span>
+            <span className="text-[10px]">▼</span>
+          </summary>
+          <div className="p-3 border-t border-[var(--border)]">
+            <textarea
+              rows={3}
+              value={internalNotes}
+              onChange={(e) => setInternalNotes(e.target.value)}
+              placeholder="Private notes about the job, materials, client, or things you don't want on the formal estimate/bill..."
+              className="w-full bg-[var(--bg)] border border-[var(--border)] focus:border-[var(--accent)] text-[var(--text)] rounded-lg p-2 text-xs outline-none"
+            />
+          </div>
+        </details>
+
         {/* Prep & Scope Accordion */}
         <details open className="bg-[var(--surface-subtle)] border border-[var(--border)] rounded-xl overflow-hidden">
           <summary className="px-3.5 py-2.5 font-bold text-xs text-[var(--text)] cursor-pointer flex justify-between">
@@ -537,13 +552,42 @@ export const JobModal: React.FC<JobModalProps> = ({
 
             <div>
               <label className="text-[8px] uppercase font-bold text-[var(--text-muted)] block mb-1">
-                Prep Work Notes
+                Prep Work Options
               </label>
+              <div className="flex flex-wrap gap-2 mb-2 text-[10px]">
+                {[
+                  'Pressure wash surfaces',
+                  'Scrape loose paint',
+                  'Sand feather edges',
+                  'Caulk cracks and gaps',
+                  'Spot prime bare wood',
+                  'Mask floors and trim',
+                  'Patch drywall holes'
+                ].map((prepOption) => (
+                  <label key={prepOption} className="flex items-center gap-1.5 cursor-pointer bg-[var(--bg)] border border-[var(--border)] px-2 py-1 rounded-md text-[var(--text)]">
+                    <input
+                      type="checkbox"
+                      checked={prepScope.includes(prepOption)}
+                      onChange={(e) => {
+                        if (e.target.checked) {
+                          const newScope = prepScope ? `${prepScope}\n- ${prepOption}` : `- ${prepOption}`;
+                          setPrepScope(newScope);
+                        } else {
+                          const newScope = prepScope.replace(`- ${prepOption}`, '').replace(/^\n/, '').replace(/\n\n/g, '\n').trim();
+                          setPrepScope(newScope);
+                        }
+                      }}
+                      className="w-3 h-3 text-[var(--accent)]"
+                    />
+                    <span>{prepOption}</span>
+                  </label>
+                ))}
+              </div>
               <textarea
-                rows={2}
+                rows={3}
                 value={prepScope}
                 onChange={(e) => setPrepScope(e.target.value)}
-                placeholder="Pressure wash siding, scrape loose paint, sand feather edges, prime raw wood with oil..."
+                placeholder="Custom prep notes..."
                 className="w-full bg-[var(--bg)] border border-[var(--border)] focus:border-[var(--accent)] text-[var(--text)] rounded-lg p-2 text-xs outline-none"
               />
             </div>

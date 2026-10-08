@@ -48,7 +48,7 @@ export const DEFAULT_STARTER_CUSTOMERS: Customer[] = [
         id: 201,
         title: 'Interior Main Floor & Kitchen Repaint',
         date: new Date().toISOString().split('T')[0],
-        status: 'ACTIVE',
+        status: 'SCHEDULED',
         showLaborTotal: true,
         showOverallTotal: true,
         matsIncluded: false,

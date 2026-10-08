@@ -263,11 +263,8 @@ export const FolderViewModal: React.FC<FolderViewModalProps> = ({
               <option value="NEW">NEW</option>
               <option value="PENDING">PENDING</option>
               <option value="SCHEDULED">SCHEDULED</option>
-              <option value="ACTIVE">ACTIVE</option>
               <option value="COMPLETED">COMPLETED</option>
-              <option value="PAID">PAID</option>
-              <option value="ON HOLD">ON HOLD</option>
-              <option value="DECLINED">DECLINED</option>
+              <option value="OTHER">OTHER / ARCHIVE</option>
             </select>
           </div>
         </div>
@@ -453,13 +450,11 @@ export const FolderViewModal: React.FC<FolderViewModalProps> = ({
           <div className="space-y-2.5">
             {(customer.jobs || []).map((j, idx) => {
               const statusBg =
-                j.status === 'ACTIVE'
-                  ? '#30d158'
-                  : j.status === 'SCHEDULED'
+                j.status === 'SCHEDULED'
                   ? '#0a84ff'
                   : j.status === 'COMPLETED'
                   ? '#ff9f0a'
-                  : j.status === 'PAID'
+                  : j.status === 'OTHER'
                   ? '#555'
                   : '#ffd60a';
 

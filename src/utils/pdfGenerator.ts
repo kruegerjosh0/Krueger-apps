@@ -241,16 +241,6 @@ export async function generateEstimateOrBillPdf(
   doc.text(addressText, Math.round(pageWidth / 2), y, { align: 'center' });
   y += 20;
 
-  // Optional project title
-  if (job.title && job.title.trim()) {
-    doc.setFont('helvetica', 'bold');
-    doc.setFontSize(11);
-    doc.setTextColor(30, 30, 30);
-    doc.text(`PROJECT: ${job.title.toUpperCase()}`, margin, y);
-    doc.setDrawColor(220, 220, 220);
-    doc.line(margin, y + 4, rightMargin, y + 4);
-    y += 18;
-  }
 
   // 3. METADATA SECTION: Customer on Left, Date on Right
   checkPageBreak(50);

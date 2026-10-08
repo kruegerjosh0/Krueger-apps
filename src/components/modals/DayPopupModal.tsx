@@ -189,9 +189,7 @@ export const DayPopupModal: React.FC<DayPopupModalProps> = ({
               <div className="space-y-2">
                 {jobs.map((item, idx) => {
                   const statusBg =
-                    item.job.status === 'ACTIVE'
-                      ? '#30d158'
-                      : item.job.status === 'SCHEDULED'
+                    item.job.status === 'SCHEDULED'
                       ? '#0a84ff'
                       : '#bf5af2';
 

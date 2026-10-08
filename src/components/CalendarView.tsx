@@ -309,7 +309,7 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
       for (let day = 1; day <= totalDaysInMonth; day++) {
         const dateStr = `${year}-${String(month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
         if (dateStr >= start && dateStr <= end) {
-          const color = j.status === 'ACTIVE' ? '#30d158' : j.status === 'SCHEDULED' ? '#0a84ff' : '#bf5af2';
+          const color = j.status === 'SCHEDULED' ? '#0a84ff' : '#bf5af2';
           agendaItems.push({
             dateStr,
             isGoogle: false,
@@ -599,9 +599,7 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
                       {/* Render Painting jobs (Status color pills) */}
                       {jobsToday.slice(0, gEventsToday.length > 0 ? 1 : 2).map((item, idx) => {
                         const tagBg =
-                          item.job.status === 'ACTIVE'
-                            ? '#30d158'
-                            : item.job.status === 'SCHEDULED'
+                          item.job.status === 'SCHEDULED'
                             ? '#0a84ff'
                             : '#bf5af2';
                         return (

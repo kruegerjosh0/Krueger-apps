@@ -36,7 +36,6 @@ import { Header } from './components/Header';
 import { Navigation, TabType } from './components/Navigation';
 import { DashboardView } from './components/DashboardView';
 import { WeatherView } from './components/WeatherView';
-import { CalendarView } from './components/CalendarView';
 import { NotesView } from './components/NotesView';
 import { ToolsView } from './components/ToolsView';
 
@@ -1177,23 +1176,6 @@ export default function App() {
             }}
             onTogglePin={handleTogglePin}
             onOpenBackupModal={() => setCloudSyncOpen(true)}
-          />
-        )}
-
-        {activeTab === 'sched' && (
-          <CalendarView
-            customers={customers}
-            onOpenFolder={(cId) => {
-              const c = customers.find((x) => x.id === cId);
-              if (c) setActiveFolderCustomer(c);
-            }}
-            onOpenDayPopup={(dateStr, dayJobs, dayGoogleEvents) => {
-              setDayPopupDate(dateStr);
-              setDayPopupJobs(dayJobs);
-              setDayPopupGoogleEvents(dayGoogleEvents || []);
-            }}
-            onExportAllJobsIcs={handleExportAllJobsIcs}
-            onToast={showToast}
           />
         )}
 

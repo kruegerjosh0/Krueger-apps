@@ -55,20 +55,16 @@ export function getCurrentGpsPosition(): Promise<LocationInfo> {
           const controller = new AbortController();
           const timeoutId = setTimeout(() => controller.abort(), 4000);
           const revRes = await fetch(
-            `https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lng}`,
+          `https://api.bigdatacloud.net/data/reverse-geocode-client?latitude=${lat}&longitude=${lng}&localityLanguage=en`,
             { signal: controller.signal }
           );
           clearTimeout(timeoutId);
 
           if (revRes.ok) {
             const revData = await revRes.json();
-            const addr = revData.address;
-            if (addr) {
-              const town =
-                addr.city || addr.town || addr.village || addr.hamlet || addr.suburb || addr.county || 'Local Area';
-              const state = addr.state || 'WI';
-              detectedName = town;
-              region = state;
+          if (revData.city || revData.locality) {
+            detectedName = revData.city || revData.locality || 'Local Area';
+            region = revData.principalSubdivision || 'WI';
             }
           }
         } catch {
@@ -135,18 +131,16 @@ export function watchDeviceLocation(
         const controller = new AbortController();
         const timeoutId = setTimeout(() => controller.abort(), 4000);
         const revRes = await fetch(
-          `https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lng}`,
+          `https://api.bigdatacloud.net/data/reverse-geocode-client?latitude=${lat}&longitude=${lng}&localityLanguage=en`,
           { signal: controller.signal }
         );
         clearTimeout(timeoutId);
 
         if (revRes.ok) {
           const revData = await revRes.json();
-          const addr = revData.address;
-          if (addr) {
-            detectedName =
-              addr.city || addr.town || addr.village || addr.hamlet || addr.suburb || addr.county || 'Local Area';
-            region = addr.state || 'WI';
+          if (revData.city || revData.locality) {
+            detectedName = revData.city || revData.locality || 'Local Area';
+            region = revData.principalSubdivision || 'WI';
           }
         }
       } catch {

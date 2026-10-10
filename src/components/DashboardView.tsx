@@ -37,7 +37,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
   const allJobs = customers.flatMap((c) => c.jobs || []);
   const totalActiveJobs = allJobs.filter((j) => j.status === 'ACTIVE').length;
   const totalScheduledJobs = allJobs.filter(
-    (j) => j.status === 'SCHEDULED' || (j.schedDate && j.status !== 'COMPLETED' && j.status !== 'PAID' && j.status !== 'DECLINED')
+    (j) => j.status === 'SCHEDULED' || (j.schedDate && j.status !== 'COMPLETED')
   ).length;
   const totalPendingJobs = allJobs.filter((j) => j.status === 'PENDING').length;
 
@@ -52,12 +52,10 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
 
   // Group customers by categories
   const pinnedCusts: Customer[] = [];
-  const activeCusts: Customer[] = [];
   const scheduledCusts: Customer[] = [];
   const pendingLeads: Customer[] = [];
   const newCusts: Customer[] = [];
   const completedCusts: Customer[] = [];
-  const paidCusts: Customer[] = [];
   const archiveCusts: Customer[] = [];
 
   filtered.forEach((c) => {
@@ -68,40 +66,35 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
     let status = c.statusOverride && c.statusOverride !== 'AUTO' ? c.statusOverride : 'NEW';
     if (!c.statusOverride || c.statusOverride === 'AUTO') {
       if (c.jobs && c.jobs.length > 0) {
-        if (c.jobs.some((j) => j.status === 'ACTIVE')) status = 'ACTIVE';
+        if (c.jobs.some((j) => j.status === 'PENDING')) status = 'SCHEDULED';
         else if (
           c.jobs.some(
             (j) =>
-              j.status === 'SCHEDULED' ||
-              (j.schedDate && j.status !== 'COMPLETED' && j.status !== 'PAID' && j.status !== 'DECLINED')
+              j.status === 'PENDING' ||
+              (j.schedDate && j.status !== 'COMPLETED')
           )
         )
           status = 'SCHEDULED';
         else if (c.jobs.some((j) => j.status === 'COMPLETED')) status = 'COMPLETED';
-        else if (c.jobs.every((j) => j.status === 'PAID')) status = 'PAID';
-        else if (c.jobs.some((j) => j.status === 'ON HOLD' || j.status === 'DECLINED' || j.status === 'OTHER'))
+        else if (c.jobs.some((j) => j.status === 'OTHER'))
           status = 'ARCHIVE';
         else status = 'PENDING';
       }
     }
 
-    if (status === 'ACTIVE') activeCusts.push(c);
-    else if (status === 'SCHEDULED') scheduledCusts.push(c);
+    if (status === 'SCHEDULED') scheduledCusts.push(c);
     else if (status === 'PENDING') pendingLeads.push(c);
     else if (status === 'NEW') newCusts.push(c);
     else if (status === 'COMPLETED') completedCusts.push(c);
-    else if (status === 'PAID') paidCusts.push(c);
     else archiveCusts.push(c);
   });
 
   const sortByActive = (a: Customer, b: Customer) => (b.lastActive || 0) - (a.lastActive || 0);
   pinnedCusts.sort(sortByActive);
-  activeCusts.sort(sortByActive);
   scheduledCusts.sort(sortByActive);
   pendingLeads.sort(sortByActive);
   newCusts.sort(sortByActive);
   completedCusts.sort(sortByActive);
-  paidCusts.sort(sortByActive);
   archiveCusts.sort(sortByActive);
 
   // Active, Scheduled, Pinned, and New Leads open by default
@@ -124,14 +117,11 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
     setFolderExpanded((prev) => ({ ...prev, [key]: !prev[key] }));
   };
 
-  const handleStatTileClick = (category: 'ACTIVE' | 'SCHEDULED' | 'NEW' | 'PENDING') => {
+  const handleStatTileClick = (category: 'SCHEDULED' | 'NEW' | 'PENDING') => {
     setSelectedFilter(category);
-    if (category === 'ACTIVE') {
+    if (category === 'SCHEDULED') {
       setFolderOpenState((prev) => ({ ...prev, active: true, pinned: true }));
       setFolderExpanded((prev) => ({ ...prev, active: true }));
-    } else if (category === 'SCHEDULED') {
-      setFolderOpenState((prev) => ({ ...prev, scheduled: true }));
-      setFolderExpanded((prev) => ({ ...prev, scheduled: true }));
     } else if (category === 'NEW') {
       setFolderOpenState((prev) => ({ ...prev, new: true }));
       setFolderExpanded((prev) => ({ ...prev, new: true }));
@@ -153,7 +143,6 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
   ) => {
     // If user filtered to another specific category, don't render this group
     if (selectedFilter !== 'ALL') {
-      if (selectedFilter === 'ACTIVE' && key !== 'active' && key !== 'pinned') return null;
       if (selectedFilter === 'SCHEDULED' && key !== 'scheduled') return null;
       if (selectedFilter === 'NEW' && key !== 'new') return null;
       if (selectedFilter === 'PENDING' && key !== 'pending') return null;
@@ -215,7 +204,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
 
               if (!c.statusOverride || c.statusOverride === 'AUTO') {
                 if (c.jobs && c.jobs.length > 0) {
-                  const activeJob = c.jobs.find((j) => j.status === 'ACTIVE' || j.status === 'SCHEDULED');
+                  const activeJob = c.jobs.find((j) => j.status === 'PENDING');
                   if (activeJob) {
                     s = activeJob.status;
                     if (activeJob.schedDate === todayStr) isTodayWork = true;
@@ -231,14 +220,10 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
               }
 
               const pillBg =
-                s === 'ACTIVE'
-                  ? '#30d158'
-                  : s === 'SCHEDULED'
+                s === 'SCHEDULED'
                   ? '#0a84ff'
                   : s === 'COMPLETED'
                   ? '#ff9f0a'
-                  : s === 'PAID'
-                  ? '#555'
                   : s === 'NEW'
                   ? '#ffd60a'
                   : '#bf5af2';
@@ -439,28 +424,6 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
 
       {/* Quick Dashboard Stat Tiles (Active Jobs, Scheduled, New Leads, Pending Bids) */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5 sm:gap-2">
-        {/* Active Jobs */}
-        <button
-          type="button"
-          onClick={() => handleStatTileClick('ACTIVE')}
-          className={`bg-[var(--surface)] hover:bg-[var(--surface-subtle)] border p-2.5 sm:p-3 rounded-xl border-l-4 border-l-[#30d158] shadow-xs text-left transition-all active:scale-95 cursor-pointer ${
-            selectedFilter === 'ACTIVE' ? 'ring-2 ring-[#30d158] border-[#30d158]' : 'border-[var(--border)]'
-          }`}
-        >
-          <div className="flex items-center justify-between">
-            <span className="text-lg sm:text-2xl font-black text-[#30d158] block leading-none">
-              {totalActiveJobs > 0 ? totalActiveJobs : activeCusts.length}
-            </span>
-            <span className="text-xs">🟢</span>
-          </div>
-          <span className="text-[9.5px] sm:text-[10px] uppercase font-extrabold text-[var(--text)] tracking-wider mt-1 block truncate">
-            Active Jobs
-          </span>
-          <span className="text-[8.5px] sm:text-[9px] text-[var(--text-muted)] truncate block">
-            {activeCusts.length} underway
-          </span>
-        </button>
-
         {/* Scheduled Jobs */}
         <button
           type="button"
@@ -561,19 +524,6 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
 
         <button
           type="button"
-          onClick={() => setSelectedFilter('ACTIVE')}
-          className={`px-3 py-1.5 rounded-lg font-bold transition-colors cursor-pointer flex-shrink-0 flex items-center gap-1.5 ${
-            selectedFilter === 'ACTIVE'
-              ? 'bg-[#30d158] text-white'
-              : 'bg-[var(--surface-subtle)] text-[var(--text-muted)] border border-[var(--border)] hover:text-[var(--text)]'
-          }`}
-        >
-          <span>🟢</span>
-          <span>Active ({activeCusts.length})</span>
-        </button>
-
-        <button
-          type="button"
           onClick={() => setSelectedFilter('SCHEDULED')}
           className={`px-3 py-1.5 rounded-lg font-bold transition-colors cursor-pointer flex-shrink-0 flex items-center gap-1.5 ${
             selectedFilter === 'SCHEDULED'
@@ -616,13 +566,6 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
       <div ref={folderListRef} className="space-y-1">
         {renderFolderGroup('pinned', '📌 Pinned Active Job Site', 'var(--accent)', pinnedCusts, 'No pinned job sites right now.')}
         {renderFolderGroup(
-          'active',
-          '🟢 Active Jobs (Underway)',
-          '#30d158',
-          activeCusts,
-          'No active jobs right now. Once a proposal is approved, switch its status to Active to track underway work here.'
-        )}
-        {renderFolderGroup(
           'scheduled',
           '📅 Scheduled & Future Jobs',
           '#0a84ff',
@@ -630,10 +573,9 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
           'No scheduled jobs right now. Enter a start date on an estimate to automatically schedule it on the calendar.'
         )}
         {renderFolderGroup('new', '✨ New Leads & Inquiries', '#f1c40f', newCusts, 'No new client leads at the moment.')}
-        {renderFolderGroup('pending', '⏳ Pending Estimates & Bids', '#ffd60a', pendingLeads, 'No pending bids awaiting client decision.')}
-        {renderFolderGroup('completed', '🏁 Completed — Unpaid', '#38bdf8', completedCusts)}
-        {renderFolderGroup('paid', '💵 Paid & Closed', '#555', paidCusts)}
-        {renderFolderGroup('archive', '📁 On Hold & Archive', '#bf5af2', archiveCusts)}
+        {renderFolderGroup('pending', '⏳ Sent / Pending Bids', '#ffd60a', pendingLeads, 'No pending bids awaiting client decision.')}
+        {renderFolderGroup('completed', '✅ Completed / Paid', '#38bdf8', completedCusts, 'No completed projects.')}
+        {renderFolderGroup('archive', '📦 Other / Archive', '#bf5af2', archiveCusts, 'No archived folders.')}
 
         {filtered.length === 0 && (
           <div className="text-center py-10 bg-[var(--surface)] border border-[var(--border)] rounded-xl text-xs text-[var(--text-muted)]">

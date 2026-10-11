@@ -59,6 +59,7 @@ import { ImageViewerModal } from './components/modals/ImageViewerModal';
 import { DataBackupModal } from './components/modals/DataBackupModal';
 import { AccountLoginModal } from './components/modals/AccountLoginModal';
 import { ApkInstallerModal } from './components/modals/ApkInstallerModal';
+import { WebsiteEditorModal } from './components/modals/WebsiteEditorModal';
 import { OfflineIndicator } from './components/OfflineIndicator';
 import {
   testFirestoreConnection,
@@ -135,6 +136,7 @@ export default function App() {
   const [cloudSyncOpen, setCloudSyncOpen] = useState(false);
   const [accountModalOpen, setAccountModalOpen] = useState(false);
   const [apkInstallerOpen, setApkInstallerOpen] = useState(false);
+  const [websiteEditorOpen, setWebsiteEditorOpen] = useState(false);
   const [cloudUser, setCloudUser] = useState<any>(null);
 
   const showToast = (msg: string) => {
@@ -1034,6 +1036,7 @@ export default function App() {
             onOpenSettings={() => setSettingsOpen(true)}
             onOpenCloudSync={() => setCloudSyncOpen(true)}
             onOpenApkInstaller={() => setApkInstallerOpen(true)}
+            onOpenWebsiteEditor={() => setWebsiteEditorOpen(true)}
           />
         )}
       </main>
@@ -1463,6 +1466,13 @@ export default function App() {
       <ApkInstallerModal
         isOpen={apkInstallerOpen}
         onClose={() => setApkInstallerOpen(false)}
+        onToast={showToast}
+      />
+
+      {/* Website Editor Modal */}
+      <WebsiteEditorModal
+        isOpen={websiteEditorOpen}
+        onClose={() => setWebsiteEditorOpen(false)}
         onToast={showToast}
       />
 

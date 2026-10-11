@@ -14,6 +14,7 @@ interface ToolsViewProps {
   onOpenSettings: () => void;
   onOpenCloudSync?: () => void;
   onOpenApkInstaller?: () => void;
+  onOpenWebsiteEditor?: () => void;
 }
 
 export const ToolsView: React.FC<ToolsViewProps> = ({
@@ -30,6 +31,7 @@ export const ToolsView: React.FC<ToolsViewProps> = ({
   onOpenSettings,
   onOpenCloudSync,
   onOpenApkInstaller,
+  onOpenWebsiteEditor,
 }) => {
   const triggerDownload = (url: string, filename: string) => {
     const link = document.createElement('a');
@@ -53,6 +55,7 @@ export const ToolsView: React.FC<ToolsViewProps> = ({
   };
 
   const tools = [
+    { title: 'Website Editor', icon: '🌐', desc: 'Edit live website content', action: onOpenWebsiteEditor || onOpenSettings },
     { title: 'Install App (PWA)', icon: '📱', desc: '1-tap home screen app with offline caching', action: onOpenApkInstaller || onOpenSettings },
     { title: 'Backup & Restore', icon: '💾', desc: 'Save JSON to phone or Google Drive, or restore', action: onOpenCloudSync || onOpenSettings },
     { title: 'Offline HTML File', icon: '📄', desc: 'Download single-file archive for PC or laptop', action: handleExportSingleHtml },

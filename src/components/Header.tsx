@@ -12,7 +12,6 @@ interface HeaderProps {
   onOpenNewCustomer: () => void;
   onNavigateTab: (tab: 'dash' | 'weather' | 'notes' | 'tools') => void;
   onOpenCalc: () => void;
-  onOpenAiAssistant?: () => void;
   onOpenCloudSync?: () => void;
   onOpenAccountModal?: () => void;
   onOpenApkInstaller?: () => void;
@@ -27,7 +26,6 @@ export const Header: React.FC<HeaderProps> = ({
   onOpenNewCustomer,
   onNavigateTab,
   onOpenCalc,
-  onOpenAiAssistant,
   onOpenCloudSync,
   onOpenAccountModal,
   onOpenApkInstaller,
@@ -48,12 +46,7 @@ export const Header: React.FC<HeaderProps> = ({
       <div className="max-w-4xl mx-auto flex items-center justify-between gap-1.5 sm:gap-3">
         {/* Left: Logo & Brand */}
         <div className="flex items-center gap-2 min-w-0 flex-1">
-          <button
-            type="button"
-            onClick={onOpenAiAssistant}
-            className="w-8 h-8 sm:w-10 sm:h-10 shrink-0 rounded-full border-2 border-[var(--accent)] bg-[var(--surface-subtle)] flex items-center justify-center shadow-md hover:scale-105 active:scale-95 transition-all cursor-pointer p-0.5"
-            title="Tap to talk with Flip Gemini AI"
-          >
+          <div className="w-8 h-8 sm:w-10 sm:h-10 shrink-0 rounded-full border-2 border-[var(--accent)] bg-[var(--surface-subtle)] flex items-center justify-center shadow-md p-0.5">
             <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 300 300" className="w-full h-full">
               <circle cx="150" cy="150" r="142" fill="#121318" />
               <circle cx="150" cy="150" r="136" fill="#f4c430" />
@@ -79,7 +72,7 @@ export const Header: React.FC<HeaderProps> = ({
                 <path d="M-14,12 L-2,12 L-5,0 L-11,0 Z" fill="#231709" />
               </g>
             </svg>
-          </button>
+          </div>
 
           <div className="min-w-0 truncate">
             <h1 className="text-xs sm:text-sm font-extrabold uppercase tracking-wide text-[var(--accent)] leading-tight truncate">
@@ -93,22 +86,6 @@ export const Header: React.FC<HeaderProps> = ({
 
         {/* Center / Right: Actions */}
         <div className="flex items-center gap-1 sm:gap-2 shrink-0">
-          {onOpenAiAssistant && (
-            <button
-              type="button"
-              onClick={onOpenAiAssistant}
-              className="relative flex items-center gap-1 px-2 sm:px-3.5 py-1.5 rounded-full bg-gradient-to-r from-amber-500 via-yellow-400 to-amber-500 text-black font-black text-[11px] sm:text-xs shadow-md hover:scale-105 active:scale-95 transition-all cursor-pointer ring-1.5 sm:ring-2 ring-amber-400/60"
-              title="Talk to Flip Gemini AI Assistant"
-            >
-              <span className="text-xs sm:text-sm">✨</span>
-              <span className="font-black uppercase tracking-wide text-[10px] sm:text-xs">Flip</span>
-              <span className="flex h-1.5 w-1.5 sm:h-2 sm:w-2 relative">
-                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-black opacity-75"></span>
-                <span className="relative inline-flex rounded-full h-1.5 w-1.5 sm:h-2 sm:w-2 bg-black"></span>
-              </span>
-            </button>
-          )}
-
           {/* Account Login Button */}
           {onOpenAccountModal && (
             <button

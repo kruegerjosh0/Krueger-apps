@@ -4,7 +4,6 @@ import fs from 'fs';
 import { execSync } from 'child_process';
 import { fileURLToPath } from 'url';
 import dotenv from 'dotenv';
-import { GoogleGenAI } from '@google/genai';
 
 dotenv.config();
 
@@ -16,19 +15,8 @@ const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
 
 app.use(express.json({ limit: '10mb' }));
 
-// Initialize Google GenAI with recommended header
-const geminiApiKey = process.env.GEMINI_API_KEY;
-let ai: GoogleGenAI | null = null;
-if (geminiApiKey) {
-  ai = new GoogleGenAI({
-    apiKey: geminiApiKey,
-    httpOptions: {
-      headers: {
-        'User-Agent': 'aistudio-build',
-      },
-    },
-  });
-}
+// AI Assistant removed.
+let ai: any = null;
 
 // Universal Gemini AI Assistant Endpoint with App Brain & Function Calling
 app.post('/api/ai/assistant', async (req, res) => {
@@ -266,93 +254,6 @@ app.post('/api/ai/estimate-voice', async (req, res) => {
     const paintCostPerGal = constants.paintCostPerGal || 65;
     const repairRate = constants.repairRate || 75;
 
-    // If Gemini is available, use gemini-3.8-flash
-    if (ai) {
-      try {
-        const systemPrompt = `You are Flip, the official voice estimating partner for Krueger Painting (West Bend, WI).
-You are talking directly to Josh Krueger while he is walking through job sites with clients or speaking his job notes out loud.
-Speak directly, concisely, and conversationally in a confident contractor tone because your response will be read aloud through speech synthesis.
-
-Krueger Painting Standards:
-- Standard application: 2 FULL COATS.
-- Coverage rate: ${spreadRate} sq ft per gallon (1 gal per ${Math.round(spreadRate / 2)} sq ft for 2 full coats).
-- Paint cost: $${paintCostPerGal} per gallon (Sherwin-Williams Emerald, SuperPaint, Duration).
-- Standard labor: ~$1.00 - $1.25 per sq ft for walls.
-- Surface repairs (drywall patching, scraping, priming, rotted wood): $${repairRate}/hr.
-
-Current project context:
-- Project Title: ${currentJob.title || 'New Estimate'}
-- Existing Rooms: ${JSON.stringify(currentJob.rooms || [])}
-- Existing Repairs: ${JSON.stringify(currentJob.repairs || [])}
-
-When Josh speaks or dictates his notes (whether a quick question or a full job walkthrough):
-1. Provide a concise, clear spoken answer summarizing what you heard and calculated (e.g. total square footage, paint gallons for 2 coats, labor total, repairs, and grand estimate).
-2. At the very end of your response, ALWAYS include a JSON block with any structured items found:
-\`\`\`json
-{
-  "parsedPrepScope": "Prep instructions extracted from notes (e.g. Pressure wash, scrape loose paint, prime bare wood)",
-  "parsedScope": "General application scope (e.g. 2 full coats latex satin on walls, semi-gloss on trim)",
-  "proposedRooms": [
-    { "n": "Room Name with Dimensions", "r": 350, "og": "2", "prod": "Emerald", "sheen": "Satin", "color": "Repose Gray" }
-  ],
-  "proposedRepairs": [
-    { "d": "Repair description", "h": 2 }
-  ]
-}
-\`\`\`
-If no specific items were mentioned for a field, leave it empty or empty array. Keep the spoken reply punchy and under 4-5 sentences so it speaks fast and clearly.`;
-
-        const contents = [
-          ...history.map((h: any) => ({
-            role: h.role === 'user' ? 'user' : 'model',
-            parts: [{ text: h.text }],
-          })),
-          { role: 'user', parts: [{ text: message }] },
-        ];
-
-        const response = await ai.models.generateContent({
-          model: 'gemini-3.8-flash',
-          contents,
-          config: {
-            systemInstruction: systemPrompt,
-            temperature: 0.7,
-          },
-        });
-
-        const rawText = response.text || '';
-
-        // Extract JSON block if present
-        let proposedRooms: any[] = [];
-        let proposedRepairs: any[] = [];
-        let parsedPrepScope = '';
-        let parsedScope = '';
-        let spokenReply = rawText;
-
-        const jsonMatch = rawText.match(/```json\s*([\s\S]*?)\s*```/);
-        if (jsonMatch) {
-          try {
-            const parsed = JSON.parse(jsonMatch[1]);
-            if (Array.isArray(parsed.proposedRooms)) proposedRooms = parsed.proposedRooms;
-            if (Array.isArray(parsed.proposedRepairs)) proposedRepairs = parsed.proposedRepairs;
-            if (parsed.parsedPrepScope) parsedPrepScope = String(parsed.parsedPrepScope).trim();
-            if (parsed.parsedScope) parsedScope = String(parsed.parsedScope).trim();
-            spokenReply = rawText.replace(/```json\s*[\s\S]*?\s*```/, '').trim();
-          } catch {
-            // ignore parse error
-          }
-        }
-
-        return res.json({
-          reply: spokenReply,
-          proposedRooms,
-          proposedRepairs,
-          parsedPrepScope,
-          parsedScope,
-        });
-      } catch (aiErr: any) {
-        console.warn('Gemini API call failed, falling back to smart rule engine:', aiErr.message);
-      }
-    }
 
     // Fallback Smart Estimator Rule Engine
     const lower = message.toLowerCase();
@@ -447,52 +348,6 @@ app.post('/api/ai/format-note', async (req, res) => {
     const spreadRate = constants.spreadRate || 350;
     const repairRate = constants.repairRate || 75;
 
-    if (ai) {
-      try {
-        const prompt = `You are Flip, the official AI assistant for Krueger Painting contractor Josh Krueger.
-Take this raw spoken field note transcript and organize it into a structured, professional contractor note.
-Also extract any job estimation items (rooms with width x length, repair hours, prep, paint colors/sheen).
-
-Raw transcript:
-"${transcript}"
-
-Reply strictly in valid JSON matching this schema:
-\`\`\`json
-{
-  "title": "Short descriptive subject (max 6 words)",
-  "category": "Material Run" | "Crew Instruction" | "General Reminder" | "Job Site Idea",
-  "formattedBody": "Bullet-pointed summary with clear headers (Scope, Surface Prep, Material Checklist, Crew Reminders, etc.)",
-  "extractedJob": {
-    "rooms": [
-      { "n": "Room Name WxL", "r": 350, "og": "2", "prod": "Emerald", "sheen": "Satin", "color": "Color Name" }
-    ],
-    "repairs": [
-      { "d": "Repair description", "h": 2 }
-    ],
-    "prepScope": "Prep instructions",
-    "scope": "Overall painting scope"
-  }
-}
-\`\`\``;
-
-        const response = await ai.models.generateContent({
-          model: 'gemini-3.8-flash',
-          contents: [{ role: 'user', parts: [{ text: prompt }] }],
-          config: {
-            temperature: 0.2,
-          },
-        });
-
-        const text = response.text || '';
-        const match = text.match(/```json\s*([\s\S]*?)\s*```/);
-        if (match) {
-          const parsed = JSON.parse(match[1]);
-          return res.json(parsed);
-        }
-      } catch (err: any) {
-        console.warn('Gemini note formatting failed, falling back to rule engine:', err.message);
-      }
-    }
 
     // Fallback Rule Engine for note formatting
     const lower = transcript.toLowerCase();

@@ -66,11 +66,10 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
     let status = c.statusOverride && c.statusOverride !== 'AUTO' ? c.statusOverride : 'NEW';
     if (!c.statusOverride || c.statusOverride === 'AUTO') {
       if (c.jobs && c.jobs.length > 0) {
-        if (c.jobs.some((j) => j.status === 'PENDING')) status = 'SCHEDULED';
-        else if (
+        if (
           c.jobs.some(
             (j) =>
-              j.status === 'PENDING' ||
+              j.status === 'SCHEDULED' ||
               (j.schedDate && j.status !== 'COMPLETED')
           )
         )
@@ -583,6 +582,32 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
           </div>
         )}
       </div>
+
+      {/* Quick Scheduled Jobs List Widget */}
+      {scheduledCusts.length > 0 && (
+        <div className="mt-4 bg-[var(--surface)] border border-[#0a84ff]/30 rounded-xl p-3 shadow-sm">
+          <div className="flex items-center gap-2 mb-2">
+            <span className="text-sm">📅</span>
+            <h3 className="text-xs font-bold text-[#0a84ff] uppercase tracking-wider">Scheduled Jobs Quick List</h3>
+          </div>
+          <div className="space-y-1">
+            {scheduledCusts.map(cust => (
+              <button
+                key={cust.id}
+                type="button"
+                onClick={() => onOpenFolder(cust.id)}
+                className="w-full text-left p-2 rounded-lg bg-[var(--surface-subtle)] hover:bg-[#0a84ff]/10 border border-[var(--border)] hover:border-[#0a84ff]/50 transition-colors flex items-center justify-between"
+              >
+                <div className="min-w-0">
+                  <div className="text-[11px] font-bold text-[var(--text)] truncate">{cust.name}</div>
+                  <div className="text-[9px] text-[var(--text-muted)] truncate">{cust.address || 'No address'}</div>
+                </div>
+                <span className="text-[#0a84ff] text-[10px] font-bold shrink-0">Open ➔</span>
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* + New Customer Button */}
       <button

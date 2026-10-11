@@ -57,11 +57,11 @@ export const WeatherRadar: React.FC<WeatherRadarProps> = ({ currentLocation }) =
       attributionControl: false,
     });
 
-    // High-resolution base tiles (CartoDB Voyager)
-    L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', {
+    // Free, no-auth Esri World Street Map tiles
+    L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}', {
       minZoom: 4,
       maxZoom: 18,
-      subdomains: 'abcd',
+      attribution: 'Tiles &copy; Esri',
     }).addTo(map);
 
     // Contractor Location Custom Job Site Marker
@@ -151,11 +151,11 @@ export const WeatherRadar: React.FC<WeatherRadarProps> = ({ currentLocation }) =
 
       const compiledFrames: RadarTimelineFrame[] = [];
 
-      // 1. Add Past Observed Radar Sweeps (Last ~1.5 - 2 hours)
+      // 1. Add Past Observed Radar Sweeps (Last 3 hours)
       if (rainviewerData?.radar?.past && rainviewerData.host) {
         const pastList = rainviewerData.radar.past;
-        // Take past 6-8 frames (covering past ~60-90 minutes at 10-minute intervals)
-        const recentPast = pastList.slice(-8);
+        // Take up to 18 frames (covering past ~3 hours at 10-minute intervals)
+        const recentPast = pastList.slice(-18);
 
         recentPast.forEach((p, idx) => {
           const diffMinutes = Math.round((p.time - nowSec) / 60);
@@ -197,9 +197,8 @@ export const WeatherRadar: React.FC<WeatherRadarProps> = ({ currentLocation }) =
         { min: 60, label: '+1h Future' },
         { min: 90, label: '+1.5h Future' },
         { min: 120, label: '+2h Future' },
+        { min: 150, label: '+2.5h Future' },
         { min: 180, label: '+3h Future' },
-        { min: 240, label: '+4h Future' },
-        { min: 360, label: '+6h Future' },
       ];
 
       futureMinuteSteps.forEach((step) => {

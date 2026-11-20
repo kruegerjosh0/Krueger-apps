@@ -3,13 +3,13 @@ import { PrintSettings } from '../../types';
 import {
   generateBlankLetterheadPdf,
   downloadPdfFile,
+  openPdfDirectly,
   GeneratedPdfResult,
 } from '../../utils/pdfGenerator';
 
 interface LetterheadModalProps {
   settings: PrintSettings;
   customLogo?: string | null;
-  onPreviewPdf: (result: GeneratedPdfResult) => void;
   onClose: () => void;
   onToast: (msg: string) => void;
 }
@@ -17,7 +17,6 @@ interface LetterheadModalProps {
 export const LetterheadModal: React.FC<LetterheadModalProps> = ({
   settings,
   customLogo,
-  onPreviewPdf,
   onClose,
   onToast,
 }) => {
@@ -52,13 +51,16 @@ export const LetterheadModal: React.FC<LetterheadModalProps> = ({
     );
   };
 
-  const handleGenerateAndPreview = async () => {
+  const handleOpenPdf = async () => {
+    // Open window synchronously during user click to bypass popup blockers
+    const preWin = window.open('', '_blank');
     setGenerating(true);
     try {
       const result = await buildPdf();
-      onPreviewPdf(result);
-      onToast('✔ Official Letterhead PDF Ready');
+      openPdfDirectly(result, preWin);
+      onToast('✔ Opened Official Letterhead PDF');
     } catch (err) {
+      if (preWin && !preWin.closed) preWin.close();
       console.error('Letterhead PDF error:', err);
       onToast('Failed to generate letterhead PDF');
     } finally {
@@ -66,7 +68,7 @@ export const LetterheadModal: React.FC<LetterheadModalProps> = ({
     }
   };
 
-  const handleDirectDownload = async () => {
+  const handleDownloadPdf = async () => {
     setGenerating(true);
     try {
       const result = await buildPdf();
@@ -98,7 +100,7 @@ export const LetterheadModal: React.FC<LetterheadModalProps> = ({
         className="max-w-xl w-full mx-auto bg-[var(--surface)] border border-[#f1c40f]/50 rounded-2xl p-4 sm:p-5 shadow-2xl space-y-4 my-auto"
       >
         {/* Branded Black-and-Yellow Header */}
-        <div className="bg-[#121318] border-b-4 border-[#f1c40f] rounded-xl p-3.5 flex items-start justify-between gap-3">
+        <div className="bg-[#111111] border-b-4 border-[#f1c40f] rounded-xl p-3.5 flex items-start justify-between gap-3">
           <div>
             <div className="text-[10px] font-black uppercase tracking-widest text-[#f1c40f]">
               Krueger Painting • Official Stationery
@@ -107,7 +109,7 @@ export const LetterheadModal: React.FC<LetterheadModalProps> = ({
               Blank Business Letterhead PDF
             </h2>
             <p className="text-[10.5px] text-gray-300 mt-0.5">
-              262-443-1199 • krueptg@gmail.com • Black &amp; Yellow Brand Header
+              (262) 443-1199 • krueptg@gmail.com • kruegerpaintingwi.com
             </p>
           </div>
           <button
@@ -121,7 +123,7 @@ export const LetterheadModal: React.FC<LetterheadModalProps> = ({
 
         {/* Tip Banner */}
         <div className="bg-[var(--surface-subtle)] border border-[var(--border)] rounded-xl px-3 py-2 text-[11px] text-[var(--text-muted)]">
-          💡 Leave any or all fields blank to generate a clean printable letterhead for handwritten notes, or type a custom letter/notice below.
+          💡 Leave fields blank for a clean printable letterhead, or type a custom letter/notice below.
         </div>
 
         {/* Title & Date */}
@@ -228,25 +230,25 @@ export const LetterheadModal: React.FC<LetterheadModalProps> = ({
           </label>
         </div>
 
-        {/* Action Buttons */}
+        {/* Direct 1-Tap Action Buttons (No Intermediate Preview) */}
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 pt-1">
           <button
             type="button"
             disabled={generating}
-            onClick={handleGenerateAndPreview}
-            className="py-3 bg-[#f1c40f] hover:bg-[#d4ac0d] text-[#231709] font-black uppercase tracking-wider text-xs rounded-xl shadow-lg cursor-pointer transition-transform active:scale-95 disabled:opacity-50 flex items-center justify-center gap-1.5"
+            onClick={handleOpenPdf}
+            className="py-3 bg-[#f1c40f] hover:bg-[#d4ac0d] text-[#111111] font-black uppercase tracking-wider text-xs rounded-xl shadow-lg cursor-pointer transition-transform active:scale-95 disabled:opacity-50 flex items-center justify-center gap-1.5"
           >
             <span>📄</span>
-            <span>{generating ? 'Generating...' : 'Preview & Open PDF'}</span>
+            <span>{generating ? 'Generating...' : 'Open PDF'}</span>
           </button>
           <button
             type="button"
             disabled={generating}
-            onClick={handleDirectDownload}
-            className="py-3 bg-[#121318] hover:bg-[#1c1d25] text-[#f1c40f] border-2 border-[#f1c40f] font-black uppercase tracking-wider text-xs rounded-xl shadow cursor-pointer transition-transform active:scale-95 disabled:opacity-50 flex items-center justify-center gap-1.5"
+            onClick={handleDownloadPdf}
+            className="py-3 bg-[#111111] hover:bg-[#1c1d25] text-[#f1c40f] border-2 border-[#f1c40f] font-black uppercase tracking-wider text-xs rounded-xl shadow cursor-pointer transition-transform active:scale-95 disabled:opacity-50 flex items-center justify-center gap-1.5"
           >
             <span>💾</span>
-            <span>{generating ? 'Generating...' : 'Download PDF Now'}</span>
+            <span>{generating ? 'Generating...' : 'Download PDF'}</span>
           </button>
         </div>
       </form>

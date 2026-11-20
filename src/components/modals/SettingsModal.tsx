@@ -214,15 +214,16 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
           <div className="bg-[var(--bg)] border border-[var(--border)] rounded-xl p-3 flex items-center justify-between gap-3">
             <div className="flex items-center gap-3">
               {customLogo ? (
-                <div className="w-16 h-16 bg-white rounded-lg p-1 border border-gray-700 flex items-center justify-center overflow-hidden shadow-sm">
+                <div className="w-16 h-16 bg-[#111111] rounded-full border-2 border-[#f1c40f] flex items-center justify-center overflow-hidden shadow-sm">
                   <img
                     src={customLogo}
                     alt="Custom Company Logo"
-                    className="max-w-full max-h-full object-contain"
+                    style={{ borderRadius: '50%', background: 'transparent' }}
+                    className="w-full h-full object-cover rounded-full"
                   />
                 </div>
               ) : (
-                <div className="w-16 h-16 bg-[#231709] rounded-full border-2 border-[#f1c40f] flex items-center justify-center text-xl shadow-sm">
+                <div className="w-16 h-16 bg-[#111111] rounded-full border-2 border-[#f1c40f] flex items-center justify-center text-xl shadow-sm">
                   🎨
                 </div>
               )}
@@ -232,7 +233,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 </span>
                 <span className="text-[10px] text-[var(--text-muted)] block">
                   {customLogo
-                    ? 'Applied at top of all vector PDF estimates & bills'
+                    ? 'Circular transparent PNG applied on #111111 black PDF headers'
                     : 'Default circular Krueger Painting gold & brown seal'}
                 </span>
               </div>
@@ -249,31 +250,40 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             )}
           </div>
 
-          {/* Live Letterhead Preview for Contractor Confidence */}
-          <div className="bg-white rounded-xl p-3 border border-gray-300 text-black shadow-inner">
-            <div className="text-[9px] font-black uppercase text-gray-500 tracking-wider mb-1.5 flex items-center justify-between">
-              <span>PDF Header Preview (As will appear on Estimate/Bill)</span>
-              <span className="text-[#f1c40f] bg-black px-1.5 py-0.5 rounded text-[8px] font-bold">Vector PDF Header</span>
-            </div>
-            <div className="flex flex-col items-center justify-center text-center py-2 border-b border-gray-200">
-              {customLogo ? (
-                <img
-                  src={customLogo}
-                  alt="Letterhead Logo"
-                  className="max-h-14 max-w-[180px] object-contain mb-1.5"
-                />
-              ) : (
-                <div className="w-12 h-12 rounded-full border-2 border-[#f1c40f] bg-[#231709] flex items-center justify-center text-white text-xs font-black mb-1.5 shadow">
-                  KP
+          {/* Live Black & Yellow PDF Header Preview */}
+          <div className="bg-[#111111] rounded-xl p-3 border-y-4 border-[#f1c40f] text-white shadow-inner">
+            <div className="flex items-center justify-between gap-3">
+              <div className="flex items-center gap-2.5 min-w-0">
+                {customLogo ? (
+                  <img
+                    src={customLogo}
+                    alt="Letterhead Logo"
+                    style={{ borderRadius: '50%', background: 'transparent' }}
+                    className="w-12 h-12 rounded-full object-cover shrink-0"
+                  />
+                ) : (
+                  <div className="w-12 h-12 rounded-full border-2 border-[#f1c40f] bg-[#231709] flex items-center justify-center text-[#f1c40f] text-xs font-black shrink-0">
+                    KP
+                  </div>
+                )}
+                <div className="min-w-0">
+                  <div className="text-xs font-black text-[#f1c40f] tracking-wide truncate">
+                    KRUEGER PAINTING
+                  </div>
+                  {motto && (
+                    <div className="text-[9.5px] italic text-gray-300 truncate">
+                      &ldquo;{motto}&rdquo;
+                    </div>
+                  )}
+                  <div className="text-[8.5px] text-gray-400 truncate">
+                    {(hdr || 'N630 Moraine Dr., Campbellsport, WI 53010').split('|')[0].trim()}
+                  </div>
                 </div>
-              )}
-              {motto && (
-                <div className="text-[11px] font-semibold italic text-gray-700 leading-tight">
-                  &ldquo;{motto}&rdquo;
-                </div>
-              )}
-              <div className="text-[10px] font-bold text-gray-900 mt-0.5">
-                {hdr || 'N630 Moraine Dr., Campbellsport, WI 53010 | (262) 443-1199'}
+              </div>
+              <div className="text-right shrink-0 leading-tight">
+                <div className="text-[9.5px] font-black text-[#f1c40f]">(262) 443-1199</div>
+                <div className="text-[8.5px] text-white">krueptg@gmail.com</div>
+                <div className="text-[8.5px] font-bold text-[#f1c40f]">kruegerpaintingwi.com</div>
               </div>
             </div>
           </div>
@@ -308,7 +318,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
 
           <div>
             <label className="text-[8px] uppercase font-bold text-[var(--text-muted)] block mb-0.5">
-              Header Subtext & Address
+              Header Subtext &amp; Address
             </label>
             <input
               type="text"
@@ -320,7 +330,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
 
           <div>
             <label className="text-[8px] uppercase font-bold text-[var(--text-muted)] block mb-0.5">
-              1. Quality & Material Standards
+              1. Quality &amp; Material Standards
             </label>
             <textarea
               rows={2}
@@ -356,7 +366,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
 
           <div>
             <label className="text-[8px] uppercase font-bold text-[var(--text-muted)] block mb-0.5">
-              4. Exclusions & Warranty
+              4. Exclusions &amp; Warranty
             </label>
             <textarea
               rows={2}
@@ -367,51 +377,28 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
           </div>
         </div>
 
-        {/* Developer & Codebase Export */}
-        <div className="bg-[var(--surface-subtle)] p-3.5 rounded-xl border border-[var(--border)] space-y-2.5">
-          <span className="text-[10px] font-bold text-[var(--accent)] uppercase block">
-            💾 Database Backups &amp; Single-File App
-          </span>
-          <p className="text-[11px] text-[var(--text-muted)] leading-relaxed">
-            Backup your entire client database to your phone or Google Drive anytime, or download the offline single-file HTML app:
-          </p>
-
-          {onOpenDataBackup && (
+        {/* Simplified JSON Data Backup */}
+        {onOpenDataBackup && (
+          <div className="bg-[var(--surface-subtle)] p-3.5 rounded-xl border border-[var(--border)] space-y-2">
+            <span className="text-[10px] font-bold text-[var(--accent)] uppercase block">
+              💾 Backup &amp; Restore Data (.JSON)
+            </span>
+            <p className="text-[11px] text-[var(--text-muted)] leading-relaxed">
+              Download or restore your complete customer and project database as a .JSON file.
+            </p>
             <button
               type="button"
               onClick={() => {
                 onClose();
                 onOpenDataBackup();
               }}
-              className="w-full py-2.5 px-3.5 bg-[var(--accent)] hover:opacity-95 text-[#231709] font-black text-xs rounded-xl shadow-xs flex items-center justify-center gap-2 cursor-pointer transition-transform active:scale-98"
+              className="w-full py-2.5 px-3.5 bg-[#f1c40f] hover:opacity-95 text-[#111111] font-black text-xs rounded-xl shadow-xs flex items-center justify-center gap-2 cursor-pointer transition-transform active:scale-98"
             >
               <span>💾</span>
-              <span>Backup to Phone or Google Drive (.JSON)</span>
+              <span>Open Backup &amp; Restore (.JSON)</span>
             </button>
-          )}
-
-          <div className="flex flex-wrap gap-2 pt-1">
-            <a
-              href="/api/export-single-html"
-              download="krueger-painting-app.html"
-              className="inline-flex items-center gap-1.5 px-3.5 py-2 bg-[#1c2e1f] hover:bg-[#253d29] border border-[#30d158]/60 text-[#30d158] font-bold text-xs rounded-xl shadow-xs transition-colors cursor-pointer"
-              title="One standalone HTML file. Tap or click to open immediately in Chrome with zero setup."
-            >
-              <span>📄</span>
-              <span>Download Standalone HTML (Click to Open)</span>
-            </a>
-
-            <a
-              href="/api/export-project-zip"
-              download="krueger-painting-os.zip"
-              className="inline-flex items-center gap-1.5 px-3.5 py-2 bg-[#2c2317] hover:bg-[#3b2b1d] border border-[#f1c40f]/60 text-[#f1c40f] font-bold text-xs rounded-xl shadow-xs transition-colors cursor-pointer"
-              title="Full developer source project with all subfolders for editing in VS Code or Cursor."
-            >
-              <span>📦</span>
-              <span>Download Source Code (ZIP)</span>
-            </a>
           </div>
-        </div>
+        )}
 
         <button
           type="button"

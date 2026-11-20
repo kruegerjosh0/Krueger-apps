@@ -13,6 +13,7 @@ import {
 } from 'firebase/auth';
 import firebaseConfig from '../../firebase-applet-config.json';
 import { Customer, JobProject, FieldNote } from '../types';
+import { isJobEligibleForScheduledList } from './projectHelpers';
 
 // Initialize Firebase App singleton safely
 const app = getApps().length === 0 ? initializeApp(firebaseConfig) : getApp();
@@ -239,6 +240,18 @@ export const createGoogleCalendarUrl = (
   )}`;
 };
 
+const addDaysLocalIso = (isoDate: string, days: number): string => {
+  const parts = (isoDate || '').trim().split('-').map(Number);
+  if (parts.length === 3 && !parts.some(Number.isNaN)) {
+    const d = new Date(parts[0], parts[1] - 1, parts[2] + days);
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    return `${y}-${m}-${day}`;
+  }
+  return isoDate;
+};
+
 export const generateIcsContent = (customers: Customer[]): string => {
   const lines: string[] = [
     'BEGIN:VCALENDAR',
@@ -249,19 +262,15 @@ export const generateIcsContent = (customers: Customer[]): string => {
     'X-WR-CALNAME:Krueger Painting Schedule',
   ];
 
+  const seq = Math.floor(Date.now() / 1000);
+  const dtStamp = `${new Date().toISOString().replace(/[-:]/g, '').split('.')[0]}Z`;
+
   customers.forEach((c) => {
     (c.jobs || []).forEach((j) => {
-      if (j.schedDate) {
+      if (j.schedDate && isJobEligibleForScheduledList(c, j)) {
         const start = j.schedDate.replace(/-/g, '');
         const endDate = j.schedEndDate || j.schedDate;
-        let end = start;
-        try {
-          const d = new Date(endDate + 'T00:00:00');
-          d.setDate(d.getDate() + 1);
-          end = d.toISOString().split('T')[0].replace(/-/g, '');
-        } catch {
-          end = endDate.replace(/-/g, '');
-        }
+        const end = addDaysLocalIso(endDate, 1).replace(/-/g, '');
 
         const summary = `🎨 ${c.name} - ${j.title || 'Painting'} (${j.status})`;
         const desc = `Client: ${c.name}\\nPhone: ${c.phone || 'N/A'}\\nStatus: ${j.status}\\nScope: ${
@@ -269,8 +278,10 @@ export const generateIcsContent = (customers: Customer[]): string => {
         }\\nKrueger Painting OS`;
 
         lines.push('BEGIN:VEVENT');
-        lines.push(`UID:krueger-job-${j.id}-${start}@kruegerpainting.com`);
-        lines.push(`DTSTAMP:${new Date().toISOString().replace(/[-:]/g, '').split('.')[0]}Z`);
+        // Deterministic UID tied strictly to job.id so updating dates overwrites instead of duplicating
+        lines.push(`UID:krueger-job-${j.id}@kruegerpainting.com`);
+        lines.push(`SEQUENCE:${seq}`);
+        lines.push(`DTSTAMP:${dtStamp}`);
         lines.push(`SUMMARY:${summary}`);
         lines.push(`DESCRIPTION:${desc}`);
         if (c.address) lines.push(`LOCATION:${c.address}`);
@@ -513,34 +524,28 @@ export const deleteGoogleCalendarEvent = async (
   }
 };
 
-export const syncJobToGoogleCalendar = async (
-  customer: Customer,
-  job: JobProject
-): Promise<GoogleCalendarEvent> => {
-  const token = await getAccessToken();
-  if (!token) throw new Error('Not connected to Google Workspace.');
+export interface JobCalendarUpsertResult {
+  event: GoogleCalendarEvent;
+  eventId: string;
+  action: 'created' | 'updated';
+}
 
-  if (!job.schedDate) {
-    throw new Error('This job does not have a scheduled start date.');
-  }
+export interface BatchCalendarSyncResult {
+  createdCount: number;
+  updatedCount: number;
+  skippedNoDateCount: number;
+  errors: string[];
+  eventIdMap: Record<number, string>;
+}
 
-  // Format start and end date (all-day event or date string YYYY-MM-DD)
-  const startDateStr = job.schedDate;
-  // If end date exists, set it, else next day for all-day event
-  let endDateStr = job.schedEndDate || job.schedDate;
-
-  // For all-day events, Google Calendar requires end date to be exclusive (next day)
-  try {
-    const d = new Date(endDateStr);
-    d.setDate(d.getDate() + 1);
-    endDateStr = d.toISOString().split('T')[0];
-  } catch {
-    // keep as is
-  }
+const buildJobCalendarPayload = (customer: Customer, job: JobProject) => {
+  const startDateStr = (job.schedDate || '').trim();
+  const endDateInclusive = (job.schedEndDate || job.schedDate || '').trim();
+  const endDateExclusive = addDaysLocalIso(endDateInclusive, 1);
 
   const summary = `🎨 ${customer.name} - ${job.title || 'Painting Project'}`;
   const descriptionParts: string[] = [
-    `Krueger Painting Project: ${job.title}`,
+    `Krueger Painting Project: ${job.title || 'Painting Project'}`,
     `Status: ${job.status}`,
     `Client: ${customer.name}`,
     `Phone: ${customer.phone || 'N/A'}`,
@@ -553,15 +558,23 @@ export const syncJobToGoogleCalendar = async (
     `Estimated Work Days: ${job.workDays || 1}`,
   ];
 
-  const eventPayload = {
+  return {
     summary,
     location: customer.address || '',
-    description: descriptionParts.join('\n'),
+    description: descriptionParts.filter((line) => line !== undefined).join('\n'),
+    status: 'confirmed',
     start: {
       date: startDateStr,
     },
     end: {
-      date: endDateStr,
+      date: endDateExclusive,
+    },
+    extendedProperties: {
+      private: {
+        kruegerApp: 'krueger-painting-os',
+        kruegerJobId: String(job.id),
+        kruegerCustomerId: String(customer.id),
+      },
     },
     reminders: {
       useDefault: false,
@@ -571,8 +584,96 @@ export const syncJobToGoogleCalendar = async (
       ],
     },
   };
+};
 
-  const res = await fetch('https://www.googleapis.com/calendar/v3/calendars/primary/events', {
+/**
+ * Finds an existing Google Calendar event previously synced for a specific Krueger job ID
+ * via private extendedProperties, preventing duplicate events even if local googleEventId was missing.
+ */
+const findExistingEventByJobId = async (
+  token: string,
+  jobId: number
+): Promise<string | null> => {
+  try {
+    const propFilter = encodeURIComponent(`kruegerJobId=${String(jobId)}`);
+    const res = await fetch(
+      `https://www.googleapis.com/calendar/v3/calendars/primary/events?privateExtendedProperty=${propFilter}&showDeleted=false&maxResults=5`,
+      {
+        headers: { Authorization: `Bearer ${token}` },
+      }
+    );
+    if (!res.ok) return null;
+    const data = await res.json();
+    const match = (data.items || []).find((ev: any) => ev && ev.status !== 'cancelled' && ev.id);
+    return match ? String(match.id) : null;
+  } catch {
+    return null;
+  }
+};
+
+/**
+ * Upserts a single scheduled job to Google Calendar:
+ * - If googleEventId (or matching extendedProperties event) exists, overwrites via PATCH (zero duplicates).
+ * - If not found (or deleted on Google Calendar), creates a fresh event via POST and returns its eventId.
+ */
+export const upsertJobToGoogleCalendar = async (
+  customer: Customer,
+  job: JobProject,
+  accessTokenOverride?: string
+): Promise<JobCalendarUpsertResult> => {
+  const token = accessTokenOverride || (await getAccessToken());
+  if (!token) throw new Error('Not connected to Google Calendar.');
+
+  if (!job.schedDate || !job.schedDate.trim()) {
+    throw new Error('This job does not have a scheduled start date.');
+  }
+
+  const eventPayload = buildJobCalendarPayload(customer, job);
+
+  // 1. Resolve existing event ID from job record or Google Calendar extendedProperties lookup
+  let existingEventId = (job.googleEventId || job.googleCalendarEventId || '').trim() || null;
+  if (!existingEventId) {
+    existingEventId = await findExistingEventByJobId(token, job.id);
+  }
+
+  // 2. If event already exists, PATCH/overwrite it with latest dates, title, address, and notes
+  if (existingEventId) {
+    const patchRes = await fetch(
+      `https://www.googleapis.com/calendar/v3/calendars/primary/events/${encodeURIComponent(existingEventId)}`,
+      {
+        method: 'PATCH',
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(eventPayload),
+      }
+    );
+
+    if (patchRes.ok) {
+      const updatedEvent: GoogleCalendarEvent = await patchRes.json();
+      return {
+        event: updatedEvent,
+        eventId: updatedEvent.id || existingEventId,
+        action: 'updated',
+      };
+    }
+
+    if (patchRes.status === 401) {
+      cachedAccessToken = null;
+      notifyListeners(cachedUser, null);
+      throw new Error('Google Calendar session expired. Please reconnect.');
+    }
+
+    // If 404 or 410 (event was deleted on Google Calendar), fall through to POST a fresh one
+    if (patchRes.status !== 404 && patchRes.status !== 410) {
+      const err = await patchRes.json().catch(() => ({}));
+      throw new Error(err?.error?.message || `Failed to update calendar event (${patchRes.status})`);
+    }
+  }
+
+  // 3. Otherwise create a new event via POST
+  const createRes = await fetch('https://www.googleapis.com/calendar/v3/calendars/primary/events', {
     method: 'POST',
     headers: {
       Authorization: `Bearer ${token}`,
@@ -581,12 +682,77 @@ export const syncJobToGoogleCalendar = async (
     body: JSON.stringify(eventPayload),
   });
 
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({}));
-    throw new Error(err?.error?.message || `Failed to create calendar event (${res.status})`);
+  if (!createRes.ok) {
+    if (createRes.status === 401) {
+      cachedAccessToken = null;
+      notifyListeners(cachedUser, null);
+      throw new Error('Google Calendar session expired. Please reconnect.');
+    }
+    const err = await createRes.json().catch(() => ({}));
+    throw new Error(err?.error?.message || `Failed to create calendar event (${createRes.status})`);
   }
 
-  return await res.json();
+  const createdEvent: GoogleCalendarEvent = await createRes.json();
+  return {
+    event: createdEvent,
+    eventId: createdEvent.id,
+    action: 'created',
+  };
+};
+
+export const syncJobToGoogleCalendar = async (
+  customer: Customer,
+  job: JobProject
+): Promise<GoogleCalendarEvent> => {
+  const result = await upsertJobToGoogleCalendar(customer, job);
+  return result.event;
+};
+
+/**
+ * Full Sync: pulls all currently scheduled (non-completed/non-paid) jobs from the app
+ * and upserts them into Google Calendar (updating existing events in-place so zero duplicates occur).
+ */
+export const syncAllScheduledJobsToGoogleCalendar = async (
+  customers: Customer[]
+): Promise<BatchCalendarSyncResult> => {
+  let token = await getAccessToken();
+  if (!token) {
+    const authRes = await signInWithGoogle();
+    token = authRes.accessToken;
+  }
+
+  const result: BatchCalendarSyncResult = {
+    createdCount: 0,
+    updatedCount: 0,
+    skippedNoDateCount: 0,
+    errors: [],
+    eventIdMap: {},
+  };
+
+  for (const cust of customers) {
+    for (const job of cust.jobs || []) {
+      if (!isJobEligibleForScheduledList(cust, job)) continue;
+
+      if (!job.schedDate || !job.schedDate.trim()) {
+        result.skippedNoDateCount += 1;
+        continue;
+      }
+
+      try {
+        const upserted = await upsertJobToGoogleCalendar(cust, job, token);
+        result.eventIdMap[job.id] = upserted.eventId;
+        if (upserted.action === 'updated') {
+          result.updatedCount += 1;
+        } else {
+          result.createdCount += 1;
+        }
+      } catch (err: any) {
+        result.errors.push(`${cust.name} (${job.title || 'Job'}): ${err?.message || 'Sync error'}`);
+      }
+    }
+  }
+
+  return result;
 };
 
 // -------------------------------------------------------------------------

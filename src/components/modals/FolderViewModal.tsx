@@ -22,7 +22,11 @@ interface FolderViewModalProps {
   onDeleteCustomer: (id: number) => void;
   onOpenJobModal: (job?: JobProject) => void;
   onDeleteJob: (jobId: number) => void;
-  onGenerateDoc: (job: JobProject, type: 'ESTIMATE' | 'BILL' | 'MASTER RECORD') => void;
+  onGenerateDoc: (
+    job: JobProject,
+    type: 'ESTIMATE' | 'BILL' | 'MASTER RECORD',
+    action: 'OPEN' | 'DOWNLOAD'
+  ) => void;
   onViewImage: (dataUrl: string) => void;
   onViewDocFile?: (file: { name: string; data: string; tag?: string }) => void;
   onGenerateCollage: () => void;
@@ -557,65 +561,92 @@ export const FolderViewModal: React.FC<FolderViewModalProps> = ({
                     <span className="text-base font-black text-[var(--accent)]">${gross}</span>
                   </div>
 
-                  {/* Document Generation & Calendar Buttons */}
-                  <div className="grid grid-cols-2 min-[440px]:grid-cols-3 sm:grid-cols-5 gap-1.5 pt-1">
-                    <button
-                      type="button"
-                      onClick={() => onGenerateDoc(j, 'ESTIMATE')}
-                      className="py-1.5 bg-[var(--accent)] hover:opacity-95 text-white font-extrabold text-[10px] rounded-lg cursor-pointer transition-transform active:scale-95 flex items-center justify-center gap-1 shadow-sm"
-                      title="Generate and view true Estimate PDF"
-                    >
-                      <span>📄</span>
-                      <span>Est PDF</span>
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => onGenerateDoc(j, 'BILL')}
-                      className="py-1.5 bg-[var(--accent-tertiary)] hover:opacity-95 text-white font-extrabold text-[10px] rounded-lg cursor-pointer transition-transform active:scale-95 flex items-center justify-center gap-1 shadow-sm"
-                      title="Generate and view true Bill/Invoice PDF"
-                    >
-                      <span>💳</span>
-                      <span>Bill PDF</span>
-                    </button>
-                    {j.schedDate ? (
-                      <a
-                        href={createGoogleCalendarUrl(customer.name, j, customer.address, customer.phone)}
-                        target="_blank"
-                        rel="noreferrer"
-                        className="py-1.5 bg-[#4285f4] hover:bg-[#3367d6] text-white font-extrabold text-[10px] rounded-lg cursor-pointer transition-transform active:scale-95 flex items-center justify-center gap-1 shadow-sm"
-                        title="Add directly to phone Google Calendar app"
-                      >
-                        <span>📅</span>
-                        <span>Cal</span>
-                      </a>
-                    ) : (
+                  {/* Direct 1-Tap PDF Actions (No Intermediate Preview) */}
+                  <div className="space-y-1.5 pt-1">
+                    <div className="grid grid-cols-2 gap-1.5">
                       <button
                         type="button"
-                        onClick={() => {
-                          onOpenJobModal(j);
-                          onToast('Set a start date to sync this project to Google Calendar');
-                        }}
-                        className="py-1.5 bg-[var(--surface-subtle)] hover:bg-[var(--border)] border border-[var(--border)] text-gray-400 font-bold text-[10px] rounded-lg cursor-pointer flex items-center justify-center gap-1"
-                        title="Set start date first to sync to calendar"
+                        onClick={() => onGenerateDoc(j, 'ESTIMATE', 'OPEN')}
+                        className="py-2 bg-[#f1c40f] hover:bg-[#d4ac0d] text-[#111111] font-black text-[10.5px] rounded-lg cursor-pointer transition-transform active:scale-95 flex items-center justify-center gap-1 shadow-sm"
+                        title="Open full-screen Estimate PDF immediately"
                       >
-                        <span>📅</span>
-                        <span>Cal</span>
+                        <span>📄</span>
+                        <span>Open Estimate PDF</span>
                       </button>
-                    )}
-                    <button
-                      type="button"
-                      onClick={() => onOpenJobModal(j)}
-                      className="py-1.5 bg-[var(--surface-subtle)] hover:bg-[var(--border)] border border-[var(--border)] text-[var(--text)] font-bold text-[10px] rounded-lg cursor-pointer transition-transform active:scale-95"
-                    >
-                      Edit
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => onGenerateDoc(j, 'MASTER RECORD')}
-                      className="py-1.5 bg-[var(--surface-subtle)] hover:bg-[var(--border)] border border-[var(--border)] text-[var(--text)] font-bold text-[10px] rounded-lg cursor-pointer transition-transform active:scale-95"
-                    >
-                      Record
-                    </button>
+                      <button
+                        type="button"
+                        onClick={() => onGenerateDoc(j, 'ESTIMATE', 'DOWNLOAD')}
+                        className="py-2 bg-[#111111] hover:bg-[#1c1d25] border border-[#f1c40f]/70 text-[#f1c40f] font-extrabold text-[10.5px] rounded-lg cursor-pointer transition-transform active:scale-95 flex items-center justify-center gap-1 shadow-sm"
+                        title="Download Estimate PDF directly to device"
+                      >
+                        <span>💾</span>
+                        <span>Download Est PDF</span>
+                      </button>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-1.5">
+                      <button
+                        type="button"
+                        onClick={() => onGenerateDoc(j, 'BILL', 'OPEN')}
+                        className="py-2 bg-[#30d158] hover:opacity-95 text-[#081c0d] font-black text-[10.5px] rounded-lg cursor-pointer transition-transform active:scale-95 flex items-center justify-center gap-1 shadow-sm"
+                        title="Open full-screen Final Bill PDF immediately"
+                      >
+                        <span>💳</span>
+                        <span>Open Bill PDF</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => onGenerateDoc(j, 'BILL', 'DOWNLOAD')}
+                        className="py-2 bg-[#1c2e1f] hover:bg-[#243c28] border border-[#30d158]/60 text-[#30d158] font-extrabold text-[10.5px] rounded-lg cursor-pointer transition-transform active:scale-95 flex items-center justify-center gap-1 shadow-sm"
+                        title="Download Final Bill PDF directly to device"
+                      >
+                        <span>💾</span>
+                        <span>Download Bill PDF</span>
+                      </button>
+                    </div>
+
+                    <div className="grid grid-cols-3 gap-1.5">
+                      <button
+                        type="button"
+                        onClick={() => onOpenJobModal(j)}
+                        className="py-1.5 bg-[var(--surface-subtle)] hover:bg-[var(--border)] border border-[var(--border)] text-[var(--text)] font-bold text-[10px] rounded-lg cursor-pointer transition-transform active:scale-95"
+                      >
+                        ✏️ Edit
+                      </button>
+                      {j.schedDate ? (
+                        <a
+                          href={createGoogleCalendarUrl(customer.name, j, customer.address, customer.phone)}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="py-1.5 bg-[#4285f4] hover:bg-[#3367d6] text-white font-extrabold text-[10px] rounded-lg cursor-pointer transition-transform active:scale-95 flex items-center justify-center gap-1 shadow-sm"
+                          title="Open in Google Calendar"
+                        >
+                          <span>📅</span>
+                          <span>Cal</span>
+                        </a>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            onOpenJobModal(j);
+                            onToast('Set a start date to sync this project to Google Calendar');
+                          }}
+                          className="py-1.5 bg-[var(--surface-subtle)] hover:bg-[var(--border)] border border-[var(--border)] text-gray-400 font-bold text-[10px] rounded-lg cursor-pointer flex items-center justify-center gap-1"
+                          title="Set start date first to sync to calendar"
+                        >
+                          <span>📅</span>
+                          <span>Cal</span>
+                        </button>
+                      )}
+                      <button
+                        type="button"
+                        onClick={() => onGenerateDoc(j, 'MASTER RECORD', 'OPEN')}
+                        className="py-1.5 bg-[var(--surface-subtle)] hover:bg-[var(--border)] border border-[var(--border)] text-[var(--text)] font-bold text-[10px] rounded-lg cursor-pointer transition-transform active:scale-95"
+                        title="Open Master Record PDF immediately"
+                      >
+                        📋 Record PDF
+                      </button>
+                    </div>
                   </div>
                 </div>
               );

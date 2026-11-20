@@ -86,21 +86,58 @@ export const PIPELINE_STAGE_META: Record<
   },
 };
 
+export function isJobCompletedOrPaid(rawStatus?: string | null): boolean {
+  const upper = (rawStatus || '').trim().toUpperCase().replace(/\s+/g, ' ');
+  return (
+    upper === 'COMPLETE' ||
+    upper === 'COMPLETED' ||
+    upper === 'PAID' ||
+    upper === 'COMPLETE / PAID' ||
+    upper === 'COMPLETE/PAID' ||
+    upper === 'COMPLETED / PAID' ||
+    upper === 'COMPLETED/PAID' ||
+    upper === 'ARCHIVE' ||
+    upper === 'DECLINED'
+  );
+}
+
 export function normalizePipelineStage(rawStatus?: string | null): PipelineStage {
-  const upper = (rawStatus || '').trim().toUpperCase();
+  const upper = (rawStatus || '').trim().toUpperCase().replace(/\s+/g, ' ');
   if (upper === 'ACTIVE') return 'ACTIVE';
   if (upper === 'SCHEDULED') return 'SCHEDULED';
-  if (upper === 'COMPLETED' || upper === 'PAID' || upper === 'COMPLETE / PAID' || upper === 'ARCHIVE' || upper === 'OTHER' || upper === 'DECLINED') {
+  if (isJobCompletedOrPaid(upper) || upper === 'OTHER') {
     return 'COMPLETED';
   }
   return 'PENDING';
 }
 
 export function isJobScheduled(job: JobProject): boolean {
+  if (isJobCompletedOrPaid(job.status)) return false;
   const stage = normalizePipelineStage(job.status);
   if (stage === 'COMPLETED') return false;
   if (stage === 'SCHEDULED') return true;
-  return Boolean(job.schedDate && job.schedDate.trim() && stage !== 'ACTIVE');
+  if (stage === 'ACTIVE' && Boolean(job.schedDate && job.schedDate.trim())) return true;
+  return false;
+}
+
+/**
+ * Strictly determines whether a job should appear in the Scheduled Jobs Quick List
+ * and Google Calendar scheduled sync (never includes Complete, Completed, Paid, or Complete / Paid).
+ */
+export function isJobEligibleForScheduledList(customer: Customer, job: JobProject): boolean {
+  if (isJobCompletedOrPaid(job.status)) return false;
+  if (
+    customer.statusOverride &&
+    customer.statusOverride !== 'AUTO' &&
+    isJobCompletedOrPaid(customer.statusOverride)
+  ) {
+    return false;
+  }
+  const jobStage = normalizePipelineStage(job.status);
+  if (jobStage === 'COMPLETED') return false;
+  if (jobStage === 'SCHEDULED') return true;
+  if (jobStage === 'ACTIVE' && Boolean(job.schedDate && job.schedDate.trim())) return true;
+  return false;
 }
 
 export function getCustomerPipelineStage(customer: Customer): PipelineStage {

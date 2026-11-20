@@ -9,13 +9,10 @@ interface ToolsViewProps {
   onOpenMileage: () => void;
   onOpenExpenses: () => void;
   onOpenShoppingList: () => void;
-  onOpenWebPhotos: () => void;
   onOpenRegionalMap: () => void;
   onSyncCalendar: () => void;
   onOpenSettings: () => void;
   onOpenCloudSync?: () => void;
-  onOpenApkInstaller?: () => void;
-  onOpenWebsiteEditor?: () => void;
 }
 
 export const ToolsView: React.FC<ToolsViewProps> = ({
@@ -27,42 +24,15 @@ export const ToolsView: React.FC<ToolsViewProps> = ({
   onOpenMileage,
   onOpenExpenses,
   onOpenShoppingList,
-  onOpenWebPhotos,
   onOpenRegionalMap,
   onSyncCalendar,
   onOpenSettings,
   onOpenCloudSync,
-  onOpenApkInstaller,
-  onOpenWebsiteEditor,
 }) => {
-  const triggerDownload = (url: string, filename: string) => {
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = filename;
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-  };
-
-  const handleExportSingleHtml = () => {
-    if (onOpenCloudSync) {
-      onOpenCloudSync();
-    } else {
-      triggerDownload('/api/export-single-html', 'krueger-painting-app.html');
-    }
-  };
-
-  const handleExportZip = () => {
-    triggerDownload('/api/export-project-zip', 'krueger-painting-os.zip');
-  };
-
   const tools = [
     { title: 'Blank Letterhead PDF', icon: '📝', desc: 'Official black & yellow stationery PDF', action: onOpenLetterhead || onOpenSettings },
-    { title: 'Website Editor', icon: '🌐', desc: 'Edit live website content', action: onOpenWebsiteEditor || onOpenSettings },
-    { title: 'Install App (PWA)', icon: '📱', desc: '1-tap home screen app with offline caching', action: onOpenApkInstaller || onOpenSettings },
-    { title: 'Backup & Restore', icon: '💾', desc: 'Save JSON to phone or Google Drive, or restore', action: onOpenCloudSync || onOpenSettings },
-    { title: 'Offline HTML File', icon: '📄', desc: 'Download single-file archive for PC or laptop', action: handleExportSingleHtml },
-    { title: 'Export Code (ZIP)', icon: '📦', desc: 'Download full app project for external editing', action: handleExportZip },
+    { title: 'Backup & Restore', icon: '💾', desc: 'Download or upload .JSON data backup', action: onOpenCloudSync || onOpenSettings },
+    { title: 'Sync Calendar', icon: '📅', desc: 'Full Google Calendar sync (no duplicates)', action: onSyncCalendar },
     { title: 'Tax Report', icon: '📊', desc: 'Monthly gross & IRS deductions', action: onOpenTaxReport },
     { title: 'Calculator', icon: '📐', desc: 'Net sqft & 2-coat paint gals', action: onOpenCalc },
     { title: 'Price Book', icon: '🏷️', desc: 'Sherwin & Menards prices', action: onOpenPriceBook },
@@ -70,9 +40,7 @@ export const ToolsView: React.FC<ToolsViewProps> = ({
     { title: 'Mileage Log', icon: '🚗', desc: 'IRS 67¢/mi auto deduction', action: onOpenMileage },
     { title: 'Expenses & OCR', icon: '🧾', desc: 'Receipt scanner & ledger', action: onOpenExpenses },
     { title: 'Shopping List', icon: '🛒', desc: 'Tape, plastic & paint checklist', action: onOpenShoppingList },
-    { title: 'Web Photos', icon: '🌐', desc: 'Netlify HTML portfolio tags', action: onOpenWebPhotos },
     { title: 'Regional Map', icon: '🗺️', desc: 'All client sites plotted', action: onOpenRegionalMap },
-    { title: 'Sync Calendar', icon: '📅', desc: 'Export jobs to phone cal (.ICS)', action: onSyncCalendar },
     { title: 'Settings', icon: '⚙️', desc: 'Themes, rates & print terms', action: onOpenSettings },
   ];
 
@@ -80,10 +48,10 @@ export const ToolsView: React.FC<ToolsViewProps> = ({
     <div className="space-y-4 max-w-2xl mx-auto pb-20">
       <div>
         <h2 className="text-base font-extrabold uppercase tracking-wide text-[var(--accent)]">
-          Contractor Suite & Pro Tools
+          Contractor Suite &amp; Pro Tools
         </h2>
         <p className="text-[11px] text-[var(--text-muted)]">
-          Estimating, logistics, tax bookkeeping & field management
+          Estimating, logistics, tax bookkeeping &amp; field management
         </p>
       </div>
 

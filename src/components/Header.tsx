@@ -1,7 +1,6 @@
-import React, { useState } from 'react';
+import React from 'react';
 import { PrintSettings } from '../types';
 import { User } from 'firebase/auth';
-import { usePWAInstall } from '../hooks/usePWAInstall';
 
 interface HeaderProps {
   settings: PrintSettings;
@@ -14,33 +13,13 @@ interface HeaderProps {
   onOpenCalc: () => void;
   onOpenCloudSync?: () => void;
   onOpenAccountModal?: () => void;
-  onOpenApkInstaller?: () => void;
 }
 
 export const Header: React.FC<HeaderProps> = ({
   settings,
-  isBackupDue,
   currentUser,
-  onBackup,
-  onRestore,
-  onOpenNewCustomer,
-  onNavigateTab,
-  onOpenCalc,
-  onOpenCloudSync,
   onOpenAccountModal,
-  onOpenApkInstaller,
 }) => {
-  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
-  const { isInstallable, isInstalled, install } = usePWAInstall();
-
-  const handleInstallClick = async () => {
-    if (isInstallable) {
-      await install();
-    } else if (onOpenApkInstaller) {
-      onOpenApkInstaller();
-    }
-  };
-
   return (
     <header className="sticky top-0 z-40 bg-[var(--surface)] backdrop-blur-md border-b-2 border-[var(--accent)] px-2 sm:px-4 py-2 sm:py-2.5 shadow-lg w-full max-w-full overflow-hidden">
       <div className="max-w-4xl mx-auto flex items-center justify-between gap-1.5 sm:gap-3">

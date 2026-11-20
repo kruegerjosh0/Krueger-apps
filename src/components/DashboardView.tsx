@@ -4,7 +4,8 @@ import {
   PipelineStage,
   PIPELINE_STAGE_META,
   getCustomerPipelineStage,
-  isJobScheduled,
+  isJobEligibleForScheduledList,
+  isJobCompletedOrPaid,
   parseLocalDateMs,
   formatScheduledDate,
   getLocalTodayIso,
@@ -20,7 +21,6 @@ interface DashboardViewProps {
   onOpenNewCustomer: () => void;
   onOpenFolder: (customerId: number) => void;
   onTogglePin: (customerId: number, e: React.MouseEvent) => void;
-  onOpenBackupModal?: () => void;
 }
 
 interface ScheduledQuickItem {
@@ -43,7 +43,6 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
   onOpenNewCustomer,
   onOpenFolder,
   onTogglePin,
-  onOpenBackupModal,
 }) => {
   const [searchQuery, setSearchQuery] = useState('');
   const [folderExpanded, setFolderExpanded] = useState<Record<string, boolean>>({});
@@ -74,18 +73,16 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
     );
   }, [customers, q]);
 
-  // Helper: earliest upcoming scheduled date ms for a customer (used for Scheduled folder sorting & card badge)
+  // Helper: earliest upcoming scheduled date for a customer (strictly excludes Completed/Paid jobs)
   const getCustomerNextSchedDate = (c: Customer): string => {
     const datedJobs = (c.jobs || [])
-      .filter((j) => isJobScheduled(j) && j.schedDate)
+      .filter((j) => isJobEligibleForScheduledList(c, j) && Boolean(j.schedDate?.trim()))
       .sort((a, b) => {
         const msA = parseLocalDateMs(a.schedDate) ?? Number.MAX_SAFE_INTEGER;
         const msB = parseLocalDateMs(b.schedDate) ?? Number.MAX_SAFE_INTEGER;
         return msA - msB;
       });
-    if (datedJobs.length > 0) return datedJobs[0].schedDate;
-    const anyDated = (c.jobs || []).find((j) => j.schedDate);
-    return anyDated?.schedDate || '';
+    return datedJobs.length > 0 ? datedJobs[0].schedDate : '';
   };
 
   // Group filtered customers into the 4 clean pipeline stages + independent Pinned list
@@ -159,11 +156,23 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
   }, [customers]);
 
   // Strictly chronologically sorted Scheduled Jobs Quick List (soonest date first)
+  // Strictly filters out Complete, Completed, Paid, and Complete / Paid jobs
   const chronologicalScheduledJobs = useMemo<ScheduledQuickItem[]>(() => {
     const items: ScheduledQuickItem[] = [];
 
     customers.forEach((cust) => {
-      const custSchedJobs = (cust.jobs || []).filter((j) => isJobScheduled(j));
+      if (
+        cust.statusOverride &&
+        cust.statusOverride !== 'AUTO' &&
+        isJobCompletedOrPaid(cust.statusOverride)
+      ) {
+        return;
+      }
+
+      const custSchedJobs = (cust.jobs || []).filter((j) =>
+        isJobEligibleForScheduledList(cust, j)
+      );
+
       if (custSchedJobs.length > 0) {
         custSchedJobs.forEach((job) => {
           items.push({
@@ -175,12 +184,17 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
           });
         });
       } else if (getCustomerPipelineStage(cust) === 'SCHEDULED') {
-        items.push({
-          key: `${cust.id}-override`,
-          customer: cust,
-          schedDate: '',
-          sortMs: null,
-        });
+        const allDone =
+          (cust.jobs || []).length > 0 &&
+          (cust.jobs || []).every((j) => isJobCompletedOrPaid(j.status));
+        if (!allDone) {
+          items.push({
+            key: `${cust.id}-override`,
+            customer: cust,
+            schedDate: '',
+            sortMs: null,
+          });
+        }
       }
     });
 
@@ -459,34 +473,6 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
           <span className="text-xs text-[#f1c40f] font-bold">➔</span>
         </div>
       </div>
-
-      {/* 1-Tap Offline Single-File HTML App & Backup Quick Banner */}
-      {onOpenBackupModal && (
-        <div className="bg-gradient-to-r from-amber-500/15 via-yellow-500/10 to-[var(--surface)] border border-amber-500/40 rounded-xl p-3 flex items-center justify-between gap-2 shadow-xs">
-          <div className="flex items-center gap-2.5 min-w-0">
-            <span className="text-xl sm:text-2xl shrink-0">📱</span>
-            <div className="min-w-0">
-              <div className="font-extrabold text-xs text-white flex items-center gap-1.5 flex-wrap">
-                <span>Single-File HTML App &amp; Data Backup</span>
-                <span className="bg-amber-500 text-black text-[8.5px] uppercase font-black px-1.5 py-0.5 rounded shadow-xs">
-                  Offline Ready
-                </span>
-              </div>
-              <p className="text-[10.5px] text-amber-200/80 truncate">
-                Download .html file to phone or save customer database (.json)
-              </p>
-            </div>
-          </div>
-          <button
-            type="button"
-            onClick={onOpenBackupModal}
-            className="shrink-0 px-2.5 sm:px-3 py-1.5 bg-gradient-to-r from-amber-400 to-yellow-500 text-black font-black text-[11px] rounded-lg shadow-sm hover:scale-105 active:scale-95 transition-all cursor-pointer flex items-center gap-1"
-          >
-            <span>📥</span>
-            <span>Download</span>
-          </button>
-        </div>
-      )}
 
       {/* 4 Clean Pipeline Stage Stat Tiles */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5 sm:gap-2">

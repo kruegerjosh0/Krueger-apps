@@ -56,6 +56,7 @@ export interface JobProject {
   schedDate: string;
   schedEndDate: string;
   clientSig?: string;
+  googleEventId?: string;
   googleCalendarEventId?: string;
 }
 

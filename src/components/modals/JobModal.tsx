@@ -455,6 +455,8 @@ export const JobModal: React.FC<JobModalProps> = ({
       schedDate,
       schedEndDate,
       clientSig,
+      googleEventId: job?.googleEventId,
+      googleCalendarEventId: job?.googleCalendarEventId,
     };
     onSaveJob(saved);
     onToast('✔ Project Saved');

@@ -15,6 +15,60 @@ export interface GeneratedPdfResult {
 const KRUEGER_OFFICIAL_LOGO_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 300 300" width="300" height="300"><circle cx="150" cy="150" r="142" fill="#3b2b1d"/><circle cx="150" cy="150" r="136" fill="#f4c430"/><circle cx="150" cy="150" r="128" fill="none" stroke="#3b2b1d" stroke-width="3"/><text x="150" y="125" font-family="'Impact', 'Arial Black', sans-serif" font-size="25" font-weight="900" fill="#231709" text-anchor="middle" letter-spacing="1">KRUEGER PAINTING</text><text x="150" y="152" font-family="'Arial', sans-serif" font-size="10" font-weight="800" fill="#231709" text-anchor="middle" letter-spacing="0.5">INTERIOR &amp; EXTERIOR PAINTING</text><text x="150" y="166" font-family="'Arial', sans-serif" font-size="10" font-weight="800" fill="#231709" text-anchor="middle" letter-spacing="0.5">PRESSURE WASHING &amp; MORE</text><text x="150" y="188" font-family="'Arial', sans-serif" font-size="9" font-weight="800" fill="#231709" text-anchor="middle" letter-spacing="0.8">CALL OR TEXT</text><text x="150" y="212" font-family="'Impact', 'Arial Black', sans-serif" font-size="22" font-weight="900" fill="#231709" text-anchor="middle">(262) 443-1199</text><g transform="translate(48,138) rotate(-22)"><path d="M0,35 L16,35 L12,12 L4,12 Z" fill="#b0c4de"/><path d="M2,12 L14,12 L11,0 L5,0 Z" fill="#231709"/><path d="M-2,35 Q8,52 18,35 Z" fill="#231709"/></g><g transform="translate(236,138) rotate(22)"><path d="M-16,35 L0,35 L-4,12 L-12,12 Z" fill="#b0c4de"/><path d="M-14,12 L-2,12 L-5,0 L-11,0 Z" fill="#231709"/><path d="M-18,35 Q-8,52 2,35 Z" fill="#231709"/></g></svg>`;
 
 let cachedLogoPng: string | null = null;
+const circularLogoCache = new Map<string, string>();
+
+/**
+ * Renders any image/SVG data URL onto a transparent RGBA canvas clipped strictly to a circle,
+ * completely eliminating any square white bounding box or white padding against dark PDF headers.
+ */
+async function clipImageToTransparentCirclePng(srcUrl: string, size = 600): Promise<string> {
+  const cached = circularLogoCache.get(srcUrl);
+  if (cached) return cached;
+
+  return new Promise((resolve) => {
+    try {
+      const img = new Image();
+      img.crossOrigin = 'anonymous';
+      img.onload = () => {
+        const canvas = document.createElement('canvas');
+        canvas.width = size;
+        canvas.height = size;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) {
+          resolve('');
+          return;
+        }
+        // Strictly transparent canvas background
+        ctx.clearRect(0, 0, size, size);
+        ctx.imageSmoothingEnabled = true;
+        ctx.imageSmoothingQuality = 'high';
+
+        // Circular clipping mask (border-radius: 50% equivalent)
+        const radius = size / 2 - 2;
+        ctx.save();
+        ctx.beginPath();
+        ctx.arc(size / 2, size / 2, radius, 0, Math.PI * 2);
+        ctx.closePath();
+        ctx.clip();
+
+        // Center-crop to square (cover) so circular logos fill the circle with zero white corners
+        const minDim = Math.min(img.width, img.height);
+        const sx = (img.width - minDim) / 2;
+        const sy = (img.height - minDim) / 2;
+        ctx.drawImage(img, sx, sy, minDim, minDim, 0, 0, size, size);
+        ctx.restore();
+
+        const pngDataUrl = canvas.toDataURL('image/png');
+        circularLogoCache.set(srcUrl, pngDataUrl);
+        resolve(pngDataUrl);
+      };
+      img.onerror = () => resolve('');
+      img.src = srcUrl;
+    } catch {
+      resolve('');
+    }
+  });
+}
 
 async function getHighResLogoPng(): Promise<string> {
   if (cachedLogoPng) return cachedLogoPng;
@@ -25,14 +79,22 @@ async function getHighResLogoPng(): Promise<string> {
       const url = URL.createObjectURL(blob);
       const img = new Image();
       img.onload = () => {
+        const size = 600;
         const canvas = document.createElement('canvas');
-        canvas.width = 600;
-        canvas.height = 600;
+        canvas.width = size;
+        canvas.height = size;
         const ctx = canvas.getContext('2d');
         if (ctx) {
+          ctx.clearRect(0, 0, size, size);
           ctx.imageSmoothingEnabled = true;
           ctx.imageSmoothingQuality = 'high';
-          ctx.drawImage(img, 0, 0, 600, 600);
+          ctx.save();
+          ctx.beginPath();
+          ctx.arc(size / 2, size / 2, (142 / 150) * (size / 2), 0, Math.PI * 2);
+          ctx.closePath();
+          ctx.clip();
+          ctx.drawImage(img, 0, 0, size, size);
+          ctx.restore();
           cachedLogoPng = canvas.toDataURL('image/png');
           resolve(cachedLogoPng);
         } else {
@@ -49,6 +111,148 @@ async function getHighResLogoPng(): Promise<string> {
       resolve('');
     }
   });
+}
+
+/**
+ * Resolves either a custom uploaded logo (clipped into a transparent circular PNG)
+ * or the official high-res circular Krueger Painting seal PNG.
+ */
+async function resolveCircularTransparentLogoPng(customLogoBase64?: string): Promise<string> {
+  let rawLogo = customLogoBase64;
+  if (!rawLogo && typeof localStorage !== 'undefined') {
+    try {
+      const stored = localStorage.getItem('KMaster_Logo');
+      if (stored) {
+        try {
+          rawLogo = JSON.parse(stored);
+        } catch {
+          rawLogo = stored;
+        }
+      }
+    } catch {
+      // ignore
+    }
+  }
+
+  if (rawLogo) {
+    const clipped = await clipImageToTransparentCirclePng(rawLogo, 600);
+    if (clipped) return clipped;
+  }
+
+  return getHighResLogoPng();
+}
+
+export const KRUEGER_PHONE = '(262) 443-1199';
+export const KRUEGER_EMAIL = 'krueptg@gmail.com';
+export const KRUEGER_WEBSITE = 'kruegerpaintingwi.com';
+
+/**
+ * Draws the official Krueger Painting #111111 black-and-yellow header across all generated PDFs
+ * (Estimates, Final Bills, Master Records, and Blank Letterheads) with a transparent circular logo
+ * and visible phone, email, website (kruegerpaintingwi.com), and street address.
+ */
+async function drawBrandedBlackHeader(
+  doc: jsPDF,
+  settings: PrintSettings,
+  options: {
+    pageWidth: number;
+    margin: number;
+    docBadge?: string;
+    customLogoBase64?: string;
+  }
+): Promise<number> {
+  const { pageWidth, margin, docBadge, customLogoBase64 } = options;
+  const rightMargin = pageWidth - margin;
+  const headerHeight = 104;
+
+  // Top gold accent edge
+  doc.setFillColor(241, 196, 15); // #f1c40f
+  doc.rect(0, 0, pageWidth, 4, 'F');
+
+  // Solid #111111 black header background
+  doc.setFillColor(17, 17, 17); // #111111
+  doc.rect(0, 4, pageWidth, headerHeight - 4, 'F');
+
+  // Bottom bold gold accent stripe
+  doc.setFillColor(241, 196, 15); // #f1c40f
+  doc.rect(0, headerHeight, pageWidth, 5, 'F');
+
+  // Circular transparent PNG logo (zero white bounding box)
+  const logoPng = await resolveCircularTransparentLogoPng(customLogoBase64);
+  const logoDiameter = 74;
+  let textStartX = margin;
+
+  if (logoPng) {
+    try {
+      const logoY = 4 + Math.round((headerHeight - 4 - logoDiameter) / 2);
+      doc.addImage(logoPng, 'PNG', margin, logoY, logoDiameter, logoDiameter);
+      textStartX = margin + logoDiameter + 14;
+    } catch {
+      textStartX = margin;
+    }
+  }
+
+  // Brand Name & Motto (Left/Center-Left)
+  const rawAddr = (settings.hdr || 'N630 Moraine Dr., Campbellsport, WI 53010').split('|')[0].trim();
+  const streetAddress = rawAddr || 'N630 Moraine Dr., Campbellsport, WI 53010';
+  const mottoText = (settings.motto || 'Precision & Quality').trim();
+
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(19);
+  doc.setTextColor(241, 196, 15); // #f1c40f
+  doc.text('KRUEGER PAINTING', textStartX, 42);
+
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(8);
+  doc.setTextColor(235, 235, 235);
+  doc.text('INTERIOR & EXTERIOR PAINTING  •  PRESSURE WASHING', textStartX, 56);
+
+  if (mottoText) {
+    doc.setFont('helvetica', 'italic');
+    doc.setFontSize(8.5);
+    doc.setTextColor(185, 185, 185);
+    doc.text(`"${mottoText}"`, textStartX, 70);
+  }
+
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(7.5);
+  doc.setTextColor(175, 175, 175);
+  doc.text(streetAddress, textStartX, 84);
+
+  // Right-Aligned Document Badge (if Estimate/Bill) + Contact Details with Website URL
+  let contactStartY = 38;
+  if (docBadge) {
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(9.5);
+    const badgeTextW = doc.getTextWidth(docBadge);
+    const pillW = Math.max(78, badgeTextW + 18);
+    const pillH = 18;
+    const pillX = rightMargin - pillW;
+    const pillY = 14;
+
+    doc.setFillColor(241, 196, 15);
+    doc.roundedRect(pillX, pillY, pillW, pillH, 3, 3, 'F');
+    doc.setTextColor(17, 17, 17);
+    doc.text(docBadge, pillX + pillW / 2, pillY + 12.5, { align: 'center' });
+    contactStartY = 48;
+  }
+
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(10);
+  doc.setTextColor(241, 196, 15);
+  doc.text(KRUEGER_PHONE, rightMargin, contactStartY, { align: 'right' });
+
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(8.8);
+  doc.setTextColor(255, 255, 255);
+  doc.text(KRUEGER_EMAIL, rightMargin, contactStartY + 14, { align: 'right' });
+
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(8.8);
+  doc.setTextColor(241, 196, 15);
+  doc.text(KRUEGER_WEBSITE, rightMargin, contactStartY + 28, { align: 'right' });
+
+  return headerHeight + 24;
 }
 
 /**
@@ -136,7 +340,16 @@ export async function generateEstimateOrBillPdf(
   }
   const balanceDue = Math.max(0, grossTotal - totalPaid);
 
-  let y = 38;
+  const docTypeHeader =
+    type === 'BILL' ? 'FINAL BILL' : type === 'MASTER RECORD' ? 'MASTER RECORD' : 'ESTIMATE';
+
+  // 1. UNIFIED BLACK & YELLOW BRAND HEADER (#111111 + Transparent Circle Logo + Website URL)
+  let y = await drawBrandedBlackHeader(doc, settings, {
+    pageWidth,
+    margin,
+    docBadge: docTypeHeader,
+    customLogoBase64,
+  });
 
   // Helper to manage page breaks cleanly
   const checkPageBreak = (neededHeight: number) => {
@@ -160,86 +373,6 @@ export async function generateEstimateOrBillPdf(
     doc.text(title, margin + 10, y);
     y += 16;
   };
-
-  // 1. TOP RIGHT: Document Type (ESTIMATE / BILL / MASTER RECORD)
-  const docTypeHeader =
-    type === 'BILL' ? 'BILL' : type === 'MASTER RECORD' ? 'MASTER RECORD' : 'ESTIMATE';
-  doc.setFont('helvetica', 'bold');
-  doc.setFontSize(14);
-  doc.setTextColor(0, 0, 0);
-  doc.text(docTypeHeader, rightMargin, y, { align: 'right' });
-
-  // 2. TOP CENTER: High-Res Logo Badge, Company Motto & Address
-  let logoData = customLogoBase64;
-  if (!logoData && typeof localStorage !== 'undefined') {
-    try {
-      const stored = localStorage.getItem('KMaster_Logo');
-      if (stored) {
-        try {
-          logoData = JSON.parse(stored);
-        } catch {
-          logoData = stored;
-        }
-      }
-    } catch {
-      // ignore
-    }
-  }
-
-  // If no custom logo, fall back to high-res official Krueger seal
-  if (!logoData) {
-    logoData = await getHighResLogoPng();
-  }
-
-  if (logoData) {
-    try {
-      const imgProps = doc.getImageProperties(logoData);
-      const aspect = imgProps.width / imgProps.height;
-      const maxW = 180;
-      const maxH = 75;
-      let drawW = maxW;
-      let drawH = drawW / aspect;
-      if (drawH > maxH) {
-        drawH = maxH;
-        drawW = drawH * aspect;
-      }
-      const logoX = Math.round((pageWidth - drawW) / 2);
-      const format = imgProps.fileType === 'JPEG' || imgProps.fileType === 'JPG' ? 'JPEG' : 'PNG';
-      doc.addImage(logoData, format, logoX, y - 6, drawW, drawH);
-      y += Math.round(drawH) + 6;
-    } catch (err) {
-      console.warn('Custom logo format error, falling back to standard seal:', err);
-      const fallbackSeal = await getHighResLogoPng();
-      if (fallbackSeal) {
-        const logoSize = 75;
-        const logoX = Math.round((pageWidth - logoSize) / 2);
-        doc.addImage(fallbackSeal, 'PNG', logoX, y - 6, logoSize, logoSize);
-        y += logoSize + 6;
-      } else {
-        y += 40;
-      }
-    }
-  } else {
-    y += 40;
-  }
-
-  // Company Tagline / Motto (if set in settings)
-  if (settings.motto && settings.motto.trim()) {
-    doc.setFont('helvetica', 'italic');
-    doc.setFontSize(10);
-    doc.setTextColor(80, 80, 80);
-    doc.text(`"${settings.motto.trim()}"`, Math.round(pageWidth / 2), y, { align: 'center' });
-    y += 14;
-  }
-
-  // Address line directly under logo/motto (crisp 10pt bold)
-  doc.setFont('helvetica', 'bold');
-  doc.setFontSize(10);
-  doc.setTextColor(0, 0, 0);
-  const addressText =
-    settings.hdr || 'N630 Moraine Dr. Campbellsport, WI 53010 | (262) 443-1199';
-  doc.text(addressText, Math.round(pageWidth / 2), y, { align: 'center' });
-  y += 20;
 
 
   // 3. METADATA SECTION: Customer on Left, Date on Right
@@ -755,6 +888,33 @@ export function downloadPdfFile(result: GeneratedPdfResult) {
   document.body.removeChild(link);
 }
 
+/**
+ * Opens a generated PDF directly in a full-screen browser tab/window in one tap.
+ * Pass an optional preOpenedWindow (opened synchronously on click before async generation)
+ * to bypass mobile/desktop popup blockers cleanly.
+ */
+export function openPdfDirectly(result: GeneratedPdfResult, preOpenedWindow?: Window | null): boolean {
+  try {
+    if (preOpenedWindow && !preOpenedWindow.closed) {
+      preOpenedWindow.location.href = result.blobUrl;
+      return true;
+    }
+    const win = window.open(result.blobUrl, '_blank', 'noopener,noreferrer');
+    if (win) return true;
+    const link = document.createElement('a');
+    link.href = result.blobUrl;
+    link.target = '_blank';
+    link.rel = 'noopener noreferrer';
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    return true;
+  } catch {
+    downloadPdfFile(result);
+    return false;
+  }
+}
+
 export async function sharePdfFile(result: GeneratedPdfResult, title: string, text: string) {
   const pdfFile = new File([result.blob], result.fileName, { type: 'application/pdf' });
 
@@ -784,7 +944,7 @@ export async function sharePdfFile(result: GeneratedPdfResult, title: string, te
 }
 
 /**
- * Reconstructs a GeneratedPdfResult from a stored base64 data URL for instant overlay viewing
+ * Reconstructs a GeneratedPdfResult from a stored base64 data URL for instant viewing
  */
 export function dataUrlToPdfResult(
   dataUrl: string,
@@ -829,7 +989,8 @@ export interface LetterheadOptions {
 
 /**
  * Generates an official Krueger Painting Blank / Custom Business Letterhead PDF
- * featuring black-and-yellow brand styling, official logo, and contact info (262-443-1199 / krueptg@gmail.com).
+ * featuring #111111 black-and-yellow styling, transparent circular logo, and
+ * contact info ((262) 443-1199 / krueptg@gmail.com / kruegerpaintingwi.com).
  */
 export async function generateBlankLetterheadPdf(
   options: LetterheadOptions,
@@ -848,30 +1009,9 @@ export async function generateBlankLetterheadPdf(
   const contentWidth = pageWidth - margin * 2;
   const rightMargin = pageWidth - margin;
 
-  // Resolve custom logo or official Krueger seal
-  let logoData = customLogoBase64;
-  if (!logoData && typeof localStorage !== 'undefined') {
-    try {
-      const stored = localStorage.getItem('KMaster_Logo');
-      if (stored) {
-        try {
-          logoData = JSON.parse(stored);
-        } catch {
-          logoData = stored;
-        }
-      }
-    } catch {
-      // ignore
-    }
-  }
-  if (!logoData) {
-    logoData = await getHighResLogoPng();
-  }
-
   // Extract clean street/city address from settings.hdr (strip trailing phone if present)
   const rawAddr = (settings.hdr || 'N630 Moraine Dr., Campbellsport, WI 53010').split('|')[0].trim();
   const streetAddress = rawAddr || 'N630 Moraine Dr., Campbellsport, WI 53010';
-  const mottoText = (settings.motto || 'Precision & Quality').trim();
 
   const drawFooter = (pageNum: number, totalPages: number) => {
     const footerHeight = 34;
@@ -881,20 +1021,20 @@ export async function generateBlankLetterheadPdf(
     doc.setFillColor(241, 196, 15); // #f1c40f
     doc.rect(0, footerTop - 3, pageWidth, 3, 'F');
 
-    // Signature black footer band
-    doc.setFillColor(18, 19, 24); // #121318
+    // Signature #111111 black footer band
+    doc.setFillColor(17, 17, 17); // #111111
     doc.rect(0, footerTop, pageWidth, footerHeight, 'F');
 
     doc.setFont('helvetica', 'bold');
     doc.setFontSize(8.5);
     doc.setTextColor(241, 196, 15);
-    doc.text('KRUEGER PAINTING', margin, footerTop + 15);
+    doc.text('KRUEGER PAINTING', margin, footerTop + 14);
 
     doc.setFont('helvetica', 'normal');
-    doc.setFontSize(8);
+    doc.setFontSize(7.8);
     doc.setTextColor(225, 225, 225);
     doc.text(
-      `262-443-1199  •  krueptg@gmail.com  •  ${streetAddress}`,
+      `${KRUEGER_PHONE}  •  ${KRUEGER_EMAIL}  •  ${KRUEGER_WEBSITE}  •  ${streetAddress}`,
       margin,
       footerTop + 26
     );
@@ -903,85 +1043,17 @@ export async function generateBlankLetterheadPdf(
       doc.setFont('helvetica', 'bold');
       doc.setFontSize(8);
       doc.setTextColor(241, 196, 15);
-      doc.text(`Page ${pageNum} of ${totalPages}`, rightMargin, footerTop + 21, { align: 'right' });
+      doc.text(`Page ${pageNum} of ${totalPages}`, rightMargin, footerTop + 15, { align: 'right' });
     }
   };
 
-  // --- PAGE 1 FULL BLACK & YELLOW EXECUTIVE HEADER ---
-  const headerHeight = 96;
-
-  // Top gold accent edge
-  doc.setFillColor(241, 196, 15); // #f1c40f
-  doc.rect(0, 0, pageWidth, 4, 'F');
-
-  // Rich black header background
-  doc.setFillColor(18, 19, 24); // #121318
-  doc.rect(0, 4, pageWidth, headerHeight - 4, 'F');
-
-  // Bottom bold gold accent stripe
-  doc.setFillColor(241, 196, 15); // #f1c40f
-  doc.rect(0, headerHeight, pageWidth, 5, 'F');
-
-  // Logo on left of header
-  let textStartX = margin;
-  if (logoData) {
-    try {
-      const imgProps = doc.getImageProperties(logoData);
-      const aspect = imgProps.width / imgProps.height;
-      const maxH = 68;
-      const maxW = 90;
-      let drawH = maxH;
-      let drawW = drawH * aspect;
-      if (drawW > maxW) {
-        drawW = maxW;
-        drawH = drawW / aspect;
-      }
-      const logoY = 4 + Math.round((headerHeight - 4 - drawH) / 2);
-      const format = imgProps.fileType === 'JPEG' || imgProps.fileType === 'JPG' ? 'JPEG' : 'PNG';
-      doc.addImage(logoData, format, margin, logoY, drawW, drawH);
-      textStartX = margin + drawW + 14;
-    } catch {
-      textStartX = margin;
-    }
-  }
-
-  // Brand Name & Motto (Left/Center-Left)
-  doc.setFont('helvetica', 'bold');
-  doc.setFontSize(20);
-  doc.setTextColor(241, 196, 15); // #f1c40f
-  doc.text('KRUEGER PAINTING', textStartX, 42);
-
-  doc.setFont('helvetica', 'bold');
-  doc.setFontSize(8.5);
-  doc.setTextColor(235, 235, 235);
-  doc.text('INTERIOR & EXTERIOR PAINTING  •  PRESSURE WASHING', textStartX, 57);
-
-  if (mottoText) {
-    doc.setFont('helvetica', 'italic');
-    doc.setFontSize(9);
-    doc.setTextColor(190, 190, 190);
-    doc.text(`"${mottoText}"`, textStartX, 72);
-  }
-
-  // Official Contact Info Block (Right Aligned inside header)
-  doc.setFont('helvetica', 'bold');
-  doc.setFontSize(10.5);
-  doc.setTextColor(241, 196, 15);
-  doc.text('262-443-1199', rightMargin, 39, { align: 'right' });
-
-  doc.setFont('helvetica', 'bold');
-  doc.setFontSize(9.5);
-  doc.setTextColor(255, 255, 255);
-  doc.text('krueptg@gmail.com', rightMargin, 54, { align: 'right' });
-
-  doc.setFont('helvetica', 'normal');
-  doc.setFontSize(8);
-  doc.setTextColor(200, 200, 200);
-  const addrWrap = doc.splitTextToSize(streetAddress, 185);
-  doc.text(addrWrap, rightMargin, 68, { align: 'right' });
-
-  // Start body area below header
-  let y = headerHeight + 32;
+  // --- PAGE 1 UNIFIED #111111 BLACK & YELLOW EXECUTIVE HEADER ---
+  let y = await drawBrandedBlackHeader(doc, settings, {
+    pageWidth,
+    margin,
+    customLogoBase64,
+  });
+  y += 6;
 
   const docTitle = (options.documentTitle || '').trim();
   const dateDisplay = (options.dateStr || '').trim();

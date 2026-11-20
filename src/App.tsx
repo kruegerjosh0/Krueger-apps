@@ -23,7 +23,12 @@ import {
   DEFAULT_STARTER_CUSTOMERS,
   generateDailyBackupJson,
 } from './utils/db';
-import { generateEstimateOrBillPdf, GeneratedPdfResult, dataUrlToPdfResult } from './utils/pdfGenerator';
+import {
+  generateEstimateOrBillPdf,
+  dataUrlToPdfResult,
+  openPdfDirectly,
+  downloadPdfFile,
+} from './utils/pdfGenerator';
 import {
   fetchFullWeather,
   DEFAULT_WISCONSIN_PRESETS,
@@ -40,7 +45,6 @@ import { NotesView } from './components/NotesView';
 import { ToolsView } from './components/ToolsView';
 
 // Modals
-import { PdfPreviewModal } from './components/modals/PdfPreviewModal';
 import { CustomerModal } from './components/modals/CustomerModal';
 import { FolderViewModal } from './components/modals/FolderViewModal';
 import { JobModal } from './components/modals/JobModal';
@@ -51,26 +55,15 @@ import { ExpenseModal } from './components/modals/ExpenseModal';
 import { ShoppingListModal } from './components/modals/ShoppingListModal';
 import { PriceBookModal } from './components/modals/PriceBookModal';
 import { ColorDbModal } from './components/modals/ColorDbModal';
-import { WebPhotoModal } from './components/modals/WebPhotoModal';
 import { RegionalMapModal } from './components/modals/RegionalMapModal';
 import { SettingsModal } from './components/modals/SettingsModal';
 import { DayPopupModal } from './components/modals/DayPopupModal';
 import { ImageViewerModal } from './components/modals/ImageViewerModal';
 import { DataBackupModal } from './components/modals/DataBackupModal';
-import { AccountLoginModal } from './components/modals/AccountLoginModal';
-import { ApkInstallerModal } from './components/modals/ApkInstallerModal';
-import { WebsiteEditorModal } from './components/modals/WebsiteEditorModal';
 import { LetterheadModal } from './components/modals/LetterheadModal';
+import { CalendarSyncModal } from './components/modals/CalendarSyncModal';
 import { OfflineIndicator } from './components/OfflineIndicator';
 import {
-  testFirestoreConnection,
-  subscribeToCloudWorkspace,
-  saveWorkspaceToCloud,
-  CloudWorkspacePayload,
-} from './utils/firebaseSync';
-import {
-  subscribeToAuth,
-  auth,
   GoogleCalendarEvent,
   deleteGoogleCalendarEvent,
 } from './utils/googleWorkspace';
@@ -111,9 +104,6 @@ export default function App() {
   const [jobModalCustomer, setJobModalCustomer] = useState<Customer | null>(null);
   const [activeEditingJob, setActiveEditingJob] = useState<JobProject | null>(null);
 
-  const [pdfPreviewResult, setPdfPreviewResult] = useState<GeneratedPdfResult | null>(null);
-  const [pdfPreviewCustomer, setPdfPreviewCustomer] = useState<Customer | null>(null);
-
   const [taxReportOpen, setTaxReportOpen] = useState(false);
   const [calcOpen, setCalcOpen] = useState(false);
   const [mileageOpen, setMileageOpen] = useState(false);
@@ -121,7 +111,6 @@ export default function App() {
   const [shoppingListOpen, setShoppingListOpen] = useState(false);
   const [priceBookOpen, setPriceBookOpen] = useState(false);
   const [colorDbOpen, setColorDbOpen] = useState(false);
-  const [webPhotosOpen, setWebPhotosOpen] = useState(false);
   const [regionalMapOpen, setRegionalMapOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
 
@@ -135,11 +124,8 @@ export default function App() {
   const [editingNote, setEditingNote] = useState<FieldNote | null>(null);
   const [noteModalOpen, setNoteModalOpen] = useState(false);
   const [cloudSyncOpen, setCloudSyncOpen] = useState(false);
-  const [accountModalOpen, setAccountModalOpen] = useState(false);
-  const [apkInstallerOpen, setApkInstallerOpen] = useState(false);
-  const [websiteEditorOpen, setWebsiteEditorOpen] = useState(false);
   const [letterheadOpen, setLetterheadOpen] = useState(false);
-  const [cloudUser, setCloudUser] = useState<any>(null);
+  const [calendarSyncOpen, setCalendarSyncOpen] = useState(false);
 
   const showToast = (msg: string) => {
     setToastMsg(msg);
@@ -468,12 +454,20 @@ export default function App() {
     }
   };
 
-  // PDF Document Generation
-  const handleGenerateDoc = async (job: JobProject, type: 'ESTIMATE' | 'BILL' | 'MASTER RECORD') => {
-    const targetCustomer = activeFolderCustomer || customers.find((c) => c.jobs?.some((j) => j.id === job.id));
+  // Direct 1-Tap PDF Generation (No Intermediate Preview Modal)
+  const handleGenerateDoc = async (
+    job: JobProject,
+    type: 'ESTIMATE' | 'BILL' | 'MASTER RECORD',
+    action: 'OPEN' | 'DOWNLOAD' = 'OPEN'
+  ) => {
+    const targetCustomer =
+      activeFolderCustomer || customers.find((c) => c.jobs?.some((j) => j.id === job.id));
     if (!targetCustomer) return;
 
-    showToast('Rendering official PDF...');
+    // Pre-open window synchronously on click when opening PDF to avoid mobile/desktop popup blockers
+    const preWin = action === 'OPEN' ? window.open('', '_blank') : null;
+    showToast(action === 'OPEN' ? 'Opening official PDF...' : 'Downloading official PDF...');
+
     try {
       const result = await generateEstimateOrBillPdf(
         targetCustomer,
@@ -483,46 +477,53 @@ export default function App() {
         constants,
         customLogo || undefined
       );
-      setPdfPreviewResult(result);
-      setPdfPreviewCustomer(targetCustomer);
-      showToast(`✔ ${type} PDF Generated`);
+
+      if (action === 'DOWNLOAD') {
+        downloadPdfFile(result);
+        showToast(`✔ Downloaded ${result.fileName}`);
+      } else {
+        openPdfDirectly(result, preWin);
+        showToast(`✔ Opened ${type} PDF`);
+      }
     } catch (err) {
+      if (preWin && !preWin.closed) preWin.close();
       console.error('PDF error:', err);
       showToast('Failed to generate PDF');
     }
   };
 
-  // Save PDF to Customer Files
-  const handleArchivePdfToCustomer = (fileData: { name: string; data: string; tag: 'ESTIMATE' | 'BILL' }) => {
-    if (!pdfPreviewCustomer) return;
-    const newFile = {
-      id: Date.now(),
-      name: fileData.name,
-      tag: fileData.tag,
-      data: fileData.data,
-      isImg: false,
-      type: 'application/pdf',
-    };
-    const updatedCust = {
-      ...pdfPreviewCustomer,
-      files: [...(pdfPreviewCustomer.files || []), newFile],
-    };
-    handleUpdateCustomer(updatedCust);
+  // Persist Google Calendar event IDs onto synced jobs to prevent duplicate events on re-sync
+  const handlePersistCalendarEventIds = (eventIdMap: Record<number, string>) => {
+    const updated = customers.map((c) => {
+      let changed = false;
+      const updatedJobs = (c.jobs || []).map((j) => {
+        const syncedEventId = eventIdMap[j.id];
+        if (syncedEventId && (j.googleEventId !== syncedEventId || j.googleCalendarEventId !== syncedEventId)) {
+          changed = true;
+          return {
+            ...j,
+            googleEventId: syncedEventId,
+            googleCalendarEventId: syncedEventId,
+          };
+        }
+        return j;
+      });
+      return changed ? { ...c, jobs: updatedJobs } : c;
+    });
+
+    setCustomers(updated);
+    saveRecord('KMaster_C', updated);
+    if (activeFolderCustomer) {
+      const refreshed = updated.find((c) => c.id === activeFolderCustomer.id);
+      if (refreshed) setActiveFolderCustomer(refreshed);
+    }
   };
 
-  // View Document / Saved PDF from Customer Files
+  // View Document / Saved PDF directly from Customer Files
   const handleViewDocFile = (file: { name: string; data: string; tag?: string }) => {
     if (file.data.startsWith('data:application/pdf') || file.name.toLowerCase().endsWith('.pdf')) {
-      const isBill = file.tag === 'BILL' || file.name.toLowerCase().includes('invoice') || file.name.toLowerCase().includes('bill');
-      const docType: 'ESTIMATE' | 'BILL' | 'MASTER RECORD' = isBill ? 'BILL' : 'ESTIMATE';
-      const pdfResult = dataUrlToPdfResult(
-        file.data,
-        file.name,
-        0,
-        0
-      );
-      setPdfPreviewResult(pdfResult);
-      setPdfPreviewCustomer(activeFolderCustomer);
+      const pdfResult = dataUrlToPdfResult(file.data, file.name, 0, 0);
+      openPdfDirectly(pdfResult);
     } else {
       setViewerImageUrl(file.data);
     }
@@ -972,7 +973,6 @@ export default function App() {
         onNavigateTab={(tab) => setActiveTab(tab)}
         onOpenCalc={() => setCalcOpen(true)}
         onOpenCloudSync={() => setCloudSyncOpen(true)}
-        onOpenApkInstaller={() => setApkInstallerOpen(true)}
       />
 
       {/* Main Tab Content */}
@@ -991,7 +991,6 @@ export default function App() {
               if (c) setActiveFolderCustomer(c);
             }}
             onTogglePin={handleTogglePin}
-            onOpenBackupModal={() => setCloudSyncOpen(true)}
           />
         )}
 
@@ -1033,13 +1032,10 @@ export default function App() {
             onOpenMileage={() => setMileageOpen(true)}
             onOpenExpenses={() => setExpenseOpen(true)}
             onOpenShoppingList={() => setShoppingListOpen(true)}
-            onOpenWebPhotos={() => setWebPhotosOpen(true)}
             onOpenRegionalMap={() => setRegionalMapOpen(true)}
-            onSyncCalendar={handleExportAllJobsIcs}
+            onSyncCalendar={() => setCalendarSyncOpen(true)}
             onOpenSettings={() => setSettingsOpen(true)}
             onOpenCloudSync={() => setCloudSyncOpen(true)}
-            onOpenApkInstaller={() => setApkInstallerOpen(true)}
-            onOpenWebsiteEditor={() => setWebsiteEditorOpen(true)}
           />
         )}
       </main>
@@ -1092,20 +1088,6 @@ export default function App() {
             setActiveEditingJob(null);
           }}
           onSaveJob={handleSaveJob}
-          onToast={showToast}
-        />
-      )}
-
-      {/* True PDF Preview Modal (Top Overlay Stack Layer 3 - Guaranteed on top of Customer Folder & Job Editor) */}
-      {pdfPreviewResult && (
-        <PdfPreviewModal
-          pdfResult={pdfPreviewResult}
-          customer={pdfPreviewCustomer}
-          onClose={() => {
-            setPdfPreviewResult(null);
-            setPdfPreviewCustomer(null);
-          }}
-          onSaveToCustomerFiles={handleArchivePdfToCustomer}
           onToast={showToast}
         />
       )}
@@ -1305,36 +1287,6 @@ export default function App() {
       {/* Color DB Modal */}
       {colorDbOpen && <ColorDbModal customers={customers} onClose={() => setColorDbOpen(false)} />}
 
-      {/* Web Photos Modal */}
-      {webPhotosOpen && (
-        <WebPhotoModal
-          photos={webPhotos}
-          onUploadPhoto={(file) => {
-            const reader = new FileReader();
-            reader.onload = () => {
-              const newPhoto = {
-                id: Date.now(),
-                name: file.name,
-                data: reader.result as string,
-              };
-              const updated = [newPhoto, ...webPhotos];
-              setWebPhotos(updated);
-              saveRecord('KMaster_WebPhotos', updated);
-              showToast('✔ Web Photo Added');
-            };
-            reader.readAsDataURL(file);
-          }}
-          onDeletePhoto={(id) => {
-            const updated = webPhotos.filter((p) => p.id !== id);
-            setWebPhotos(updated);
-            saveRecord('KMaster_WebPhotos', updated);
-            showToast('Photo Deleted');
-          }}
-          onClose={() => setWebPhotosOpen(false)}
-          onToast={showToast}
-        />
-      )}
-
       {/* Regional Map Modal */}
       {regionalMapOpen && (
         <RegionalMapModal
@@ -1368,31 +1320,34 @@ export default function App() {
             const reader = new FileReader();
             reader.onload = () => {
               const rawData = reader.result as string;
-              // Normalize image via Canvas to standard high-res PNG (prevents PDF jsPDF encoding errors and storage quota issues)
+              // Clip uploaded logo onto a high-DPI transparent circular PNG (zero white bounding box on black PDF headers)
               const img = new Image();
               img.onload = () => {
+                const size = 600;
                 const canvas = document.createElement('canvas');
+                canvas.width = size;
+                canvas.height = size;
                 const ctx = canvas.getContext('2d');
-                const maxDim = 800; // Crisp high-DPI resolution for vector PDF print
-                let w = img.width;
-                let h = img.height;
-                if (w > maxDim || h > maxDim) {
-                  if (w > h) {
-                    h = Math.round((h * maxDim) / w);
-                    w = maxDim;
-                  } else {
-                    w = Math.round((w * maxDim) / h);
-                    h = maxDim;
-                  }
+                if (ctx) {
+                  ctx.clearRect(0, 0, size, size);
+                  ctx.imageSmoothingEnabled = true;
+                  ctx.imageSmoothingQuality = 'high';
+                  ctx.save();
+                  ctx.beginPath();
+                  ctx.arc(size / 2, size / 2, size / 2 - 2, 0, Math.PI * 2);
+                  ctx.closePath();
+                  ctx.clip();
+                  const minDim = Math.min(img.width, img.height);
+                  const sx = (img.width - minDim) / 2;
+                  const sy = (img.height - minDim) / 2;
+                  ctx.drawImage(img, sx, sy, minDim, minDim, 0, 0, size, size);
+                  ctx.restore();
                 }
-                canvas.width = w;
-                canvas.height = h;
-                ctx?.drawImage(img, 0, 0, w, h);
                 const pngDataUrl = canvas.toDataURL('image/png');
 
                 setCustomLogo(pngDataUrl);
                 saveRecord('KMaster_Logo', pngDataUrl);
-                showToast('✔ Custom Logo Saved & Applied to PDFs');
+                showToast('✔ Circular Transparent Logo Saved & Applied to PDFs');
               };
               img.onerror = () => {
                 setCustomLogo(rawData);
@@ -1450,7 +1405,7 @@ export default function App() {
         />
       )}
 
-      {/* Database Backup & Restore Modal (Phone & Google Drive) */}
+      {/* Database Backup & Restore Modal (JSON Only) */}
       <DataBackupModal
         isOpen={cloudSyncOpen}
         onClose={() => setCloudSyncOpen(false)}
@@ -1468,30 +1423,22 @@ export default function App() {
         onToast={showToast}
       />
 
-      {/* Install as APK / PWA Mobile Modal */}
-      <ApkInstallerModal
-        isOpen={apkInstallerOpen}
-        onClose={() => setApkInstallerOpen(false)}
-        onToast={showToast}
-      />
-
-      {/* Website Editor Modal */}
-      <WebsiteEditorModal
-        isOpen={websiteEditorOpen}
-        onClose={() => setWebsiteEditorOpen(false)}
-        onToast={showToast}
-      />
-
       {/* Blank Business Letterhead PDF Modal */}
       {letterheadOpen && (
         <LetterheadModal
           settings={settings}
           customLogo={customLogo}
-          onPreviewPdf={(result) => {
-            setPdfPreviewCustomer(null);
-            setPdfPreviewResult(result);
-          }}
           onClose={() => setLetterheadOpen(false)}
+          onToast={showToast}
+        />
+      )}
+
+      {/* Google Calendar Full Sync Modal (Duplicate-Proof Upsert) */}
+      {calendarSyncOpen && (
+        <CalendarSyncModal
+          customers={customers}
+          onPersistEventIds={handlePersistCalendarEventIds}
+          onClose={() => setCalendarSyncOpen(false)}
           onToast={showToast}
         />
       )}

@@ -21,7 +21,11 @@ import {
   DEFAULT_PRINT_SETTINGS,
   DEFAULT_SYSTEM_CONSTANTS,
   DEFAULT_STARTER_CUSTOMERS,
-  generateDailyBackupJson,
+  buildFullBackupPayload,
+  getFullBackupFilename,
+  parseBackupJson,
+  restoreRawStorageEntries,
+  NormalizedRestorePayload,
 } from './utils/db';
 import {
   generateEstimateOrBillPdf,
@@ -134,52 +138,122 @@ export default function App() {
     }, 2500);
   };
 
-  // Handle restoring database from local or Google Drive JSON backup
-  const handleApplyBackup = (payload: {
-    customers?: Customer[];
-    notes?: FieldNote[];
-    expenses?: ExpenseEntry[];
-    mileage?: MileageEntry[];
-    shoppingList?: ShoppingItem[];
-    priceBook?: PriceBookItem[];
-    settings?: PrintSettings;
-    constants?: SystemConstants;
-  }) => {
-    let count = 0;
-    if (payload.customers && Array.isArray(payload.customers)) {
+  // Handle restoring full-state or legacy JSON backup into localStorage, IndexedDB, and live React state
+  const handleApplyBackup = async (payload: NormalizedRestorePayload) => {
+    let customersCount = 0;
+    let settingsGroupsRestored = 0;
+    let rawKeysRestored = 0;
+    const details: string[] = [];
+
+    if (Array.isArray(payload.customers)) {
       setCustomers(payload.customers);
-      saveRecord('KMaster_C', payload.customers);
-      count = payload.customers.length;
+      await saveRecord('KMaster_C', payload.customers);
+      customersCount = payload.customers.length;
+      details.push(`${customersCount} customers`);
     }
-    if (payload.notes && Array.isArray(payload.notes)) {
+
+    if (Array.isArray(payload.notes)) {
       setNotes(payload.notes);
-      saveRecord('KMaster_Notes', payload.notes);
+      await saveRecord('KMaster_Notes', payload.notes);
+      settingsGroupsRestored += 1;
+      details.push(`${payload.notes.length} notes`);
     }
-    if (payload.expenses && Array.isArray(payload.expenses)) {
+
+    if (Array.isArray(payload.expenses)) {
       setExpenses(payload.expenses);
-      saveRecord('KMaster_Exp', payload.expenses);
+      await saveRecord('KMaster_Exp', payload.expenses);
+      settingsGroupsRestored += 1;
+      details.push(`${payload.expenses.length} expenses`);
     }
-    if (payload.mileage && Array.isArray(payload.mileage)) {
+
+    if (Array.isArray(payload.mileage)) {
       setMileage(payload.mileage);
-      saveRecord('KMaster_Mil', payload.mileage);
+      await saveRecord('KMaster_Mil', payload.mileage);
+      settingsGroupsRestored += 1;
+      details.push(`${payload.mileage.length} mileage logs`);
     }
-    if (payload.shoppingList && Array.isArray(payload.shoppingList)) {
+
+    if (Array.isArray(payload.shoppingList)) {
       setShoppingList(payload.shoppingList);
-      saveRecord('KMaster_Shopping', payload.shoppingList);
+      await saveRecord('KMaster_Shopping', payload.shoppingList);
+      settingsGroupsRestored += 1;
+      details.push(`${payload.shoppingList.length} shopping items`);
     }
-    if (payload.priceBook && Array.isArray(payload.priceBook)) {
+
+    if (Array.isArray(payload.priceBook)) {
       setPriceBook(payload.priceBook);
-      saveRecord('KMaster_PriceBook', payload.priceBook);
+      await saveRecord('KMaster_PriceBook', payload.priceBook);
+      settingsGroupsRestored += 1;
+      details.push(`${payload.priceBook.length} price book items`);
     }
-    if (payload.settings && payload.settings.hdr) {
-      setSettings(payload.settings);
-      saveRecord('KMaster_Settings', payload.settings);
+
+    if (Array.isArray(payload.webPhotos)) {
+      setWebPhotos(payload.webPhotos);
+      await saveRecord('KMaster_WebPhotos', payload.webPhotos);
+      settingsGroupsRestored += 1;
     }
-    if (payload.constants && payload.constants.spreadRate) {
+
+    if (payload.terms) {
+      setSettings(payload.terms);
+      await saveRecord('KMaster_Settings', payload.terms);
+      settingsGroupsRestored += 1;
+      details.push('PDF header & contract terms');
+    }
+
+    if (payload.constants) {
       setConstants(payload.constants);
-      saveRecord('KMaster_Constants', payload.constants);
+      await saveRecord('KMaster_Constants', payload.constants);
+      settingsGroupsRestored += 1;
+      details.push('custom rates & presets');
     }
-    showToast(`✔ Restored ${count} Customers & All Workspace Data!`);
+
+    if (payload.hasCustomLogo) {
+      setCustomLogo(payload.customLogo ?? null);
+      await saveRecord('KMaster_Logo', payload.customLogo ?? null);
+      settingsGroupsRestored += 1;
+      details.push('company logo');
+    }
+
+    if (payload.baseTheme) {
+      setBaseTheme(payload.baseTheme);
+      applyTheme(payload.baseTheme);
+      await saveRecord('KMaster_BaseMode', payload.baseTheme);
+      settingsGroupsRestored += 1;
+    }
+
+    if (payload.accent1 || payload.accent2 || payload.accent3) {
+      const nextA1 = payload.accent1 || accent1;
+      const nextA2 = payload.accent2 || accent2;
+      const nextA3 = payload.accent3 || accent3;
+      setAccent1(nextA1);
+      setAccent2(nextA2);
+      setAccent3(nextA3);
+      applyAccents(nextA1, nextA2, nextA3);
+      if (payload.accent1) await saveRecord('KMaster_Accent1', nextA1);
+      if (payload.accent2) await saveRecord('KMaster_Accent2', nextA2);
+      if (payload.accent3) await saveRecord('KMaster_Accent3', nextA3);
+      settingsGroupsRestored += 1;
+    }
+
+    if (payload.weatherLocation) {
+      setCurrentLocation(payload.weatherLocation);
+      await saveRecord('KMaster_WeatherLoc', payload.weatherLocation);
+      settingsGroupsRestored += 1;
+    }
+
+    if (payload.rawStorage && Object.keys(payload.rawStorage).length > 0) {
+      rawKeysRestored = await restoreRawStorageEntries(payload.rawStorage);
+    }
+
+    localStorage.setItem('KMaster_LastBackupTS', Date.now().toString());
+    setIsBackupDue(false);
+
+    return {
+      customersCount,
+      settingsGroupsRestored,
+      rawKeysRestored,
+      details,
+    };
   };
 
   // Initial Load from IDB / LocalStorage
@@ -737,9 +811,9 @@ export default function App() {
     showToast('✔ Calendar Sync (.ICS) Downloaded');
   };
 
-  // Backup & Restore
-  const handleBackup = () => {
-    const dataObj = {
+  // Full-State Portable Backup & Smart Restore
+  const handleBackup = async () => {
+    const payload = await buildFullBackupPayload({
       customers,
       notes,
       expenses,
@@ -747,73 +821,47 @@ export default function App() {
       shoppingList,
       priceBook,
       webPhotos,
-      settings,
+      terms: settings,
       constants,
-      date: new Date().toISOString(),
-    };
-    const jsonStr = generateDailyBackupJson(dataObj);
+      customLogo,
+      baseTheme,
+      accent1,
+      accent2,
+      accent3,
+      weatherLocation: currentLocation,
+    });
+    const jsonStr = JSON.stringify(payload, null, 2);
     const blob = new Blob([jsonStr], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const filename = getFullBackupFilename();
     const link = document.createElement('a');
-    link.href = URL.createObjectURL(blob);
-    link.download = `Krueger_OS_Backup_${new Date().toISOString().split('T')[0]}.json`;
+    link.href = url;
+    link.download = filename;
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
+    URL.revokeObjectURL(url);
 
     localStorage.setItem('KMaster_LastBackupTS', Date.now().toString());
     setIsBackupDue(false);
-    showToast('✔ Full Backup Downloaded');
+    showToast(`✔ Full Backup Downloaded (${filename})`);
   };
 
   const handleRestore = (file: File) => {
     const reader = new FileReader();
-    reader.onload = (e) => {
+    reader.onload = async (e) => {
       try {
         const parsed = JSON.parse(e.target?.result as string);
-        if (parsed.customers || parsed.c) {
-          const restoredCusts = parsed.customers || parsed.c;
-          setCustomers(restoredCusts);
-          saveRecord('KMaster_C', restoredCusts);
+        const normalized = parseBackupJson(parsed);
+        if (!normalized) {
+          alert('Invalid backup file.');
+          return;
         }
-        if (parsed.notes) {
-          setNotes(parsed.notes);
-          saveRecord('KMaster_Notes', parsed.notes);
-        }
-        if (parsed.expenses || parsed.exp) {
-          const exp = parsed.expenses || parsed.exp;
-          setExpenses(exp);
-          saveRecord('KMaster_Exp', exp);
-        }
-        if (parsed.mileage || parsed.mil) {
-          const mil = parsed.mileage || parsed.mil;
-          setMileage(mil);
-          saveRecord('KMaster_Mil', mil);
-        }
-        if (parsed.shopping || parsed.shoppingList) {
-          const shop = parsed.shopping || parsed.shoppingList;
-          setShoppingList(shop);
-          saveRecord('KMaster_Shopping', shop);
-        }
-        if (parsed.priceBook) {
-          setPriceBook(parsed.priceBook);
-          saveRecord('KMaster_PriceBook', parsed.priceBook);
-        }
-        if (parsed.webPhotos) {
-          setWebPhotos(parsed.webPhotos);
-          saveRecord('KMaster_WebPhotos', parsed.webPhotos);
-        }
-        if (parsed.settings) {
-          setSettings(parsed.settings);
-          saveRecord('KMaster_Settings', parsed.settings);
-        }
-        if (parsed.constants) {
-          setConstants(parsed.constants);
-          saveRecord('KMaster_Constants', parsed.constants);
-        }
-
-        localStorage.setItem('KMaster_LastBackupTS', Date.now().toString());
-        setIsBackupDue(false);
-        showToast('✔ Restored Successfully');
+        const summary = await handleApplyBackup(normalized);
+        const totalSettings = summary.settingsGroupsRestored + summary.rawKeysRestored;
+        showToast(
+          `✔ Restored ${summary.customersCount} customers & ${totalSettings} settings/data groups!`
+        );
       } catch {
         alert('Invalid backup file.');
       }
@@ -1405,7 +1453,7 @@ export default function App() {
         />
       )}
 
-      {/* Database Backup & Restore Modal (JSON Only) */}
+      {/* Database Backup & Restore Modal (Full-State Portable JSON) */}
       <DataBackupModal
         isOpen={cloudSyncOpen}
         onClose={() => setCloudSyncOpen(false)}
@@ -1416,8 +1464,15 @@ export default function App() {
           mileage,
           shoppingList,
           priceBook,
-          settings,
+          webPhotos,
+          terms: settings,
           constants,
+          customLogo,
+          baseTheme,
+          accent1,
+          accent2,
+          accent3,
+          weatherLocation: currentLocation,
         }}
         onApplyBackup={handleApplyBackup}
         onToast={showToast}

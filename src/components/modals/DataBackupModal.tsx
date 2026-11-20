@@ -1,38 +1,24 @@
-import React, { useRef } from 'react';
+import React, { useRef, useState } from 'react';
 import {
-  Customer,
-  FieldNote,
-  ExpenseEntry,
-  MileageEntry,
-  ShoppingItem,
-  PriceBookItem,
-  PrintSettings,
-  SystemConstants,
-} from '../../types';
+  WorkspaceStateSnapshot,
+  NormalizedRestorePayload,
+  buildFullBackupPayload,
+  getFullBackupFilename,
+  parseBackupJson,
+} from '../../utils/db';
+
+export interface RestoreSummary {
+  customersCount: number;
+  settingsGroupsRestored: number;
+  rawKeysRestored: number;
+  details: string[];
+}
 
 interface DataBackupModalProps {
   isOpen: boolean;
   onClose: () => void;
-  workspaceData: {
-    customers: Customer[];
-    notes: FieldNote[];
-    expenses: ExpenseEntry[];
-    mileage: MileageEntry[];
-    shoppingList: ShoppingItem[];
-    priceBook: PriceBookItem[];
-    settings: PrintSettings;
-    constants: SystemConstants;
-  };
-  onApplyBackup: (payload: {
-    customers?: Customer[];
-    notes?: FieldNote[];
-    expenses?: ExpenseEntry[];
-    mileage?: MileageEntry[];
-    shoppingList?: ShoppingItem[];
-    priceBook?: PriceBookItem[];
-    settings?: PrintSettings;
-    constants?: SystemConstants;
-  }) => void;
+  workspaceData: WorkspaceStateSnapshot;
+  onApplyBackup: (payload: NormalizedRestorePayload) => Promise<RestoreSummary>;
   onToast: (msg: string) => void;
 }
 
@@ -44,34 +30,20 @@ export const DataBackupModal: React.FC<DataBackupModalProps> = ({
   onToast,
 }) => {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const [busy, setBusy] = useState(false);
 
   if (!isOpen) return null;
 
   const totalJobs = workspaceData.customers.reduce((acc, c) => acc + (c.jobs?.length || 0), 0);
 
-  const handleBackupDownloadJson = () => {
+  const handleBackupDownloadJson = async () => {
+    setBusy(true);
     try {
-      const payload = {
-        version: '2.0',
-        appName: 'Krueger Painting OS',
-        exportedAt: new Date().toISOString(),
-        data: {
-          customers: workspaceData.customers,
-          notes: workspaceData.notes,
-          expenses: workspaceData.expenses,
-          mileage: workspaceData.mileage,
-          shoppingList: workspaceData.shoppingList,
-          priceBook: workspaceData.priceBook,
-          settings: workspaceData.settings,
-          constants: workspaceData.constants,
-        },
-      };
-
+      const payload = await buildFullBackupPayload(workspaceData);
       const jsonStr = JSON.stringify(payload, null, 2);
       const blob = new Blob([jsonStr], { type: 'application/json' });
       const url = URL.createObjectURL(blob);
-      const dateStr = new Date().toISOString().split('T')[0];
-      const filename = `krueger-painting-backup-${dateStr}.json`;
+      const filename = getFullBackupFilename();
 
       const link = document.createElement('a');
       link.href = url;
@@ -82,9 +54,11 @@ export const DataBackupModal: React.FC<DataBackupModalProps> = ({
       URL.revokeObjectURL(url);
 
       localStorage.setItem('KMaster_LastBackupTS', Date.now().toString());
-      onToast(`✔ Backup downloaded (${filename})`);
+      onToast(`✔ Full Portable Backup Downloaded (${filename})`);
     } catch (err: any) {
-      onToast(`Backup failed: ${err.message}`);
+      onToast(`Backup failed: ${err?.message || 'Unknown error'}`);
+    } finally {
+      setBusy(false);
     }
   };
 
@@ -93,28 +67,61 @@ export const DataBackupModal: React.FC<DataBackupModalProps> = ({
     if (!file) return;
 
     const reader = new FileReader();
-    reader.onload = (event) => {
+    reader.onload = async (event) => {
+      setBusy(true);
       try {
         const raw = event.target?.result as string;
         const parsed = JSON.parse(raw);
-        const targetData = parsed.data || parsed;
+        const normalized = parseBackupJson(parsed);
 
-        if (!targetData.customers && !targetData.notes && !targetData.expenses) {
+        if (!normalized) {
           alert('This file does not appear to be a valid Krueger Painting JSON backup.');
           return;
         }
 
-        const customerCount = targetData.customers?.length || 0;
-        const confirmMsg = `Restore backup with ${customerCount} customers and all workspace data?`;
+        const previewParts: string[] = [];
+        if (normalized.customers) previewParts.push(`${normalized.customers.length} customers`);
+        if (normalized.constants) previewParts.push('custom rates & presets');
+        if (normalized.terms) previewParts.push('PDF header & contract terms');
+        if (normalized.hasCustomLogo) previewParts.push('company logo');
+        if (normalized.baseTheme || normalized.accent1) previewParts.push('theme & colors');
+        if (normalized.priceBook?.length) previewParts.push(`${normalized.priceBook.length} price book items`);
+        if (normalized.notes?.length) previewParts.push(`${normalized.notes.length} notes`);
+        if (normalized.expenses?.length) previewParts.push(`${normalized.expenses.length} expenses`);
+        if (normalized.mileage?.length) previewParts.push(`${normalized.mileage.length} mileage logs`);
+        if (normalized.shoppingList?.length) previewParts.push(`${normalized.shoppingList.length} shopping items`);
+        if (normalized.rawStorage) {
+          const extraCount = Object.keys(normalized.rawStorage).length;
+          if (extraCount > 0) previewParts.push(`${extraCount} extra app keys`);
+        }
+
+        const formatLabel =
+          normalized.format === 'legacy-customers-array'
+            ? 'Legacy Customer-Only Backup'
+            : normalized.format === 'full-v2'
+            ? 'Full App Backup (v2.0)'
+            : 'Workspace Backup';
+
+        const confirmMsg = `Restore ${formatLabel}?\n\nDetected: ${
+          previewParts.length > 0 ? previewParts.join(', ') : 'workspace data'
+        }.\n\nThis will immediately update your active app state and local storage.`;
 
         if (confirm(confirmMsg)) {
-          onApplyBackup(targetData);
-          onToast(`✔ Restored ${customerCount} customers & workspace data`);
+          const summary = await onApplyBackup(normalized);
+          const totalSettings = summary.settingsGroupsRestored + summary.rawKeysRestored;
+          onToast(
+            `✔ Restored ${summary.customersCount} customer${
+              summary.customersCount === 1 ? '' : 's'
+            } & ${totalSettings} setting${totalSettings === 1 ? '' : 's'}/data group${
+              totalSettings === 1 ? '' : 's'
+            }!`
+          );
           onClose();
         }
       } catch (err: any) {
-        alert('Failed to parse backup file: ' + err.message);
+        alert('Failed to parse backup file: ' + (err?.message || 'Invalid JSON'));
       } finally {
+        setBusy(false);
         if (fileInputRef.current) {
           fileInputRef.current.value = '';
         }
@@ -135,7 +142,7 @@ export const DataBackupModal: React.FC<DataBackupModalProps> = ({
                 Backup &amp; Restore Data
               </h3>
               <p className="text-[10.5px] text-[var(--text-muted)]">
-                Export or restore your workspace as a single .JSON file
+                100% portable full-app .JSON backup &amp; smart restore
               </p>
             </div>
           </div>
@@ -172,14 +179,15 @@ export const DataBackupModal: React.FC<DataBackupModalProps> = ({
         <div className="space-y-1.5">
           <button
             type="button"
+            disabled={busy}
             onClick={handleBackupDownloadJson}
-            className="w-full py-3.5 px-4 bg-[#f1c40f] hover:bg-[#d4ac0d] text-[#111111] font-black text-xs uppercase tracking-wider rounded-xl shadow flex items-center justify-center gap-2 cursor-pointer transition-transform active:scale-95"
+            className="w-full py-3.5 px-4 bg-[#f1c40f] hover:bg-[#d4ac0d] text-[#111111] font-black text-xs uppercase tracking-wider rounded-xl shadow flex items-center justify-center gap-2 cursor-pointer transition-transform active:scale-95 disabled:opacity-50"
           >
             <span>📥</span>
-            <span>Backup Data (Download JSON)</span>
+            <span>{busy ? 'Preparing Full Backup...' : 'Backup Data (Download JSON)'}</span>
           </button>
           <p className="text-[10.5px] text-[var(--text-muted)] text-center">
-            Saves all customers, estimates, notes, expenses, and settings to a .json file.
+            Exports all customers, jobs, custom rates, PDF terms, logo, theme, notes &amp; storage keys.
           </p>
         </div>
 
@@ -194,14 +202,15 @@ export const DataBackupModal: React.FC<DataBackupModalProps> = ({
           />
           <button
             type="button"
+            disabled={busy}
             onClick={() => fileInputRef.current?.click()}
-            className="w-full py-3.5 px-4 bg-[#1c2e1f] hover:bg-[#253d29] border border-[#30d158]/60 text-[#30d158] font-black text-xs uppercase tracking-wider rounded-xl shadow flex items-center justify-center gap-2 cursor-pointer transition-transform active:scale-95"
+            className="w-full py-3.5 px-4 bg-[#1c2e1f] hover:bg-[#253d29] border border-[#30d158]/60 text-[#30d158] font-black text-xs uppercase tracking-wider rounded-xl shadow flex items-center justify-center gap-2 cursor-pointer transition-transform active:scale-95 disabled:opacity-50"
           >
             <span>📤</span>
-            <span>Restore Data (Upload JSON)</span>
+            <span>{busy ? 'Restoring...' : 'Restore Data (Upload JSON)'}</span>
           </button>
           <p className="text-[10.5px] text-[var(--text-muted)] text-center">
-            Select a previously downloaded .json backup file to restore your records.
+            Supports full v2.0 backups and legacy customer-only JSON arrays with instant live apply.
           </p>
         </div>
       </div>

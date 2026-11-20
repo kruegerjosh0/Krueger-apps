@@ -155,8 +155,8 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
     return counts;
   }, [customers]);
 
-  // Strictly chronologically sorted Scheduled Jobs Quick List (soonest date first)
-  // Strictly filters out Complete, Completed, Paid, and Complete / Paid jobs
+  // Strictly chronologically sorted Scheduled Jobs Quick List (soonest upcoming date first)
+  // Excludes Complete/Completed/Paid jobs and any scheduled dates that have already passed
   const chronologicalScheduledJobs = useMemo<ScheduledQuickItem[]>(() => {
     const items: ScheduledQuickItem[] = [];
 
@@ -175,12 +175,17 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
 
       if (custSchedJobs.length > 0) {
         custSchedJobs.forEach((job) => {
+          const startMs = parseLocalDateMs(job.schedDate);
+          // Strictly remove any job whose scheduled date has already passed
+          if (startMs !== null && startMs < todayMs) {
+            return;
+          }
           items.push({
             key: `${cust.id}-${job.id}`,
             customer: cust,
             job,
             schedDate: job.schedDate || '',
-            sortMs: parseLocalDateMs(job.schedDate),
+            sortMs: startMs,
           });
         });
       } else if (getCustomerPipelineStage(cust) === 'SCHEDULED') {
@@ -209,7 +214,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
     });
 
     return items;
-  }, [customers]);
+  }, [customers, todayMs]);
 
   const toggleFolderOpen = (key: string) => {
     setFolderOpenState((prev) => ({ ...prev, [key]: !prev[key] }));
@@ -733,7 +738,6 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
           <div className="space-y-1.5">
             {chronologicalScheduledJobs.map((entry) => {
               const isToday = entry.sortMs !== null && entry.sortMs === todayMs;
-              const isPast = entry.sortMs !== null && entry.sortMs < todayMs;
               const formattedDate = formatScheduledDate(entry.schedDate);
 
               return (
@@ -749,8 +753,6 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                         className={`text-[10px] font-black px-2 py-0.5 rounded shrink-0 ${
                           isToday
                             ? 'bg-[#f1c40f] text-[#231709]'
-                            : isPast
-                            ? 'bg-red-500/20 text-red-400 border border-red-500/40'
                             : 'bg-[#0a84ff]/15 text-[#60a5fa] border border-[#0a84ff]/35'
                         }`}
                       >

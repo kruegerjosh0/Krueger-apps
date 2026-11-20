@@ -71,9 +71,10 @@ export const PdfPreviewModal: React.FC<PdfPreviewModalProps> = ({
 
   const handleEmailClient = () => {
     const subject = encodeURIComponent(`Krueger Painting - ${pdfResult.fileName.replace('.pdf', '')}`);
-    const body = encodeURIComponent(
-      `Hi ${customer?.name || 'Customer'},\n\nPlease find your project document from Krueger Painting attached.\n\nProject Total: $${pdfResult.grossTotal}\nBalance Due: $${pdfResult.balanceDue}\n\nBest regards,\nJosh Krueger\nKrueger Painting\n(262) 443-1199`
-    );
+    const bodyText = customer
+      ? `Hi ${customer.name},\n\nPlease find your project document from Krueger Painting attached.\n\nProject Total: $${pdfResult.grossTotal}\nBalance Due: $${pdfResult.balanceDue}\n\nBest regards,\nJosh Krueger\nKrueger Painting\n(262) 443-1199\nkrueptg@gmail.com`
+      : `Hello,\n\nPlease find the attached document from Krueger Painting.\n\nBest regards,\nJosh Krueger\nKrueger Painting\n(262) 443-1199\nkrueptg@gmail.com`;
+    const body = encodeURIComponent(bodyText);
     const toEmail = encodeURIComponent(customer?.email || '');
 
     // Download PDF first so user can attach it immediately
@@ -265,7 +266,7 @@ export const PdfPreviewModal: React.FC<PdfPreviewModalProps> = ({
 
       {/* Bottom Action Buttons */}
       <div className="max-w-4xl w-full mx-auto shrink-0 space-y-1.5">
-        <div className="grid grid-cols-2 sm:grid-cols-5 gap-2">
+        <div className={`grid grid-cols-2 ${onSaveToCustomerFiles && customer ? 'sm:grid-cols-5' : 'sm:grid-cols-4'} gap-2`}>
           <button
             type="button"
             onClick={handleDownload}
@@ -290,7 +291,7 @@ export const PdfPreviewModal: React.FC<PdfPreviewModalProps> = ({
             type="button"
             onClick={handleEmail}
             className="py-2.5 bg-[#0a84ff] hover:opacity-95 text-white font-extrabold text-xs rounded-xl shadow cursor-pointer flex items-center justify-center gap-1.5 transition-transform active:scale-95"
-            title="Prepares an email to the client with invoice totals"
+            title="Prepares an email with document details"
           >
             <span>📧</span>
             <span>Email Client</span>
@@ -306,7 +307,7 @@ export const PdfPreviewModal: React.FC<PdfPreviewModalProps> = ({
             <span>Print PDF</span>
           </button>
 
-          {onSaveToCustomerFiles && (
+          {onSaveToCustomerFiles && customer && (
             <button
               type="button"
               onClick={handleArchive}

@@ -1,6 +1,7 @@
 import React from 'react';
 
 interface ToolsViewProps {
+  onOpenLetterhead?: () => void;
   onOpenTaxReport: () => void;
   onOpenCalc: () => void;
   onOpenPriceBook: () => void;
@@ -18,6 +19,7 @@ interface ToolsViewProps {
 }
 
 export const ToolsView: React.FC<ToolsViewProps> = ({
+  onOpenLetterhead,
   onOpenTaxReport,
   onOpenCalc,
   onOpenPriceBook,
@@ -55,6 +57,7 @@ export const ToolsView: React.FC<ToolsViewProps> = ({
   };
 
   const tools = [
+    { title: 'Blank Letterhead PDF', icon: '📝', desc: 'Official black & yellow stationery PDF', action: onOpenLetterhead || onOpenSettings },
     { title: 'Website Editor', icon: '🌐', desc: 'Edit live website content', action: onOpenWebsiteEditor || onOpenSettings },
     { title: 'Install App (PWA)', icon: '📱', desc: '1-tap home screen app with offline caching', action: onOpenApkInstaller || onOpenSettings },
     { title: 'Backup & Restore', icon: '💾', desc: 'Save JSON to phone or Google Drive, or restore', action: onOpenCloudSync || onOpenSettings },

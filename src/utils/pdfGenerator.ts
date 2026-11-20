@@ -275,20 +275,28 @@ export async function generateEstimateOrBillPdf(
     y += 6;
   }
 
-  // 4. SECTION: PREP WORK
-  drawSectionHeader('PREP WORK');
-  doc.setFont('helvetica', 'normal');
-  doc.setFontSize(10);
-  doc.setTextColor(30, 30, 30);
+  // 4. SECTION: PREP WORK (Only rendered when job-level prep notes are specified)
+  const rawJobPrep = (job.prepScope || '').trim();
+  if (rawJobPrep) {
+    drawSectionHeader('PREP WORK');
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(10);
+    doc.setTextColor(30, 30, 30);
 
-  const prepText =
-    job.prepScope?.trim() ||
-    'Pressure wash entire house, deck spindles/handrails, deck floor, deck steps/risers to remove any failed stain/pain, kill any mildew and remove all additional debris\nScrape and sand all areas necessary and caulk where necessary\nApply one coat of exterior primer to any bare wood';
+    const formattedJobPrep = rawJobPrep
+      .split('\n')
+      .map((line) => {
+        const t = line.trim();
+        if (!t) return '';
+        return t.startsWith('- ') ? `• ${t.slice(2)}` : t;
+      })
+      .join('\n');
 
-  const prepLines = doc.splitTextToSize(prepText, contentWidth);
-  checkPageBreak(prepLines.length * 14 + 10);
-  doc.text(prepLines, margin, y);
-  y += prepLines.length * 14 + 12;
+    const prepLines = doc.splitTextToSize(formattedJobPrep, contentWidth);
+    checkPageBreak(prepLines.length * 14 + 10);
+    doc.text(prepLines, margin, y);
+    y += prepLines.length * 14 + 12;
+  }
 
   // Reserved width for price column on the right (strictly prevents any text overlap)
   const priceColWidth = 85;
@@ -314,16 +322,30 @@ export async function generateEstimateOrBillPdf(
         }
       }
 
-      // Build clean paint details: "Amount of paint: 2 Gallons - Emerald (Satin) - Color: Repose Gray"
+      // Build clean paint details: "Amount of paint: 2 Gallons - Emerald - (Satin) - Color: Repose Gray"
       let paintDetail = '';
-      if (showLinePaint && currentRoomGals > 0) {
+      if (
+        showLinePaint &&
+        (currentRoomGals > 0 || r.prod?.trim() || r.sheen?.trim() || r.color?.trim())
+      ) {
         const paintParts: string[] = [];
-        paintParts.push(`Amount of paint: ${currentRoomGals} ${currentRoomGals === 1 ? 'Gallon' : 'Gallons'}`);
+        if (currentRoomGals > 0) {
+          paintParts.push(
+            `Amount of paint: ${currentRoomGals} ${currentRoomGals === 1 ? 'Gallon' : 'Gallons'}`
+          );
+        }
         if (r.prod && r.prod.trim()) paintParts.push(r.prod.trim());
         if (r.sheen && r.sheen.trim()) paintParts.push(`(${r.sheen.trim()})`);
         if (r.color && r.color.trim()) paintParts.push(`Color: ${r.color.trim()}`);
         paintDetail = paintParts.join(' - ');
       }
+
+      // Room-specific prep & setup checklist items
+      const roomPrepList = Array.isArray(r.prep)
+        ? r.prep.map((p) => p.trim()).filter(Boolean)
+        : [];
+      const roomPrepDetail =
+        roomPrepList.length > 0 ? `Prep & Setup: ${roomPrepList.join(' • ')}` : '';
 
       // Room name in crisp bold helvetica (no dash prefix!)
       doc.setFont('helvetica', 'bold');
@@ -332,13 +354,20 @@ export async function generateEstimateOrBillPdf(
 
       // Paint lines in light gray tone
       doc.setFont('helvetica', 'normal');
-      doc.setFontSize(9);
+      doc.setFontSize(8.5);
       const paintLines = paintDetail
         ? doc.splitTextToSize(paintDetail, itemTextWidth - 10)
         : [];
 
-      const totalLineCount = nameLines.length + paintLines.length;
-      const neededHeight = totalLineCount * 14 + 10;
+      // Room prep lines in crisp charcoal tone
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(8.5);
+      const roomPrepLines = roomPrepDetail
+        ? doc.splitTextToSize(roomPrepDetail, itemTextWidth - 10)
+        : [];
+
+      const neededHeight =
+        nameLines.length * 14 + paintLines.length * 12.5 + roomPrepLines.length * 12.5 + 14;
       checkPageBreak(neededHeight);
 
       const startY = y;
@@ -351,30 +380,44 @@ export async function generateEstimateOrBillPdf(
         doc.text(lText, margin, startY + lIdx * 14);
       });
 
-      // 2. Render paint line underneath in genuine light gray tone
+      let detailY = startY + nameLines.length * 14;
+
+      // 2. Render paint line underneath in light gray tone
       if (paintLines.length > 0) {
         doc.setFont('helvetica', 'normal');
         doc.setFontSize(8.5);
-        doc.setTextColor(135, 135, 135); // Classic light gray tone
+        doc.setTextColor(125, 125, 125);
         paintLines.forEach((pText: string, pIdx: number) => {
-          doc.text(pText, margin + 10, startY + (nameLines.length + pIdx) * 13 + 1);
+          doc.text(pText, margin + 10, detailY + pIdx * 12.5);
         });
+        detailY += paintLines.length * 12.5;
       }
 
-      // 3. Render Price on first line on Right (bold black)
+      // 3. Render room prep & setup items underneath in crisp charcoal
+      if (roomPrepLines.length > 0) {
+        doc.setFont('helvetica', 'normal');
+        doc.setFontSize(8.5);
+        doc.setTextColor(65, 65, 65);
+        roomPrepLines.forEach((rpText: string, rpIdx: number) => {
+          doc.text(rpText, margin + 10, detailY + rpIdx * 12.5);
+        });
+        detailY += roomPrepLines.length * 12.5;
+      }
+
+      // 4. Render Price on first line on Right (bold black)
       doc.setFont('helvetica', 'bold');
       doc.setFontSize(10);
       doc.setTextColor(0, 0, 0);
       doc.text(`$${roomPrice}`, rightMargin, startY, { align: 'right' });
 
       // Subtle dashed separator line below item
-      const blockBottomY = startY + nameLines.length * 14 + paintLines.length * 13;
+      const blockBottomY = detailY;
       doc.setDrawColor(235, 235, 235);
       doc.setLineDashPattern([2, 2], 0);
       doc.line(margin, blockBottomY + 2, rightMargin, blockBottomY + 2);
       doc.setLineDashPattern([], 0);
 
-      y = blockBottomY + 8;
+      y = blockBottomY + 9;
     });
   } else {
     doc.setFont('helvetica', 'italic');
@@ -773,3 +816,355 @@ export function dataUrlToPdfResult(
     balanceDue,
   };
 }
+
+export interface LetterheadOptions {
+  documentTitle?: string;
+  dateStr?: string;
+  recipientName?: string;
+  recipientInfo?: string;
+  bodyText?: string;
+  showBlankLines?: boolean;
+  includeSignatureLine?: boolean;
+}
+
+/**
+ * Generates an official Krueger Painting Blank / Custom Business Letterhead PDF
+ * featuring black-and-yellow brand styling, official logo, and contact info (262-443-1199 / krueptg@gmail.com).
+ */
+export async function generateBlankLetterheadPdf(
+  options: LetterheadOptions,
+  settings: PrintSettings,
+  customLogoBase64?: string
+): Promise<GeneratedPdfResult> {
+  const doc = new jsPDF({
+    orientation: 'portrait',
+    unit: 'pt',
+    format: 'letter', // 612 x 792 pt
+  });
+
+  const pageWidth = 612;
+  const pageHeight = 792;
+  const margin = 44;
+  const contentWidth = pageWidth - margin * 2;
+  const rightMargin = pageWidth - margin;
+
+  // Resolve custom logo or official Krueger seal
+  let logoData = customLogoBase64;
+  if (!logoData && typeof localStorage !== 'undefined') {
+    try {
+      const stored = localStorage.getItem('KMaster_Logo');
+      if (stored) {
+        try {
+          logoData = JSON.parse(stored);
+        } catch {
+          logoData = stored;
+        }
+      }
+    } catch {
+      // ignore
+    }
+  }
+  if (!logoData) {
+    logoData = await getHighResLogoPng();
+  }
+
+  // Extract clean street/city address from settings.hdr (strip trailing phone if present)
+  const rawAddr = (settings.hdr || 'N630 Moraine Dr., Campbellsport, WI 53010').split('|')[0].trim();
+  const streetAddress = rawAddr || 'N630 Moraine Dr., Campbellsport, WI 53010';
+  const mottoText = (settings.motto || 'Precision & Quality').trim();
+
+  const drawFooter = (pageNum: number, totalPages: number) => {
+    const footerHeight = 34;
+    const footerTop = pageHeight - footerHeight;
+
+    // Gold accent stripe above footer
+    doc.setFillColor(241, 196, 15); // #f1c40f
+    doc.rect(0, footerTop - 3, pageWidth, 3, 'F');
+
+    // Signature black footer band
+    doc.setFillColor(18, 19, 24); // #121318
+    doc.rect(0, footerTop, pageWidth, footerHeight, 'F');
+
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(8.5);
+    doc.setTextColor(241, 196, 15);
+    doc.text('KRUEGER PAINTING', margin, footerTop + 15);
+
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(8);
+    doc.setTextColor(225, 225, 225);
+    doc.text(
+      `262-443-1199  •  krueptg@gmail.com  •  ${streetAddress}`,
+      margin,
+      footerTop + 26
+    );
+
+    if (totalPages > 1) {
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(8);
+      doc.setTextColor(241, 196, 15);
+      doc.text(`Page ${pageNum} of ${totalPages}`, rightMargin, footerTop + 21, { align: 'right' });
+    }
+  };
+
+  // --- PAGE 1 FULL BLACK & YELLOW EXECUTIVE HEADER ---
+  const headerHeight = 96;
+
+  // Top gold accent edge
+  doc.setFillColor(241, 196, 15); // #f1c40f
+  doc.rect(0, 0, pageWidth, 4, 'F');
+
+  // Rich black header background
+  doc.setFillColor(18, 19, 24); // #121318
+  doc.rect(0, 4, pageWidth, headerHeight - 4, 'F');
+
+  // Bottom bold gold accent stripe
+  doc.setFillColor(241, 196, 15); // #f1c40f
+  doc.rect(0, headerHeight, pageWidth, 5, 'F');
+
+  // Logo on left of header
+  let textStartX = margin;
+  if (logoData) {
+    try {
+      const imgProps = doc.getImageProperties(logoData);
+      const aspect = imgProps.width / imgProps.height;
+      const maxH = 68;
+      const maxW = 90;
+      let drawH = maxH;
+      let drawW = drawH * aspect;
+      if (drawW > maxW) {
+        drawW = maxW;
+        drawH = drawW / aspect;
+      }
+      const logoY = 4 + Math.round((headerHeight - 4 - drawH) / 2);
+      const format = imgProps.fileType === 'JPEG' || imgProps.fileType === 'JPG' ? 'JPEG' : 'PNG';
+      doc.addImage(logoData, format, margin, logoY, drawW, drawH);
+      textStartX = margin + drawW + 14;
+    } catch {
+      textStartX = margin;
+    }
+  }
+
+  // Brand Name & Motto (Left/Center-Left)
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(20);
+  doc.setTextColor(241, 196, 15); // #f1c40f
+  doc.text('KRUEGER PAINTING', textStartX, 42);
+
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(8.5);
+  doc.setTextColor(235, 235, 235);
+  doc.text('INTERIOR & EXTERIOR PAINTING  •  PRESSURE WASHING', textStartX, 57);
+
+  if (mottoText) {
+    doc.setFont('helvetica', 'italic');
+    doc.setFontSize(9);
+    doc.setTextColor(190, 190, 190);
+    doc.text(`"${mottoText}"`, textStartX, 72);
+  }
+
+  // Official Contact Info Block (Right Aligned inside header)
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(10.5);
+  doc.setTextColor(241, 196, 15);
+  doc.text('262-443-1199', rightMargin, 39, { align: 'right' });
+
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(9.5);
+  doc.setTextColor(255, 255, 255);
+  doc.text('krueptg@gmail.com', rightMargin, 54, { align: 'right' });
+
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(8);
+  doc.setTextColor(200, 200, 200);
+  const addrWrap = doc.splitTextToSize(streetAddress, 185);
+  doc.text(addrWrap, rightMargin, 68, { align: 'right' });
+
+  // Start body area below header
+  let y = headerHeight + 32;
+
+  const docTitle = (options.documentTitle || '').trim();
+  const dateDisplay = (options.dateStr || '').trim();
+
+  // Document Title & Date Row
+  if (docTitle || dateDisplay) {
+    if (docTitle) {
+      // Signature gold accent bar beside document title
+      doc.setFillColor(241, 196, 15);
+      doc.rect(margin, y - 13, 5, 17, 'F');
+
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(14);
+      doc.setTextColor(18, 19, 24);
+      const titleLines = doc.splitTextToSize(docTitle.toUpperCase(), contentWidth - 130);
+      doc.text(titleLines, margin + 12, y);
+
+      if (dateDisplay) {
+        doc.setFont('helvetica', 'bold');
+        doc.setFontSize(9.5);
+        doc.setTextColor(80, 80, 80);
+        doc.text(dateDisplay, rightMargin, y, { align: 'right' });
+      }
+      y += Math.max(titleLines.length * 16, 18) + 8;
+    } else if (dateDisplay) {
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(10);
+      doc.setTextColor(70, 70, 70);
+      doc.text(dateDisplay, rightMargin, y, { align: 'right' });
+      y += 20;
+    }
+
+    // Subtle divider under title/date
+    doc.setDrawColor(230, 230, 230);
+    doc.setLineWidth(1);
+    doc.line(margin, y - 4, rightMargin, y - 4);
+    y += 14;
+  }
+
+  // Optional Recipient Block
+  const recipName = (options.recipientName || '').trim();
+  const recipInfo = (options.recipientInfo || '').trim();
+  if (recipName || recipInfo) {
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(8.5);
+    doc.setTextColor(120, 95, 15);
+    doc.text('TO:', margin, y);
+    y += 14;
+
+    if (recipName) {
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(11);
+      doc.setTextColor(18, 19, 24);
+      const rNameLines = doc.splitTextToSize(recipName, contentWidth);
+      doc.text(rNameLines, margin, y);
+      y += rNameLines.length * 14;
+    }
+
+    if (recipInfo) {
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(10);
+      doc.setTextColor(55, 55, 55);
+      const rInfoLines = doc.splitTextToSize(recipInfo, contentWidth);
+      doc.text(rInfoLines, margin, y);
+      y += rInfoLines.length * 13.5;
+    }
+    y += 14;
+  }
+
+  const bottomLimit = pageHeight - (options.includeSignatureLine ? 120 : 62);
+  const bodyContent = (options.bodyText || '').trim();
+
+  if (bodyContent) {
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(10.5);
+    doc.setTextColor(25, 25, 25);
+
+    const paragraphs = options.bodyText!.split('\n');
+    const lineHeight = 15.5;
+
+    paragraphs.forEach((para) => {
+      if (!para.trim()) {
+        y += 10;
+        if (y > pageHeight - 62) {
+          doc.addPage();
+          // Mini continuation header bar
+          doc.setFillColor(18, 19, 24);
+          doc.rect(0, 0, pageWidth, 24, 'F');
+          doc.setFillColor(241, 196, 15);
+          doc.rect(0, 24, pageWidth, 3, 'F');
+          doc.setFont('helvetica', 'bold');
+          doc.setFontSize(8.5);
+          doc.setTextColor(241, 196, 15);
+          doc.text('KRUEGER PAINTING', margin, 15);
+          doc.setFont('helvetica', 'normal');
+          doc.setTextColor(220, 220, 220);
+          doc.text(docTitle || 'Official Correspondence', rightMargin, 15, { align: 'right' });
+          doc.setFont('helvetica', 'normal');
+          doc.setFontSize(10.5);
+          doc.setTextColor(25, 25, 25);
+          y = 54;
+        }
+        return;
+      }
+
+      const wrappedLines: string[] = doc.splitTextToSize(para, contentWidth);
+      wrappedLines.forEach((line) => {
+        if (y + lineHeight > pageHeight - 62) {
+          doc.addPage();
+          doc.setFillColor(18, 19, 24);
+          doc.rect(0, 0, pageWidth, 24, 'F');
+          doc.setFillColor(241, 196, 15);
+          doc.rect(0, 24, pageWidth, 3, 'F');
+          doc.setFont('helvetica', 'bold');
+          doc.setFontSize(8.5);
+          doc.setTextColor(241, 196, 15);
+          doc.text('KRUEGER PAINTING', margin, 15);
+          doc.setFont('helvetica', 'normal');
+          doc.setTextColor(220, 220, 220);
+          doc.text(docTitle || 'Official Correspondence', rightMargin, 15, { align: 'right' });
+          doc.setFont('helvetica', 'normal');
+          doc.setFontSize(10.5);
+          doc.setTextColor(25, 25, 25);
+          y = 54;
+        }
+        doc.text(line, margin, y);
+        y += lineHeight;
+      });
+    });
+  } else if (options.showBlankLines) {
+    // Draw subtle light writing lines for handwritten field notes
+    doc.setDrawColor(225, 225, 225);
+    doc.setLineWidth(0.75);
+    let lineY = y + 12;
+    while (lineY < bottomLimit) {
+      doc.line(margin, lineY, rightMargin, lineY);
+      lineY += 26;
+    }
+  }
+
+  // Optional Signature Block near bottom of last page
+  if (options.includeSignatureLine) {
+    if (y > pageHeight - 115) {
+      doc.addPage();
+      y = 60;
+    }
+    const sigY = Math.max(y + 36, pageHeight - 102);
+    doc.setDrawColor(60, 60, 60);
+    doc.setLineWidth(1);
+    doc.line(margin, sigY, margin + 230, sigY);
+    doc.line(rightMargin - 140, sigY, rightMargin, sigY);
+
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(8.5);
+    doc.setTextColor(60, 60, 60);
+    doc.text('KRUEGER PAINTING  •  SIGNATURE', margin, sigY + 13);
+    doc.text('DATE', rightMargin - 140, sigY + 13);
+  }
+
+  // Apply black-and-yellow branded footer on every page
+  const totalPages = doc.getNumberOfPages();
+  for (let p = 1; p <= totalPages; p++) {
+    doc.setPage(p);
+    drawFooter(p, totalPages);
+  }
+
+  const blob = doc.output('blob');
+  const blobUrl = URL.createObjectURL(blob);
+  const dataUrl = doc.output('dataurlstring');
+
+  const safeTitle = docTitle
+    ? docTitle.replace(/[^a-zA-Z0-9]+/g, '_').replace(/^_|_$/g, '')
+    : 'Blank_Letterhead';
+  const fileName = `Krueger_Painting_${safeTitle}.pdf`;
+
+  return {
+    doc,
+    blob,
+    blobUrl,
+    dataUrl,
+    fileName,
+    grossTotal: 0,
+    balanceDue: 0,
+  };
+}
+

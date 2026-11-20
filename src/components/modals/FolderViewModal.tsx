@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Customer, JobProject, CustomerFile } from '../../types';
 import {
   signInWithGoogle,
@@ -9,6 +9,11 @@ import {
   GoogleContactPerson,
   createGoogleCalendarUrl,
 } from '../../utils/googleWorkspace';
+import {
+  PIPELINE_STAGE_META,
+  normalizePipelineStage,
+  formatScheduledDate,
+} from '../../utils/projectHelpers';
 
 interface FolderViewModalProps {
   customer: Customer;
@@ -39,13 +44,31 @@ export const FolderViewModal: React.FC<FolderViewModalProps> = ({
   onScheduleEstimate,
   onToast,
 }) => {
+  const normalizedOverride =
+    customer.statusOverride && customer.statusOverride !== 'AUTO'
+      ? normalizePipelineStage(customer.statusOverride)
+      : 'AUTO';
+
   const [name, setName] = useState(customer.name);
   const [address, setAddress] = useState(customer.address);
   const [phone, setPhone] = useState(customer.phone);
   const [email, setEmail] = useState(customer.email);
   const [notes, setNotes] = useState(customer.notes);
-  const [statusOverride, setStatusOverride] = useState(customer.statusOverride || 'AUTO');
+  const [statusOverride, setStatusOverride] = useState(normalizedOverride);
   const [fileTag, setFileTag] = useState<'BEFORE' | 'ACTIVE' | 'AFTER' | 'DOC'>('BEFORE');
+
+  useEffect(() => {
+    setName(customer.name);
+    setAddress(customer.address);
+    setPhone(customer.phone);
+    setEmail(customer.email);
+    setNotes(customer.notes);
+    setStatusOverride(
+      customer.statusOverride && customer.statusOverride !== 'AUTO'
+        ? normalizePipelineStage(customer.statusOverride)
+        : 'AUTO'
+    );
+  }, [customer.id]);
 
   const saveProfileChanges = (field: string, val: string) => {
     const updated = { ...customer, [field]: val, lastActive: Date.now() };
@@ -56,6 +79,11 @@ export const FolderViewModal: React.FC<FolderViewModalProps> = ({
     if (field === 'notes') setNotes(val);
     if (field === 'statusOverride') setStatusOverride(val);
     onUpdateCustomer(updated);
+  };
+
+  const togglePinned = () => {
+    onUpdateCustomer({ ...customer, isPinned: !customer.isPinned });
+    onToast(customer.isPinned ? 'Unpinned customer' : '★ Customer pinned to top');
   };
 
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -180,7 +208,19 @@ export const FolderViewModal: React.FC<FolderViewModalProps> = ({
             <h2 className="text-sm sm:text-lg font-black text-[var(--text)]">{name}</h2>
           </div>
 
-          <div className="flex items-center gap-1.5 shrink-0">
+          <div className="flex items-center gap-1.5 shrink-0 flex-wrap">
+            <button
+              type="button"
+              onClick={togglePinned}
+              className={`font-extrabold text-[10.5px] sm:text-[11px] px-2.5 py-1.5 rounded-lg border cursor-pointer transition-all active:scale-95 ${
+                customer.isPinned
+                  ? 'bg-[#f1c40f] text-[#231709] border-[#f1c40f] shadow'
+                  : 'bg-[var(--surface-subtle)] text-[var(--text-muted)] border-[var(--border)] hover:text-[var(--text)]'
+              }`}
+              title="Pin priority customer to top"
+            >
+              {customer.isPinned ? '★ Pinned' : '☆ Pin'}
+            </button>
             <button
               type="button"
               onClick={onScheduleEstimate}
@@ -207,6 +247,7 @@ export const FolderViewModal: React.FC<FolderViewModalProps> = ({
               </label>
               <input
                 type="text"
+                autoComplete="off"
                 value={name}
                 onChange={(e) => saveProfileChanges('name', e.target.value)}
                 className="w-full bg-[var(--bg)] border border-[var(--border)] focus:border-[var(--accent)] text-[var(--text)] rounded-lg px-3 py-2 text-xs outline-none"
@@ -218,6 +259,7 @@ export const FolderViewModal: React.FC<FolderViewModalProps> = ({
               </label>
               <input
                 type="text"
+                autoComplete="off"
                 value={address}
                 onChange={(e) => saveProfileChanges('address', e.target.value)}
                 className="w-full bg-[var(--bg)] border border-[var(--border)] focus:border-[var(--accent)] text-[var(--text)] rounded-lg px-3 py-2 text-xs outline-none"
@@ -232,6 +274,7 @@ export const FolderViewModal: React.FC<FolderViewModalProps> = ({
               </label>
               <input
                 type="tel"
+                autoComplete="off"
                 value={phone}
                 onChange={(e) => saveProfileChanges('phone', e.target.value)}
                 className="w-full bg-[var(--bg)] border border-[var(--border)] focus:border-[var(--accent)] text-[var(--text)] rounded-lg px-3 py-2 text-xs outline-none"
@@ -243,6 +286,7 @@ export const FolderViewModal: React.FC<FolderViewModalProps> = ({
               </label>
               <input
                 type="email"
+                autoComplete="off"
                 value={email}
                 onChange={(e) => saveProfileChanges('email', e.target.value)}
                 className="w-full bg-[var(--bg)] border border-[var(--border)] focus:border-[var(--accent)] text-[var(--text)] rounded-lg px-3 py-2 text-xs outline-none"
@@ -252,19 +296,19 @@ export const FolderViewModal: React.FC<FolderViewModalProps> = ({
 
           <div>
             <label className="text-[9px] uppercase font-bold text-[var(--text-muted)] tracking-wider block mb-1">
-              Master Status Override
+              Pipeline Stage Override
             </label>
             <select
+              autoComplete="off"
               value={statusOverride}
               onChange={(e) => saveProfileChanges('statusOverride', e.target.value)}
               className="w-full bg-[var(--bg)] border border-[var(--border)] text-[var(--text)] rounded-lg px-3 py-2 text-xs outline-none"
             >
-              <option value="AUTO">Auto (Based on Active Projects)</option>
-              <option value="NEW">NEW</option>
-              <option value="PENDING">PENDING</option>
-              <option value="SCHEDULED">SCHEDULED</option>
-              <option value="COMPLETED">COMPLETED</option>
-              <option value="OTHER">OTHER / ARCHIVE</option>
+              <option value="AUTO">Auto (Based on Projects)</option>
+              <option value="ACTIVE">Active</option>
+              <option value="SCHEDULED">Scheduled</option>
+              <option value="PENDING">Pending</option>
+              <option value="COMPLETED">Complete / Paid</option>
             </select>
           </div>
         </div>
@@ -449,14 +493,9 @@ export const FolderViewModal: React.FC<FolderViewModalProps> = ({
 
           <div className="space-y-2.5">
             {(customer.jobs || []).map((j, idx) => {
-              const statusBg =
-                j.status === 'SCHEDULED'
-                  ? '#0a84ff'
-                  : j.status === 'COMPLETED'
-                  ? '#ff9f0a'
-                  : j.status === 'OTHER'
-                  ? '#555'
-                  : '#ffd60a';
+              const stage = normalizePipelineStage(j.status);
+              const stageMeta = PIPELINE_STAGE_META[stage];
+              const statusBg = stageMeta.color;
 
               // Calculate total
               let labor = 0;
@@ -472,8 +511,8 @@ export const FolderViewModal: React.FC<FolderViewModalProps> = ({
 
               const dateRange = j.schedDate
                 ? j.schedEndDate && j.schedEndDate !== j.schedDate
-                  ? `${j.schedDate} ➔ ${j.schedEndDate}`
-                  : j.schedDate
+                  ? `${formatScheduledDate(j.schedDate)} ➔ ${formatScheduledDate(j.schedEndDate)}`
+                  : formatScheduledDate(j.schedDate)
                 : 'No Date Set';
 
               return (
@@ -493,6 +532,7 @@ export const FolderViewModal: React.FC<FolderViewModalProps> = ({
                   <div className="pr-12">
                     <input
                       type="text"
+                      autoComplete="off"
                       defaultValue={j.title || `Project #${idx + 1}`}
                       onBlur={(e) => {
                         const updatedJobs = customer.jobs.map((item) =>
@@ -509,10 +549,10 @@ export const FolderViewModal: React.FC<FolderViewModalProps> = ({
 
                   <div className="flex items-center justify-between border-y border-dashed border-[var(--border)] py-1.5">
                     <span
-                      style={{ backgroundColor: statusBg, color: j.status === 'PENDING' ? '#000' : '#fff' }}
+                      style={{ backgroundColor: statusBg, color: stageMeta.textColor }}
                       className="text-[8px] font-black uppercase px-2 py-0.5 rounded"
                     >
-                      {j.status}
+                      {stageMeta.label}
                     </span>
                     <span className="text-base font-black text-[var(--accent)]">${gross}</span>
                   </div>

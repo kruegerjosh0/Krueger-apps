@@ -1,5 +1,14 @@
-import React, { useState, useRef } from 'react';
-import { Customer, LocationInfo, WeatherCondition } from '../types';
+import React, { useState, useRef, useMemo } from 'react';
+import { Customer, JobProject, LocationInfo, WeatherCondition } from '../types';
+import {
+  PipelineStage,
+  PIPELINE_STAGE_META,
+  getCustomerPipelineStage,
+  isJobScheduled,
+  parseLocalDateMs,
+  formatScheduledDate,
+  getLocalTodayIso,
+} from '../utils/projectHelpers';
 
 interface DashboardViewProps {
   customers: Customer[];
@@ -13,6 +22,16 @@ interface DashboardViewProps {
   onTogglePin: (customerId: number, e: React.MouseEvent) => void;
   onOpenBackupModal?: () => void;
 }
+
+interface ScheduledQuickItem {
+  key: string;
+  customer: Customer;
+  job?: JobProject;
+  schedDate: string;
+  sortMs: number | null;
+}
+
+const TOP_CARD_LIMIT = 3;
 
 export const DashboardView: React.FC<DashboardViewProps> = ({
   customers,
@@ -28,85 +47,155 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
 }) => {
   const [searchQuery, setSearchQuery] = useState('');
   const [folderExpanded, setFolderExpanded] = useState<Record<string, boolean>>({});
-  const [selectedFilter, setSelectedFilter] = useState<'ALL' | 'ACTIVE' | 'SCHEDULED' | 'NEW' | 'PENDING'>('ALL');
+  const [selectedFilter, setSelectedFilter] = useState<'ALL' | PipelineStage>('ALL');
   const folderListRef = useRef<HTMLDivElement | null>(null);
 
-  const todayStr = new Date().toISOString().split('T')[0];
-
-  // Total job project metrics across all accounts
-  const allJobs = customers.flatMap((c) => c.jobs || []);
-  const totalActiveJobs = allJobs.filter((j) => j.status === 'ACTIVE').length;
-  const totalScheduledJobs = allJobs.filter(
-    (j) => j.status === 'SCHEDULED' || (j.schedDate && j.status !== 'COMPLETED')
-  ).length;
-  const totalPendingJobs = allJobs.filter((j) => j.status === 'PENDING').length;
-
-  // Filter customers based on search
-  const q = searchQuery.toLowerCase().trim();
-  const filtered = customers.filter(
-    (c) =>
-      c.name.toLowerCase().includes(q) ||
-      (c.address && c.address.toLowerCase().includes(q)) ||
-      (c.phone && c.phone.includes(q))
-  );
-
-  // Group customers by categories
-  const pinnedCusts: Customer[] = [];
-  const scheduledCusts: Customer[] = [];
-  const pendingLeads: Customer[] = [];
-  const newCusts: Customer[] = [];
-  const completedCusts: Customer[] = [];
-  const archiveCusts: Customer[] = [];
-
-  filtered.forEach((c) => {
-    if (c.isPinned) {
-      pinnedCusts.push(c);
-    }
-
-    let status = c.statusOverride && c.statusOverride !== 'AUTO' ? c.statusOverride : 'NEW';
-    if (!c.statusOverride || c.statusOverride === 'AUTO') {
-      if (c.jobs && c.jobs.length > 0) {
-        if (
-          c.jobs.some(
-            (j) =>
-              j.status === 'SCHEDULED' ||
-              (j.schedDate && j.status !== 'COMPLETED')
-          )
-        )
-          status = 'SCHEDULED';
-        else if (c.jobs.some((j) => j.status === 'COMPLETED')) status = 'COMPLETED';
-        else if (c.jobs.some((j) => j.status === 'OTHER'))
-          status = 'ARCHIVE';
-        else status = 'PENDING';
-      }
-    }
-
-    if (status === 'SCHEDULED') scheduledCusts.push(c);
-    else if (status === 'PENDING') pendingLeads.push(c);
-    else if (status === 'NEW') newCusts.push(c);
-    else if (status === 'COMPLETED') completedCusts.push(c);
-    else archiveCusts.push(c);
-  });
-
-  const sortByActive = (a: Customer, b: Customer) => (b.lastActive || 0) - (a.lastActive || 0);
-  pinnedCusts.sort(sortByActive);
-  scheduledCusts.sort(sortByActive);
-  pendingLeads.sort(sortByActive);
-  newCusts.sort(sortByActive);
-  completedCusts.sort(sortByActive);
-  archiveCusts.sort(sortByActive);
-
-  // Active, Scheduled, Pinned, and New Leads open by default
+  // Active & Scheduled open by default; Pending & Complete / Paid collapsed by default
   const [folderOpenState, setFolderOpenState] = useState<Record<string, boolean>>({
     pinned: true,
     active: true,
     scheduled: true,
-    new: true,
     pending: false,
     completed: false,
-    paid: false,
-    archive: false,
   });
+
+  const todayStr = getLocalTodayIso();
+  const todayMs = parseLocalDateMs(todayStr) ?? 0;
+
+  // Filter customers live by client name or street address (plus phone convenience)
+  const q = searchQuery.toLowerCase().trim();
+  const filtered = useMemo(() => {
+    if (!q) return customers;
+    return customers.filter(
+      (c) =>
+        (c.name || '').toLowerCase().includes(q) ||
+        (c.address || '').toLowerCase().includes(q) ||
+        (c.phone || '').toLowerCase().includes(q)
+    );
+  }, [customers, q]);
+
+  // Helper: earliest upcoming scheduled date ms for a customer (used for Scheduled folder sorting & card badge)
+  const getCustomerNextSchedDate = (c: Customer): string => {
+    const datedJobs = (c.jobs || [])
+      .filter((j) => isJobScheduled(j) && j.schedDate)
+      .sort((a, b) => {
+        const msA = parseLocalDateMs(a.schedDate) ?? Number.MAX_SAFE_INTEGER;
+        const msB = parseLocalDateMs(b.schedDate) ?? Number.MAX_SAFE_INTEGER;
+        return msA - msB;
+      });
+    if (datedJobs.length > 0) return datedJobs[0].schedDate;
+    const anyDated = (c.jobs || []).find((j) => j.schedDate);
+    return anyDated?.schedDate || '';
+  };
+
+  // Group filtered customers into the 4 clean pipeline stages + independent Pinned list
+  const { pinnedCusts, activeCusts, scheduledCusts, pendingCusts, completedCusts } = useMemo(() => {
+    const pinned: Customer[] = [];
+    const active: Customer[] = [];
+    const scheduled: Customer[] = [];
+    const pending: Customer[] = [];
+    const completed: Customer[] = [];
+
+    filtered.forEach((c) => {
+      if (c.isPinned) {
+        pinned.push(c);
+      }
+
+      const stage = getCustomerPipelineStage(c);
+      if (stage === 'ACTIVE') active.push(c);
+      else if (stage === 'SCHEDULED') scheduled.push(c);
+      else if (stage === 'PENDING') pending.push(c);
+      else completed.push(c);
+    });
+
+    // Prioritize pinned customers first, then most recently active
+    const sortPinnedThenActive = (a: Customer, b: Customer) => {
+      if (Boolean(a.isPinned) !== Boolean(b.isPinned)) {
+        return a.isPinned ? -1 : 1;
+      }
+      return (b.lastActive || 0) - (a.lastActive || 0);
+    };
+
+    // For Scheduled folder: pinned first, then soonest scheduled date chronologically
+    const sortScheduledFolder = (a: Customer, b: Customer) => {
+      if (Boolean(a.isPinned) !== Boolean(b.isPinned)) {
+        return a.isPinned ? -1 : 1;
+      }
+      const msA = parseLocalDateMs(getCustomerNextSchedDate(a));
+      const msB = parseLocalDateMs(getCustomerNextSchedDate(b));
+      if (msA !== null && msB !== null && msA !== msB) return msA - msB;
+      if (msA !== null && msB === null) return -1;
+      if (msA === null && msB !== null) return 1;
+      return (b.lastActive || 0) - (a.lastActive || 0);
+    };
+
+    pinned.sort((a, b) => (b.lastActive || 0) - (a.lastActive || 0));
+    active.sort(sortPinnedThenActive);
+    scheduled.sort(sortScheduledFolder);
+    pending.sort(sortPinnedThenActive);
+    completed.sort(sortPinnedThenActive);
+
+    return {
+      pinnedCusts: pinned,
+      activeCusts: active,
+      scheduledCusts: scheduled,
+      pendingCusts: pending,
+      completedCusts: completed,
+    };
+  }, [filtered]);
+
+  // Overall (unfiltered) stage counts for top KPI tiles
+  const stageCounts = useMemo(() => {
+    const counts: Record<PipelineStage, number> = {
+      ACTIVE: 0,
+      SCHEDULED: 0,
+      PENDING: 0,
+      COMPLETED: 0,
+    };
+    customers.forEach((c) => {
+      counts[getCustomerPipelineStage(c)] += 1;
+    });
+    return counts;
+  }, [customers]);
+
+  // Strictly chronologically sorted Scheduled Jobs Quick List (soonest date first)
+  const chronologicalScheduledJobs = useMemo<ScheduledQuickItem[]>(() => {
+    const items: ScheduledQuickItem[] = [];
+
+    customers.forEach((cust) => {
+      const custSchedJobs = (cust.jobs || []).filter((j) => isJobScheduled(j));
+      if (custSchedJobs.length > 0) {
+        custSchedJobs.forEach((job) => {
+          items.push({
+            key: `${cust.id}-${job.id}`,
+            customer: cust,
+            job,
+            schedDate: job.schedDate || '',
+            sortMs: parseLocalDateMs(job.schedDate),
+          });
+        });
+      } else if (getCustomerPipelineStage(cust) === 'SCHEDULED') {
+        items.push({
+          key: `${cust.id}-override`,
+          customer: cust,
+          schedDate: '',
+          sortMs: null,
+        });
+      }
+    });
+
+    items.sort((a, b) => {
+      if (a.sortMs !== null && b.sortMs !== null) {
+        if (a.sortMs !== b.sortMs) return a.sortMs - b.sortMs;
+        return a.customer.name.localeCompare(b.customer.name);
+      }
+      if (a.sortMs !== null) return -1;
+      if (b.sortMs !== null) return 1;
+      return a.customer.name.localeCompare(b.customer.name);
+    });
+
+    return items;
+  }, [customers]);
 
   const toggleFolderOpen = (key: string) => {
     setFolderOpenState((prev) => ({ ...prev, [key]: !prev[key] }));
@@ -116,49 +205,137 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
     setFolderExpanded((prev) => ({ ...prev, [key]: !prev[key] }));
   };
 
-  const handleStatTileClick = (category: 'SCHEDULED' | 'NEW' | 'PENDING') => {
-    setSelectedFilter(category);
-    if (category === 'SCHEDULED') {
-      setFolderOpenState((prev) => ({ ...prev, active: true, pinned: true }));
-      setFolderExpanded((prev) => ({ ...prev, active: true }));
-    } else if (category === 'NEW') {
-      setFolderOpenState((prev) => ({ ...prev, new: true }));
-      setFolderExpanded((prev) => ({ ...prev, new: true }));
-    } else if (category === 'PENDING') {
-      setFolderOpenState((prev) => ({ ...prev, pending: true }));
-      setFolderExpanded((prev) => ({ ...prev, pending: true }));
-    }
+  const handleStatTileClick = (stage: PipelineStage) => {
+    const folderKey =
+      stage === 'ACTIVE'
+        ? 'active'
+        : stage === 'SCHEDULED'
+        ? 'scheduled'
+        : stage === 'PENDING'
+        ? 'pending'
+        : 'completed';
+
+    setSelectedFilter((prev) => (prev === stage ? 'ALL' : stage));
+    setFolderOpenState((prev) => ({ ...prev, [folderKey]: true }));
     setTimeout(() => {
-      folderListRef.current?.scrollIntoView({ behavior: 'smooth' });
-    }, 100);
+      folderListRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }, 80);
+  };
+
+  const renderCustomerCard = (c: Customer, keyPrefix: string) => {
+    const stage = getCustomerPipelineStage(c);
+    const meta = PIPELINE_STAGE_META[stage];
+    const nextSchedDate = getCustomerNextSchedDate(c);
+    const isTodayWork = Boolean(nextSchedDate && nextSchedDate === todayStr);
+    const mapUrl = `http://maps.google.com/?q=${encodeURIComponent(c.address || '')}`;
+
+    return (
+      <div
+        key={`${keyPrefix}-${c.id}`}
+        className="bg-[var(--bg)] border border-[var(--border)] rounded-lg p-3 hover:border-[#f1c40f] transition-all"
+      >
+        <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-2">
+          <div
+            onClick={() => onOpenFolder(c.id)}
+            className="flex-1 cursor-pointer hover:opacity-85 transition-opacity min-w-0"
+          >
+            <div className="font-extrabold text-xs text-[var(--text)] flex items-center gap-1.5">
+              {c.isPinned && <span className="text-[#f1c40f]" title="Pinned Priority">★</span>}
+              <span className="truncate">{c.name}</span>
+            </div>
+            <div className="text-[11px] text-[var(--text-muted)] line-clamp-1">
+              {c.address || 'No address logged'}
+            </div>
+          </div>
+
+          <div className="flex flex-wrap items-center justify-end gap-1.5 shrink-0">
+            <button
+              type="button"
+              onClick={(e) => onTogglePin(c.id, e)}
+              aria-label={c.isPinned ? 'Unpin customer' : 'Pin customer to top'}
+              className={`text-[9.5px] font-extrabold px-2 py-0.5 rounded border transition-all cursor-pointer active:scale-95 ${
+                c.isPinned
+                  ? 'bg-[#f1c40f] text-[#231709] border-[#f1c40f] shadow-xs'
+                  : 'bg-transparent text-[var(--text-muted)] border-[var(--border)] hover:border-[#f1c40f] hover:text-[#f1c40f]'
+              }`}
+            >
+              {c.isPinned ? '★ Pinned' : '☆ Pin'}
+            </button>
+
+            {isTodayWork && (
+              <span className="bg-red-500 text-white text-[8px] font-black uppercase px-1.5 py-0.5 rounded">
+                TODAY
+              </span>
+            )}
+
+            {nextSchedDate && (
+              <span className="bg-[#0a84ff]/15 text-[#60a5fa] border border-[#0a84ff]/35 text-[8.5px] font-bold px-1.5 py-0.5 rounded">
+                📅 {formatScheduledDate(nextSchedDate)}
+              </span>
+            )}
+
+            <span
+              style={{ backgroundColor: meta.color, color: meta.textColor }}
+              className="text-[8px] font-black uppercase px-2 py-0.5 rounded"
+            >
+              {meta.label}
+            </span>
+          </div>
+        </div>
+
+        {/* Quick Call, Text, Map Bar */}
+        <div className="flex gap-1.5 mt-2.5 pt-2 border-t border-dashed border-[var(--border)]">
+          <a
+            href={`tel:${c.phone || ''}`}
+            onClick={(e) => e.stopPropagation()}
+            className="flex-1 text-center py-1 bg-[var(--surface-subtle)] hover:bg-[var(--accent)] hover:text-white rounded border border-[var(--border)] text-[10px] font-bold text-[var(--text)] transition-colors"
+          >
+            📞 Call
+          </a>
+          <a
+            href={`sms:${c.phone || ''}`}
+            onClick={(e) => e.stopPropagation()}
+            className="flex-1 text-center py-1 bg-[var(--surface-subtle)] hover:bg-[var(--accent)] hover:text-white rounded border border-[var(--border)] text-[10px] font-bold text-[var(--text)] transition-colors"
+          >
+            💬 Text
+          </a>
+          <a
+            href={mapUrl}
+            target="_blank"
+            rel="noreferrer"
+            onClick={(e) => e.stopPropagation()}
+            className="flex-1 text-center py-1 bg-[var(--surface-subtle)] hover:bg-[var(--accent)] hover:text-white rounded border border-[var(--border)] text-[10px] font-bold text-[var(--text)] transition-colors"
+          >
+            🗺️ Map
+          </a>
+        </div>
+      </div>
+    );
   };
 
   const renderFolderGroup = (
-    key: string,
+    key: 'pinned' | 'active' | 'scheduled' | 'pending' | 'completed',
     title: string,
     colorBorder: string,
     list: Customer[],
-    emptyDesc?: string
+    emptyDesc: string,
+    stageFilterMatch?: PipelineStage
   ) => {
-    // If user filtered to another specific category, don't render this group
     if (selectedFilter !== 'ALL') {
-      if (selectedFilter === 'SCHEDULED' && key !== 'scheduled') return null;
-      if (selectedFilter === 'NEW' && key !== 'new') return null;
-      if (selectedFilter === 'PENDING' && key !== 'pending') return null;
+      if (key === 'pinned') return null;
+      if (stageFilterMatch && selectedFilter !== stageFilterMatch) return null;
     }
 
-    // If empty and not specifically filtered, hide to save space
+    // Hide empty folders unless user explicitly selected that filter tab
     if (list.length === 0) {
-      if (selectedFilter !== 'ALL') {
+      if (selectedFilter !== 'ALL' && stageFilterMatch === selectedFilter) {
         return (
           <div
             className="bg-[var(--surface)] border border-[var(--border)] rounded-xl p-5 text-center mb-3 shadow-sm"
             style={{ borderLeft: `4px solid ${colorBorder}` }}
           >
             <div className="font-extrabold text-xs text-[var(--text)] mb-1">{title}</div>
-            <p className="text-[11px] text-[var(--text-muted)] max-w-sm mx-auto">
-              {emptyDesc || 'No customer records in this folder right now.'}
-            </p>
+            <p className="text-[11px] text-[var(--text-muted)] max-w-sm mx-auto">{emptyDesc}</p>
           </div>
         );
       }
@@ -166,9 +343,9 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
     }
 
     const isOpen = q.length > 0 || selectedFilter !== 'ALL' || !!folderOpenState[key];
-    const isExpanded = q.length > 0 || selectedFilter !== 'ALL' || !!folderExpanded[key];
-    // Default show up to 5 items for better field visibility
-    const visibleItems = isExpanded ? list : list.slice(0, 5);
+    const isExpanded = q.length > 0 || !!folderExpanded[key];
+    const shouldCapAtThree = key !== 'pinned' && !isExpanded && list.length > TOP_CARD_LIMIT;
+    const visibleItems = shouldCapAtThree ? list.slice(0, TOP_CARD_LIMIT) : list;
 
     return (
       <div
@@ -185,132 +362,23 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
             <span className="bg-[#2c2317] text-[#f1c40f] text-[10px] font-black px-2 py-0.5 rounded-full border border-[#f1c40f]/30">
               {list.length}
             </span>
-            {isOpen && list.length > 2 && !isExpanded && q.length === 0 && (
-              <span className="text-[10px] text-gray-400 font-normal">
-                (showing 2 of {list.length})
+            {isOpen && shouldCapAtThree && (
+              <span className="text-[10px] text-[var(--text-muted)] font-normal">
+                (showing top {TOP_CARD_LIMIT} of {list.length})
               </span>
             )}
           </div>
-          <span className="text-[11px] font-bold text-gray-400">{isOpen ? '▲' : '▼'}</span>
+          <span className="text-[11px] font-bold text-[var(--text-muted)]">
+            {isOpen ? '▲' : '▼'}
+          </span>
         </button>
 
         {isOpen && (
           <div className="p-3 space-y-2">
-            {visibleItems.map((c) => {
-              let s = c.statusOverride && c.statusOverride !== 'AUTO' ? c.statusOverride : 'NEW';
-              let isTodayWork = false;
-              let schedDateVal = '';
+            {visibleItems.map((c) => renderCustomerCard(c, key))}
 
-              if (!c.statusOverride || c.statusOverride === 'AUTO') {
-                if (c.jobs && c.jobs.length > 0) {
-                  const activeJob = c.jobs.find((j) => j.status === 'PENDING');
-                  if (activeJob) {
-                    s = activeJob.status;
-                    if (activeJob.schedDate === todayStr) isTodayWork = true;
-                    if (activeJob.schedDate) schedDateVal = activeJob.schedDate;
-                  } else {
-                    s = c.jobs[0].status;
-                    if (c.jobs[0].schedDate) schedDateVal = c.jobs[0].schedDate;
-                  }
-                }
-              } else if (c.jobs && c.jobs.length > 0) {
-                const firstSched = c.jobs.find((j) => j.schedDate);
-                if (firstSched) schedDateVal = firstSched.schedDate;
-              }
-
-              const pillBg =
-                s === 'SCHEDULED'
-                  ? '#0a84ff'
-                  : s === 'COMPLETED'
-                  ? '#ff9f0a'
-                  : s === 'NEW'
-                  ? '#ffd60a'
-                  : '#bf5af2';
-
-              const mapUrl = `http://maps.google.com/?q=${encodeURIComponent(c.address || '')}`;
-
-              return (
-                <div
-                  key={c.id}
-                  className="bg-[var(--bg)] border border-[var(--border)] rounded-lg p-3 hover:border-[var(--accent)] transition-all"
-                >
-                  <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-2">
-                    <div
-                      onClick={() => onOpenFolder(c.id)}
-                      className="flex-1 cursor-pointer hover:opacity-80 transition-opacity"
-                    >
-                      <div className="font-extrabold text-xs text-[var(--text)]">{c.name}</div>
-                      <div className="text-[11px] text-[var(--text-muted)] line-clamp-1">
-                        {c.address || 'No address logged'}
-                      </div>
-                    </div>
-
-                    <div className="flex flex-wrap items-center justify-end gap-1.5">
-                      <button
-                        type="button"
-                        onClick={(e) => onTogglePin(c.id, e)}
-                        className={`text-[9px] font-bold px-2 py-0.5 rounded border transition-all cursor-pointer ${
-                          c.isPinned
-                            ? 'bg-[var(--accent)] text-white border-[var(--accent)]'
-                            : 'bg-transparent text-[var(--text-muted)] border-[var(--border)]'
-                        }`}
-                      >
-                        {c.isPinned ? '📌 Pinned' : 'Pin'}
-                      </button>
-
-                      {isTodayWork && (
-                        <span className="bg-red-500 text-white text-[8px] font-black uppercase px-1.5 py-0.5 rounded">
-                          📌 Today
-                        </span>
-                      )}
-
-                      {schedDateVal && (
-                        <span className="bg-[var(--accent-secondary)] text-white text-[8px] font-bold px-1.5 py-0.5 rounded">
-                          📅 {schedDateVal}
-                        </span>
-                      )}
-
-                      <span
-                        style={{ backgroundColor: pillBg, color: s === 'NEW' ? '#000' : '#fff' }}
-                        className="text-[8px] font-black uppercase px-2 py-0.5 rounded"
-                      >
-                        {s}
-                      </span>
-                    </div>
-                  </div>
-
-                  {/* Quick Call, Text, Map Bar */}
-                  <div className="flex gap-1.5 mt-2.5 pt-2 border-t border-dashed border-[var(--border)]">
-                    <a
-                      href={`tel:${c.phone || ''}`}
-                      onClick={(e) => e.stopPropagation()}
-                      className="flex-1 text-center py-1 bg-[var(--surface-subtle)] hover:bg-[var(--accent)] hover:text-white rounded border border-[var(--border)] text-[10px] font-bold text-[var(--text)] transition-colors"
-                    >
-                      📞 Call
-                    </a>
-                    <a
-                      href={`sms:${c.phone || ''}`}
-                      onClick={(e) => e.stopPropagation()}
-                      className="flex-1 text-center py-1 bg-[var(--surface-subtle)] hover:bg-[var(--accent)] hover:text-white rounded border border-[var(--border)] text-[10px] font-bold text-[var(--text)] transition-colors"
-                    >
-                      💬 Text
-                    </a>
-                    <a
-                      href={mapUrl}
-                      target="_blank"
-                      rel="noreferrer"
-                      onClick={(e) => e.stopPropagation()}
-                      className="flex-1 text-center py-1 bg-[var(--surface-subtle)] hover:bg-[var(--accent)] hover:text-white rounded border border-[var(--border)] text-[10px] font-bold text-[var(--text)] transition-colors"
-                    >
-                      🗺️ Map
-                    </a>
-                  </div>
-                </div>
-              );
-            })}
-
-            {/* EXPAND BUTTON: Shows 2 customers, click to expand all customers */}
-            {list.length > 2 && q.length === 0 && (
+            {/* Show All (X) / Show Top 3 Toggle */}
+            {key !== 'pinned' && list.length > TOP_CARD_LIMIT && q.length === 0 && (
               <button
                 type="button"
                 onClick={() => toggleFolderExpanded(key)}
@@ -318,9 +386,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
               >
                 <span>{isExpanded ? '▲' : '▼'}</span>
                 <span>
-                  {isExpanded
-                    ? `Collapse (Showing All ${list.length})`
-                    : `Expand (${list.length - 2} More Customers)`}
+                  {isExpanded ? `Show Top ${TOP_CARD_LIMIT}` : `Show All (${list.length})`}
                 </span>
               </button>
             )}
@@ -332,7 +398,6 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
 
   return (
     <div className="space-y-3.5 max-w-2xl mx-auto pb-20">
-      {/* Weather Quick Banner with Location Selector & Follow Me Controls */}
       {/* Weather Header Bar */}
       <div
         onClick={onOpenWeatherHub}
@@ -360,7 +425,9 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
           </div>
 
           <div className="text-[10px] sm:text-[11px] text-[var(--text-muted)] mt-1 flex items-center gap-2 flex-wrap">
-            <span className="truncate">{currentWeather ? currentWeather.conditionText : 'Tap for spray forecast'}</span>
+            <span className="truncate">
+              {currentWeather ? currentWeather.conditionText : 'Tap for spray forecast'}
+            </span>
             {onToggleFollowMe && (
               <button
                 type="button"
@@ -421,9 +488,31 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
         </div>
       )}
 
-      {/* Quick Dashboard Stat Tiles (Active Jobs, Scheduled, New Leads, Pending Bids) */}
+      {/* 4 Clean Pipeline Stage Stat Tiles */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5 sm:gap-2">
-        {/* Scheduled Jobs */}
+        {/* Active */}
+        <button
+          type="button"
+          onClick={() => handleStatTileClick('ACTIVE')}
+          className={`bg-[var(--surface)] hover:bg-[var(--surface-subtle)] border p-2.5 sm:p-3 rounded-xl border-l-4 border-l-[#30d158] shadow-xs text-left transition-all active:scale-95 cursor-pointer ${
+            selectedFilter === 'ACTIVE' ? 'ring-2 ring-[#30d158] border-[#30d158]' : 'border-[var(--border)]'
+          }`}
+        >
+          <div className="flex items-center justify-between">
+            <span className="text-lg sm:text-2xl font-black text-[#30d158] block leading-none">
+              {stageCounts.ACTIVE}
+            </span>
+            <span className="text-xs">🎨</span>
+          </div>
+          <span className="text-[9.5px] sm:text-[10px] uppercase font-extrabold text-[var(--text)] tracking-wider mt-1 block truncate">
+            Active
+          </span>
+          <span className="text-[8.5px] sm:text-[9px] text-[var(--text-muted)] truncate block">
+            In progress
+          </span>
+        </button>
+
+        {/* Scheduled */}
         <button
           type="button"
           onClick={() => handleStatTileClick('SCHEDULED')}
@@ -433,7 +522,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
         >
           <div className="flex items-center justify-between">
             <span className="text-lg sm:text-2xl font-black text-[#0a84ff] block leading-none">
-              {totalScheduledJobs > 0 ? totalScheduledJobs : scheduledCusts.length}
+              {stageCounts.SCHEDULED}
             </span>
             <span className="text-xs">📅</span>
           </div>
@@ -441,170 +530,261 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
             Scheduled
           </span>
           <span className="text-[8.5px] sm:text-[9px] text-[var(--text-muted)] truncate block">
-            {scheduledCusts.length} upcoming
+            Upcoming jobs
           </span>
         </button>
 
-        {/* New Leads */}
+        {/* Pending */}
         <button
           type="button"
-          onClick={() => handleStatTileClick('NEW')}
+          onClick={() => handleStatTileClick('PENDING')}
           className={`bg-[var(--surface)] hover:bg-[var(--surface-subtle)] border p-2.5 sm:p-3 rounded-xl border-l-4 border-l-[#f1c40f] shadow-xs text-left transition-all active:scale-95 cursor-pointer ${
-            selectedFilter === 'NEW' ? 'ring-2 ring-[#f1c40f] border-[#f1c40f]' : 'border-[var(--border)]'
+            selectedFilter === 'PENDING' ? 'ring-2 ring-[#f1c40f] border-[#f1c40f]' : 'border-[var(--border)]'
           }`}
         >
           <div className="flex items-center justify-between">
             <span className="text-lg sm:text-2xl font-black text-[#f1c40f] block leading-none">
-              {newCusts.length}
-            </span>
-            <span className="text-xs">✨</span>
-          </div>
-          <span className="text-[9.5px] sm:text-[10px] uppercase font-extrabold text-[var(--text)] tracking-wider mt-1 block truncate">
-            New Leads
-          </span>
-          <span className="text-[8.5px] sm:text-[9px] text-[var(--text-muted)] truncate block">Inquiries</span>
-        </button>
-
-        {/* Pending Bids */}
-        <button
-          type="button"
-          onClick={() => handleStatTileClick('PENDING')}
-          className={`bg-[var(--surface)] hover:bg-[var(--surface-subtle)] border p-2.5 sm:p-3 rounded-xl border-l-4 border-l-[var(--accent-secondary)] shadow-xs text-left transition-all active:scale-95 cursor-pointer ${
-            selectedFilter === 'PENDING' ? 'ring-2 ring-[var(--accent-secondary)] border-[var(--accent-secondary)]' : 'border-[var(--border)]'
-          }`}
-        >
-          <div className="flex items-center justify-between">
-            <span className="text-lg sm:text-2xl font-black text-[var(--accent-secondary)] block leading-none">
-              {totalPendingJobs > 0 ? totalPendingJobs : pendingLeads.length}
+              {stageCounts.PENDING}
             </span>
             <span className="text-xs">⏳</span>
           </div>
           <span className="text-[9.5px] sm:text-[10px] uppercase font-extrabold text-[var(--text)] tracking-wider mt-1 block truncate">
-            Pending Bids
+            Pending
           </span>
           <span className="text-[8.5px] sm:text-[9px] text-[var(--text-muted)] truncate block">
-            {pendingLeads.length} awaiting
+            Estimates &amp; leads
+          </span>
+        </button>
+
+        {/* Complete / Paid */}
+        <button
+          type="button"
+          onClick={() => handleStatTileClick('COMPLETED')}
+          className={`bg-[var(--surface)] hover:bg-[var(--surface-subtle)] border p-2.5 sm:p-3 rounded-xl border-l-4 border-l-[#38bdf8] shadow-xs text-left transition-all active:scale-95 cursor-pointer ${
+            selectedFilter === 'COMPLETED' ? 'ring-2 ring-[#38bdf8] border-[#38bdf8]' : 'border-[var(--border)]'
+          }`}
+        >
+          <div className="flex items-center justify-between">
+            <span className="text-lg sm:text-2xl font-black text-[#38bdf8] block leading-none">
+              {stageCounts.COMPLETED}
+            </span>
+            <span className="text-xs">✅</span>
+          </div>
+          <span className="text-[9.5px] sm:text-[10px] uppercase font-extrabold text-[var(--text)] tracking-wider mt-1 block truncate">
+            Complete / Paid
+          </span>
+          <span className="text-[8.5px] sm:text-[9px] text-[var(--text-muted)] truncate block">
+            Finished jobs
           </span>
         </button>
       </div>
 
-      {/* Quick Action Bar (+ New Customer) */}
+      {/* Quick Action Bar (+ Add New Customer) */}
       <button
         type="button"
         onClick={onOpenNewCustomer}
-        className="w-full py-3 bg-[var(--accent)] hover:opacity-95 text-[#231709] font-black text-xs rounded-xl shadow-md cursor-pointer transition-transform active:scale-95 flex items-center justify-center gap-2"
+        className="w-full py-3 bg-[#f1c40f] hover:bg-[#d4ac0d] text-[#231709] font-black text-xs rounded-xl shadow-md cursor-pointer transition-transform active:scale-95 flex items-center justify-center gap-2"
       >
         <span>➕</span>
         <span>Add New Customer</span>
       </button>
 
-      {/* Search Input */}
-      <input
-        type="text"
-        value={searchQuery}
-        onChange={(e) => setSearchQuery(e.target.value)}
-        placeholder="🔍 Search clients, addresses, or phone numbers..."
-        className="w-full bg-[var(--surface)] border border-[var(--border)] focus:border-[var(--accent)] text-[var(--text)] rounded-xl px-4 py-3 text-sm outline-none shadow-sm transition-all"
-      />
+      {/* Customer Section Header + Fast Live Search Bar */}
+      <div ref={folderListRef} className="space-y-2.5 pt-1">
+        <div className="relative">
+          <input
+            type="text"
+            autoComplete="off"
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            placeholder="🔍 Search clients by name or street address..."
+            className="w-full bg-[var(--surface)] border border-[var(--border)] focus:border-[#f1c40f] text-[var(--text)] rounded-xl pl-4 pr-10 py-3 text-sm outline-none shadow-sm transition-all"
+          />
+          {searchQuery && (
+            <button
+              type="button"
+              onClick={() => setSearchQuery('')}
+              aria-label="Clear search"
+              className="absolute right-3 top-1/2 -translate-y-1/2 text-xs font-black text-[var(--text-muted)] hover:text-[var(--text)] px-1.5 py-0.5 rounded cursor-pointer"
+            >
+              ✕
+            </button>
+          )}
+        </div>
 
-      {/* Category Quick Filter Pills */}
-      <div className="flex items-center gap-1.5 overflow-x-auto pb-1 no-scrollbar text-xs">
-        <button
-          type="button"
-          onClick={() => setSelectedFilter('ALL')}
-          className={`px-3 py-1.5 rounded-lg font-bold transition-colors cursor-pointer flex-shrink-0 ${
-            selectedFilter === 'ALL'
-              ? 'bg-[var(--accent)] text-white'
-              : 'bg-[var(--surface-subtle)] text-[var(--text-muted)] border border-[var(--border)] hover:text-[var(--text)]'
-          }`}
-        >
-          All Clients ({filtered.length})
-        </button>
+        {/* Pipeline Stage Filter Pills */}
+        <div className="flex items-center gap-1.5 overflow-x-auto pb-1 no-scrollbar text-xs">
+          <button
+            type="button"
+            onClick={() => setSelectedFilter('ALL')}
+            className={`px-3 py-1.5 rounded-lg font-bold transition-colors cursor-pointer flex-shrink-0 ${
+              selectedFilter === 'ALL'
+                ? 'bg-[#f1c40f] text-[#231709] font-black'
+                : 'bg-[var(--surface-subtle)] text-[var(--text-muted)] border border-[var(--border)] hover:text-[var(--text)]'
+            }`}
+          >
+            All Clients ({filtered.length})
+          </button>
 
-        <button
-          type="button"
-          onClick={() => setSelectedFilter('SCHEDULED')}
-          className={`px-3 py-1.5 rounded-lg font-bold transition-colors cursor-pointer flex-shrink-0 flex items-center gap-1.5 ${
-            selectedFilter === 'SCHEDULED'
-              ? 'bg-[#0a84ff] text-white'
-              : 'bg-[var(--surface-subtle)] text-[var(--text-muted)] border border-[var(--border)] hover:text-[var(--text)]'
-          }`}
-        >
-          <span>📅</span>
-          <span>Scheduled ({scheduledCusts.length})</span>
-        </button>
+          <button
+            type="button"
+            onClick={() => setSelectedFilter('ACTIVE')}
+            className={`px-3 py-1.5 rounded-lg font-bold transition-colors cursor-pointer flex-shrink-0 flex items-center gap-1.5 ${
+              selectedFilter === 'ACTIVE'
+                ? 'bg-[#30d158] text-white'
+                : 'bg-[var(--surface-subtle)] text-[var(--text-muted)] border border-[var(--border)] hover:text-[var(--text)]'
+            }`}
+          >
+            <span>🎨</span>
+            <span>Active ({activeCusts.length})</span>
+          </button>
 
-        <button
-          type="button"
-          onClick={() => setSelectedFilter('NEW')}
-          className={`px-3 py-1.5 rounded-lg font-bold transition-colors cursor-pointer flex-shrink-0 flex items-center gap-1.5 ${
-            selectedFilter === 'NEW'
-              ? 'bg-[#f1c40f] text-[#231709] font-black'
-              : 'bg-[var(--surface-subtle)] text-[var(--text-muted)] border border-[var(--border)] hover:text-[var(--text)]'
-          }`}
-        >
-          <span>✨</span>
-          <span>New Leads ({newCusts.length})</span>
-        </button>
+          <button
+            type="button"
+            onClick={() => setSelectedFilter('SCHEDULED')}
+            className={`px-3 py-1.5 rounded-lg font-bold transition-colors cursor-pointer flex-shrink-0 flex items-center gap-1.5 ${
+              selectedFilter === 'SCHEDULED'
+                ? 'bg-[#0a84ff] text-white'
+                : 'bg-[var(--surface-subtle)] text-[var(--text-muted)] border border-[var(--border)] hover:text-[var(--text)]'
+            }`}
+          >
+            <span>📅</span>
+            <span>Scheduled ({scheduledCusts.length})</span>
+          </button>
 
-        <button
-          type="button"
-          onClick={() => setSelectedFilter('PENDING')}
-          className={`px-3 py-1.5 rounded-lg font-bold transition-colors cursor-pointer flex-shrink-0 flex items-center gap-1.5 ${
-            selectedFilter === 'PENDING'
-              ? 'bg-[var(--accent-secondary)] text-white'
-              : 'bg-[var(--surface-subtle)] text-[var(--text-muted)] border border-[var(--border)] hover:text-[var(--text)]'
-          }`}
-        >
-          <span>⏳</span>
-          <span>Pending ({pendingLeads.length})</span>
-        </button>
+          <button
+            type="button"
+            onClick={() => setSelectedFilter('PENDING')}
+            className={`px-3 py-1.5 rounded-lg font-bold transition-colors cursor-pointer flex-shrink-0 flex items-center gap-1.5 ${
+              selectedFilter === 'PENDING'
+                ? 'bg-[#f1c40f] text-[#231709] font-black'
+                : 'bg-[var(--surface-subtle)] text-[var(--text-muted)] border border-[var(--border)] hover:text-[var(--text)]'
+            }`}
+          >
+            <span>⏳</span>
+            <span>Pending ({pendingCusts.length})</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setSelectedFilter('COMPLETED')}
+            className={`px-3 py-1.5 rounded-lg font-bold transition-colors cursor-pointer flex-shrink-0 flex items-center gap-1.5 ${
+              selectedFilter === 'COMPLETED'
+                ? 'bg-[#38bdf8] text-[#0c1926] font-black'
+                : 'bg-[var(--surface-subtle)] text-[var(--text-muted)] border border-[var(--border)] hover:text-[var(--text)]'
+            }`}
+          >
+            <span>✅</span>
+            <span>Complete / Paid ({completedCusts.length})</span>
+          </button>
+        </div>
+
+        {/* Customer Folders: Pinned at top, then 4 clean pipeline stages */}
+        <div className="space-y-1">
+          {renderFolderGroup(
+            'pinned',
+            '★ Pinned Priority Customers',
+            '#f1c40f',
+            pinnedCusts,
+            'No pinned priority customers.'
+          )}
+          {renderFolderGroup(
+            'active',
+            '🎨 Active Jobs',
+            '#30d158',
+            activeCusts,
+            'No active jobs in progress right now.',
+            'ACTIVE'
+          )}
+          {renderFolderGroup(
+            'scheduled',
+            '📅 Scheduled Jobs',
+            '#0a84ff',
+            scheduledCusts,
+            'No scheduled jobs yet. Add a start date or set status to Scheduled on a project.',
+            'SCHEDULED'
+          )}
+          {renderFolderGroup(
+            'pending',
+            '⏳ Pending Estimates & Leads',
+            '#f1c40f',
+            pendingCusts,
+            'No pending estimates or leads right now.',
+            'PENDING'
+          )}
+          {renderFolderGroup(
+            'completed',
+            '✅ Complete / Paid',
+            '#38bdf8',
+            completedCusts,
+            'No completed or paid projects yet.',
+            'COMPLETED'
+          )}
+
+          {filtered.length === 0 && (
+            <div className="text-center py-10 bg-[var(--surface)] border border-[var(--border)] rounded-xl text-xs text-[var(--text-muted)]">
+              No customers match &ldquo;{searchQuery}&rdquo;.
+            </div>
+          )}
+        </div>
       </div>
 
-      {/* Customer Folders */}
-      <div ref={folderListRef} className="space-y-1">
-        {renderFolderGroup('pinned', '📌 Pinned Active Job Site', 'var(--accent)', pinnedCusts, 'No pinned job sites right now.')}
-        {renderFolderGroup(
-          'scheduled',
-          '📅 Scheduled & Future Jobs',
-          '#0a84ff',
-          scheduledCusts,
-          'No scheduled jobs right now. Enter a start date on an estimate to automatically schedule it on the calendar.'
-        )}
-        {renderFolderGroup('new', '✨ New Leads & Inquiries', '#f1c40f', newCusts, 'No new client leads at the moment.')}
-        {renderFolderGroup('pending', '⏳ Sent / Pending Bids', '#ffd60a', pendingLeads, 'No pending bids awaiting client decision.')}
-        {renderFolderGroup('completed', '✅ Completed / Paid', '#38bdf8', completedCusts, 'No completed projects.')}
-        {renderFolderGroup('archive', '📦 Other / Archive', '#bf5af2', archiveCusts, 'No archived folders.')}
-
-        {filtered.length === 0 && (
-          <div className="text-center py-10 bg-[var(--surface)] border border-[var(--border)] rounded-xl text-xs text-[var(--text-muted)]">
-            No customers match &ldquo;{searchQuery}&rdquo;.
+      {/* Scheduled Jobs Quick List — Strictly Chronological with Exact Dates */}
+      {chronologicalScheduledJobs.length > 0 && (
+        <div className="mt-4 bg-[var(--surface)] border border-[#0a84ff]/40 rounded-xl p-3.5 shadow-sm">
+          <div className="flex items-center justify-between gap-2 mb-2.5">
+            <div className="flex items-center gap-2">
+              <span className="text-sm">📅</span>
+              <h3 className="text-xs font-black text-[#0a84ff] uppercase tracking-wider">
+                Scheduled Jobs Quick List
+              </h3>
+            </div>
+            <span className="text-[10px] font-bold text-[var(--text-muted)]">
+              Soonest First ({chronologicalScheduledJobs.length})
+            </span>
           </div>
-        )}
-      </div>
 
-      {/* Quick Scheduled Jobs List Widget */}
-      {scheduledCusts.length > 0 && (
-        <div className="mt-4 bg-[var(--surface)] border border-[#0a84ff]/30 rounded-xl p-3 shadow-sm">
-          <div className="flex items-center gap-2 mb-2">
-            <span className="text-sm">📅</span>
-            <h3 className="text-xs font-bold text-[#0a84ff] uppercase tracking-wider">Scheduled Jobs Quick List</h3>
-          </div>
-          <div className="space-y-1">
-            {scheduledCusts.map(cust => (
-              <button
-                key={cust.id}
-                type="button"
-                onClick={() => onOpenFolder(cust.id)}
-                className="w-full text-left p-2 rounded-lg bg-[var(--surface-subtle)] hover:bg-[#0a84ff]/10 border border-[var(--border)] hover:border-[#0a84ff]/50 transition-colors flex items-center justify-between"
-              >
-                <div className="min-w-0">
-                  <div className="text-[11px] font-bold text-[var(--text)] truncate">{cust.name}</div>
-                  <div className="text-[9px] text-[var(--text-muted)] truncate">{cust.address || 'No address'}</div>
-                </div>
-                <span className="text-[#0a84ff] text-[10px] font-bold shrink-0">Open ➔</span>
-              </button>
-            ))}
+          <div className="space-y-1.5">
+            {chronologicalScheduledJobs.map((entry) => {
+              const isToday = entry.sortMs !== null && entry.sortMs === todayMs;
+              const isPast = entry.sortMs !== null && entry.sortMs < todayMs;
+              const formattedDate = formatScheduledDate(entry.schedDate);
+
+              return (
+                <button
+                  key={entry.key}
+                  type="button"
+                  onClick={() => onOpenFolder(entry.customer.id)}
+                  className="w-full text-left p-2.5 rounded-lg bg-[var(--surface-subtle)] hover:bg-[#0a84ff]/10 border border-[var(--border)] hover:border-[#0a84ff]/60 transition-colors flex items-center justify-between gap-2.5 cursor-pointer"
+                >
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-1.5 flex-wrap">
+                      <span
+                        className={`text-[10px] font-black px-2 py-0.5 rounded shrink-0 ${
+                          isToday
+                            ? 'bg-[#f1c40f] text-[#231709]'
+                            : isPast
+                            ? 'bg-red-500/20 text-red-400 border border-red-500/40'
+                            : 'bg-[#0a84ff]/15 text-[#60a5fa] border border-[#0a84ff]/35'
+                        }`}
+                      >
+                        {isToday ? `TODAY • ${formattedDate}` : formattedDate}
+                      </span>
+                      <span className="text-xs font-extrabold text-[var(--text)] truncate">
+                        {entry.customer.name}
+                      </span>
+                    </div>
+                    <div className="text-[10px] text-[var(--text-muted)] truncate mt-0.5">
+                      {entry.job?.title ? `${entry.job.title} • ` : ''}
+                      {entry.customer.address || 'No address logged'}
+                    </div>
+                  </div>
+                  <span className="text-[#0a84ff] text-[10px] font-extrabold shrink-0">
+                    Open ➔
+                  </span>
+                </button>
+              );
+            })}
           </div>
         </div>
       )}

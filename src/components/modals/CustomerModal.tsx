@@ -79,6 +79,7 @@ export const CustomerModal: React.FC<CustomerModalProps> = ({ onClose, onSaveCus
           </label>
           <textarea
             rows={3}
+            autoComplete="off"
             value={smartText}
             onChange={(e) => parseSmartLeadText(e.target.value)}
             placeholder="Paste text message or email lead inquiry here to auto-fill..."
@@ -90,13 +91,14 @@ export const CustomerModal: React.FC<CustomerModalProps> = ({ onClose, onSaveCus
         </div>
 
         {/* Fields */}
-        <div className="space-y-3">
+        <form autoComplete="off" onSubmit={(e) => e.preventDefault()} className="space-y-3">
           <div>
             <label className="text-[10px] uppercase font-bold text-[var(--text-muted)] tracking-wider block mb-1">
               Full Name *
             </label>
             <input
               type="text"
+              autoComplete="off"
               value={name}
               onChange={(e) => setName(e.target.value)}
               placeholder="e.g. John & Sarah Miller"
@@ -110,6 +112,7 @@ export const CustomerModal: React.FC<CustomerModalProps> = ({ onClose, onSaveCus
             </label>
             <input
               type="text"
+              autoComplete="off"
               value={address}
               onChange={(e) => setAddress(e.target.value)}
               placeholder="e.g. 1425 Main St, West Bend, WI 53095"
@@ -124,6 +127,7 @@ export const CustomerModal: React.FC<CustomerModalProps> = ({ onClose, onSaveCus
               </label>
               <input
                 type="tel"
+                autoComplete="off"
                 value={phone}
                 onChange={(e) => setPhone(e.target.value)}
                 placeholder="(262) 555-0199"
@@ -136,6 +140,7 @@ export const CustomerModal: React.FC<CustomerModalProps> = ({ onClose, onSaveCus
               </label>
               <input
                 type="email"
+                autoComplete="off"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
                 placeholder="client@example.com"
@@ -143,7 +148,7 @@ export const CustomerModal: React.FC<CustomerModalProps> = ({ onClose, onSaveCus
               />
             </div>
           </div>
-        </div>
+        </form>
 
         {/* Buttons */}
         <div className="flex gap-2 pt-2">

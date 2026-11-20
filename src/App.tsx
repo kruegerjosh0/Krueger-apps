@@ -60,6 +60,7 @@ import { DataBackupModal } from './components/modals/DataBackupModal';
 import { AccountLoginModal } from './components/modals/AccountLoginModal';
 import { ApkInstallerModal } from './components/modals/ApkInstallerModal';
 import { WebsiteEditorModal } from './components/modals/WebsiteEditorModal';
+import { LetterheadModal } from './components/modals/LetterheadModal';
 import { OfflineIndicator } from './components/OfflineIndicator';
 import {
   testFirestoreConnection,
@@ -137,6 +138,7 @@ export default function App() {
   const [accountModalOpen, setAccountModalOpen] = useState(false);
   const [apkInstallerOpen, setApkInstallerOpen] = useState(false);
   const [websiteEditorOpen, setWebsiteEditorOpen] = useState(false);
+  const [letterheadOpen, setLetterheadOpen] = useState(false);
   const [cloudUser, setCloudUser] = useState<any>(null);
 
   const showToast = (msg: string) => {
@@ -1023,6 +1025,7 @@ export default function App() {
 
         {activeTab === 'tools' && (
           <ToolsView
+            onOpenLetterhead={() => setLetterheadOpen(true)}
             onOpenTaxReport={() => setTaxReportOpen(true)}
             onOpenCalc={() => setCalcOpen(true)}
             onOpenPriceBook={() => setPriceBookOpen(true)}
@@ -1049,6 +1052,7 @@ export default function App() {
       {/* Customer Modal */}
       {customerModalOpen && (
         <CustomerModal
+          key="new-customer-modal"
           onClose={() => setCustomerModalOpen(false)}
           onSaveCustomer={handleSaveCustomer}
         />
@@ -1057,6 +1061,7 @@ export default function App() {
       {/* Customer Folder View Modal (Base Cabinet Drawer) */}
       {activeFolderCustomer && (
         <FolderViewModal
+          key={activeFolderCustomer.id}
           customer={activeFolderCustomer}
           onClose={() => setActiveFolderCustomer(null)}
           onUpdateCustomer={handleUpdateCustomer}
@@ -1078,6 +1083,7 @@ export default function App() {
       {/* Job / Estimate Editor Modal (Overlay Stack Layer 2) */}
       {jobModalCustomer && (
         <JobModal
+          key={`${jobModalCustomer.id}-${activeEditingJob?.id ?? 'new'}`}
           customer={jobModalCustomer}
           job={activeEditingJob}
           constants={constants}
@@ -1475,6 +1481,20 @@ export default function App() {
         onClose={() => setWebsiteEditorOpen(false)}
         onToast={showToast}
       />
+
+      {/* Blank Business Letterhead PDF Modal */}
+      {letterheadOpen && (
+        <LetterheadModal
+          settings={settings}
+          customLogo={customLogo}
+          onPreviewPdf={(result) => {
+            setPdfPreviewCustomer(null);
+            setPdfPreviewResult(result);
+          }}
+          onClose={() => setLetterheadOpen(false)}
+          onToast={showToast}
+        />
+      )}
 
       <OfflineIndicator />
     </div>

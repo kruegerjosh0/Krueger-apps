@@ -1,5 +1,12 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Customer, JobProject, RoomArea, RepairItem, PaymentEntry, SystemConstants } from '../../types';
+import {
+  PAINT_SHEEN_OPTIONS,
+  PREP_CHECKLIST_CATEGORIES,
+  normalizePipelineStage,
+  isPrepLineChecked,
+  togglePrepScopeLine,
+} from '../../utils/projectHelpers';
 
 interface JobModalProps {
   customer: Customer;
@@ -10,6 +17,17 @@ interface JobModalProps {
   onToast: (msg: string) => void;
 }
 
+const createBlankRoom = (): RoomArea => ({
+  n: '',
+  r: 0,
+  og: '',
+  sp: true,
+  prod: '',
+  color: '',
+  sheen: '',
+  prep: [],
+});
+
 export const JobModal: React.FC<JobModalProps> = ({
   customer,
   job,
@@ -19,7 +37,9 @@ export const JobModal: React.FC<JobModalProps> = ({
   onToast,
 }) => {
   const [title, setTitle] = useState(job?.title || '');
-  const [status, setStatus] = useState<JobProject['status']>(job?.status || 'PENDING');
+  const [status, setStatus] = useState<JobProject['status']>(
+    job?.status ? normalizePipelineStage(job.status) : 'PENDING'
+  );
   const [schedDate, setSchedDate] = useState(job?.schedDate || '');
   const [schedEndDate, setSchedEndDate] = useState(job?.schedEndDate || '');
 
@@ -33,18 +53,20 @@ export const JobModal: React.FC<JobModalProps> = ({
 
   const [rooms, setRooms] = useState<RoomArea[]>(
     job?.rooms && job.rooms.length > 0
-      ? job.rooms
-      : [{ n: 'Living Room 12x15', r: 350, sp: true, prod: 'Emerald', color: '', sheen: 'Satin' }]
+      ? job.rooms.map((r) => ({ ...r, prep: Array.isArray(r.prep) ? [...r.prep] : [] }))
+      : [createBlankRoom()]
   );
 
-  const [repairs, setRepairs] = useState<RepairItem[]>(job?.repairs || []);
+  const [repairs, setRepairs] = useState<RepairItem[]>(
+    job?.repairs ? job.repairs.map((rep) => ({ ...rep })) : []
+  );
 
   const [paintRate, setPaintRate] = useState(job?.paintRate || '1.00');
   const [repairRate, setRepairRate] = useState<number>(job?.repairRate || constants.repairRate || 75);
 
   const [disc, setDisc] = useState<number>(job?.disc || 0);
   const [discType, setDiscType] = useState<'PCT' | 'FLAT'>(job?.discType || 'PCT');
-  const [discLabel, setDiscLabel] = useState(job?.discLabel || 'Package Discount');
+  const [discLabel, setDiscLabel] = useState(job?.discLabel || '');
 
   const [matVal, setMatVal] = useState<number>(job?.matVal || 0);
   const [sunVal, setSunVal] = useState<number>(job?.sunVal || 0);
@@ -54,8 +76,11 @@ export const JobModal: React.FC<JobModalProps> = ({
   const [rtMiles, setRtMiles] = useState<number>(job?.rtMiles || 0);
   const [workDays, setWorkDays] = useState<number>(job?.workDays || 1);
 
-  const [payments, setPayments] = useState<PaymentEntry[]>(job?.payments || []);
+  const [payments, setPayments] = useState<PaymentEntry[]>(
+    job?.payments ? job.payments.map((p) => ({ ...p })) : []
+  );
   const [clientSig, setClientSig] = useState<string>(job?.clientSig || '');
+  const [expandedRoomPrep, setExpandedRoomPrep] = useState<Record<number, boolean>>({});
 
   // Weather check result for job
   const [weatherAlert, setWeatherAlert] = useState<string | null>(null);
@@ -65,9 +90,41 @@ export const JobModal: React.FC<JobModalProps> = ({
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const [isDrawing, setIsDrawing] = useState(false);
 
+  // Strictly reset all form state whenever switching customer or opening a new/different project
   useEffect(() => {
+    setTitle(job?.title || '');
+    setStatus(job?.status ? normalizePipelineStage(job.status) : 'PENDING');
+    setSchedDate(job?.schedDate || '');
+    setSchedEndDate(job?.schedEndDate || '');
+    setShowLaborTotal(job?.showLaborTotal ?? true);
+    setShowOverallTotal(job?.showOverallTotal ?? false);
+    setMatsIncluded(job?.matsIncluded ?? false);
+    setInternalNotes(job?.internalNotes || '');
+    setPrepScope(job?.prepScope || '');
+    setScope(job?.scope || '');
+    setRooms(
+      job?.rooms && job.rooms.length > 0
+        ? job.rooms.map((r) => ({ ...r, prep: Array.isArray(r.prep) ? [...r.prep] : [] }))
+        : [createBlankRoom()]
+    );
+    setRepairs(job?.repairs ? job.repairs.map((rep) => ({ ...rep })) : []);
+    setPaintRate(job?.paintRate || '1.00');
+    setRepairRate(job?.repairRate || constants.repairRate || 75);
+    setDisc(job?.disc || 0);
+    setDiscType(job?.discType || 'PCT');
+    setDiscLabel(job?.discLabel || '');
+    setMatVal(job?.matVal || 0);
+    setSunVal(job?.sunVal || 0);
+    setPaintPricePerGal(constants.paintCostPerGal || 65);
+    setAutoCalcCoatings(true);
+    setRtMiles(job?.rtMiles || 0);
+    setWorkDays(job?.workDays || 1);
+    setPayments(job?.payments ? job.payments.map((p) => ({ ...p })) : []);
+    setClientSig(job?.clientSig || '');
+    setExpandedRoomPrep({});
+    setWeatherAlert(null);
     initSignatureCanvas();
-  }, []);
+  }, [customer.id, job?.id]);
 
   const initSignatureCanvas = () => {
     const canvas = canvasRef.current;
@@ -222,10 +279,7 @@ export const JobModal: React.FC<JobModalProps> = ({
   const balanceDue = Math.max(0, grossTotal - totalPaid);
 
   const handleAddRoom = () => {
-    setRooms([
-      ...rooms,
-      { n: '', r: 0, sp: true, prod: 'Emerald', color: '', sheen: 'Satin' },
-    ]);
+    setRooms([...rooms, createBlankRoom()]);
   };
 
   const updateRoom = (index: number, field: keyof RoomArea, val: any) => {
@@ -244,12 +298,29 @@ export const JobModal: React.FC<JobModalProps> = ({
     setRooms(updated);
   };
 
+  const toggleRoomPrepItem = (roomIndex: number, item: string) => {
+    const updated = [...rooms];
+    const currentPrep = Array.isArray(updated[roomIndex].prep) ? updated[roomIndex].prep! : [];
+    const exists = currentPrep.includes(item);
+    updated[roomIndex] = {
+      ...updated[roomIndex],
+      prep: exists ? currentPrep.filter((p) => p !== item) : [...currentPrep, item],
+    };
+    setRooms(updated);
+  };
+
+  const clearRoomPrepItems = (roomIndex: number) => {
+    const updated = [...rooms];
+    updated[roomIndex] = { ...updated[roomIndex], prep: [] };
+    setRooms(updated);
+  };
+
   const removeRoom = (index: number) => {
     setRooms(rooms.filter((_, i) => i !== index));
   };
 
   const handleAddRepair = () => {
-    setRepairs([...repairs, { d: 'Minor drywall patching / caulking', h: 1 }]);
+    setRepairs([...repairs, { d: '', h: 0 }]);
   };
 
   const updateRepair = (index: number, field: keyof RepairItem, val: any) => {
@@ -392,7 +463,11 @@ export const JobModal: React.FC<JobModalProps> = ({
 
   return (
     <div className="fixed inset-0 z-[60] bg-black/85 backdrop-blur-sm flex flex-col p-2 sm:p-5 overflow-y-auto animate-in fade-in">
-      <div className="max-w-2xl w-full mx-auto bg-[var(--surface)] border border-[var(--border)] rounded-2xl p-3 sm:p-5 shadow-2xl space-y-3.5 my-auto">
+      <form
+        autoComplete="off"
+        onSubmit={(e) => e.preventDefault()}
+        className="max-w-2xl w-full mx-auto bg-[var(--surface)] border border-[var(--border)] rounded-2xl p-3 sm:p-5 shadow-2xl space-y-3.5 my-auto"
+      >
         {/* Modal Header */}
         <div className="flex items-center justify-between border-b border-[var(--border)] pb-2.5">
           <div>
@@ -422,6 +497,7 @@ export const JobModal: React.FC<JobModalProps> = ({
             </label>
             <input
               type="text"
+              autoComplete="off"
               value={title}
               onChange={(e) => setTitle(e.target.value)}
               placeholder="e.g. Living Room, Hallway & Kitchen Repaint"
@@ -435,14 +511,15 @@ export const JobModal: React.FC<JobModalProps> = ({
                 Status
               </label>
               <select
+                autoComplete="off"
                 value={status}
-                onChange={(e) => setStatus(e.target.value as any)}
+                onChange={(e) => setStatus(e.target.value as JobProject['status'])}
                 className="w-full bg-[var(--bg)] border border-[var(--border)] text-[var(--text)] rounded-lg px-2.5 py-2 text-xs outline-none"
               >
-                <option value="PENDING">Pending</option>
+                <option value="ACTIVE">Active</option>
                 <option value="SCHEDULED">Scheduled</option>
-                <option value="COMPLETED">Completed</option>
-                <option value="OTHER">Other</option>
+                <option value="PENDING">Pending</option>
+                <option value="COMPLETED">Complete / Paid</option>
               </select>
             </div>
 
@@ -452,6 +529,7 @@ export const JobModal: React.FC<JobModalProps> = ({
               </label>
               <input
                 type="date"
+                autoComplete="off"
                 value={schedDate}
                 onChange={(e) => setSchedDate(e.target.value)}
                 className="w-full bg-[var(--bg)] border border-[var(--border)] text-[var(--text)] rounded-lg px-2 py-2 text-xs outline-none"
@@ -464,6 +542,7 @@ export const JobModal: React.FC<JobModalProps> = ({
               </label>
               <input
                 type="date"
+                autoComplete="off"
                 value={schedEndDate}
                 onChange={(e) => setSchedEndDate(e.target.value)}
                 className="w-full bg-[var(--bg)] border border-[var(--border)] text-[var(--text)] rounded-lg px-2 py-2 text-xs outline-none"
@@ -506,6 +585,7 @@ export const JobModal: React.FC<JobModalProps> = ({
           <div className="p-3 border-t border-[var(--border)]">
             <textarea
               rows={3}
+              autoComplete="off"
               value={internalNotes}
               onChange={(e) => setInternalNotes(e.target.value)}
               placeholder="Private notes about the job, materials, client, or things you don't want on the formal estimate/bill..."
@@ -517,10 +597,10 @@ export const JobModal: React.FC<JobModalProps> = ({
         {/* Prep & Scope Accordion */}
         <details open className="bg-[var(--surface-subtle)] border border-[var(--border)] rounded-xl overflow-hidden">
           <summary className="px-3.5 py-2.5 font-bold text-xs text-[var(--text)] cursor-pointer flex justify-between">
-            <span>📝 Prep & Scope Notes</span>
+            <span>📝 Job Prep &amp; Scope Notes</span>
             <span className="text-[10px]">▼</span>
           </summary>
-          <div className="p-3 space-y-2 border-t border-[var(--border)]">
+          <div className="p-3 space-y-3 border-t border-[var(--border)]">
             <div className="flex flex-wrap gap-3 text-xs">
               <label className="flex items-center gap-1.5 cursor-pointer text-[var(--text)] font-semibold">
                 <input
@@ -550,44 +630,63 @@ export const JobModal: React.FC<JobModalProps> = ({
               </label>
             </div>
 
-            <div>
-              <label className="text-[8px] uppercase font-bold text-[var(--text-muted)] block mb-1">
-                Prep Work Options
-              </label>
-              <div className="flex flex-wrap gap-2 mb-2 text-[10px]">
-                {[
-                  'Pressure wash surfaces',
-                  'Scrape loose paint',
-                  'Sand feather edges',
-                  'Caulk cracks and gaps',
-                  'Spot prime bare wood',
-                  'Mask floors and trim',
-                  'Patch drywall holes'
-                ].map((prepOption) => (
-                  <label key={prepOption} className="flex items-center gap-1.5 cursor-pointer bg-[var(--bg)] border border-[var(--border)] px-2 py-1 rounded-md text-[var(--text)]">
-                    <input
-                      type="checkbox"
-                      checked={prepScope.includes(prepOption)}
-                      onChange={(e) => {
-                        if (e.target.checked) {
-                          const newScope = prepScope ? `${prepScope}\n- ${prepOption}` : `- ${prepOption}`;
-                          setPrepScope(newScope);
-                        } else {
-                          const newScope = prepScope.replace(`- ${prepOption}`, '').replace(/^\n/, '').replace(/\n\n/g, '\n').trim();
-                          setPrepScope(newScope);
-                        }
-                      }}
-                      className="w-3 h-3 text-[var(--accent)]"
-                    />
-                    <span>{prepOption}</span>
-                  </label>
+            {/* Structured Multi-Select Categorized Job Prep & Setup Checklist */}
+            <div className="space-y-2.5">
+              <div className="flex items-center justify-between">
+                <label className="text-[9px] uppercase font-extrabold text-[#f1c40f] tracking-wider">
+                  Quick-Tap Job Prep &amp; Setup Checklist
+                </label>
+                {prepScope.trim() && (
+                  <button
+                    type="button"
+                    onClick={() => setPrepScope('')}
+                    className="text-[9.5px] font-bold text-red-400 hover:underline cursor-pointer"
+                  >
+                    Clear Prep
+                  </button>
+                )}
+              </div>
+
+              <div className="space-y-2">
+                {PREP_CHECKLIST_CATEGORIES.map((category) => (
+                  <div
+                    key={category.id}
+                    className="bg-[var(--bg)] border border-[var(--border)] rounded-lg p-2.5 space-y-1.5"
+                  >
+                    <div className="text-[9.5px] font-extrabold uppercase tracking-wider text-[var(--text-muted)] flex items-center gap-1.5">
+                      <span>{category.icon}</span>
+                      <span>{category.label}</span>
+                    </div>
+                    <div className="flex flex-wrap gap-1.5">
+                      {category.items.map((prepOption) => {
+                        const checked = isPrepLineChecked(prepScope, prepOption);
+                        return (
+                          <button
+                            key={prepOption}
+                            type="button"
+                            onClick={() => setPrepScope((prev) => togglePrepScopeLine(prev, prepOption))}
+                            className={`text-[10.5px] px-2.5 py-1.5 rounded-lg border transition-all cursor-pointer flex items-center gap-1.5 active:scale-95 ${
+                              checked
+                                ? 'bg-[#f1c40f] text-[#231709] border-[#f1c40f] font-black shadow-xs'
+                                : 'bg-[var(--surface)] text-[var(--text)] border-[var(--border)] hover:border-[#f1c40f]/60 font-semibold'
+                            }`}
+                          >
+                            <span>{checked ? '✓' : '+'}</span>
+                            <span>{prepOption}</span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
                 ))}
               </div>
+
               <textarea
                 rows={3}
+                autoComplete="off"
                 value={prepScope}
                 onChange={(e) => setPrepScope(e.target.value)}
-                placeholder="Custom prep notes..."
+                placeholder="Selected prep items appear here — or type custom prep notes..."
                 className="w-full bg-[var(--bg)] border border-[var(--border)] focus:border-[var(--accent)] text-[var(--text)] rounded-lg p-2 text-xs outline-none"
               />
             </div>
@@ -598,6 +697,7 @@ export const JobModal: React.FC<JobModalProps> = ({
               </label>
               <textarea
                 rows={2}
+                autoComplete="off"
                 value={scope}
                 onChange={(e) => setScope(e.target.value)}
                 placeholder="Apply 2 full coats of latex satin on walls, semi-gloss on baseboards and doors..."
@@ -611,126 +711,233 @@ export const JobModal: React.FC<JobModalProps> = ({
         <details open className="bg-[var(--surface-subtle)] border border-[var(--border)] rounded-xl overflow-hidden">
           <summary className="px-3.5 py-2.5 font-bold text-xs text-[var(--text)] cursor-pointer flex justify-between items-center">
             <span className="flex items-center gap-2">
-              <span>🛠️ Rooms, Sections & Dimensions ({rooms.length})</span>
+              <span>🛠️ Rooms, Sections &amp; Dimensions ({rooms.length})</span>
             </span>
             <span className="text-[10px]">▼</span>
           </summary>
           <div className="p-3 space-y-3 border-t border-[var(--border)]">
 
-            {rooms.map((room, idx) => (
-              <div
-                key={idx}
-                className="bg-[var(--bg)] border border-[var(--border)] rounded-lg p-3 space-y-2 relative"
-              >
-                <div className="flex justify-between items-center">
-                  <span className="text-[10px] font-bold text-[var(--accent)] uppercase">
-                    Area #{idx + 1}
-                  </span>
-                  <button
-                    type="button"
-                    onClick={() => removeRoom(idx)}
-                    className="text-red-500 font-bold text-xs"
-                  >
-                    ✕ Remove
-                  </button>
-                </div>
+            {rooms.map((room, idx) => {
+              const selectedRoomPrep = Array.isArray(room.prep) ? room.prep : [];
+              const isRoomPrepOpen = !!expandedRoomPrep[idx];
+              const hasCustomLegacySheen =
+                Boolean(room.sheen) &&
+                !(PAINT_SHEEN_OPTIONS as readonly string[]).includes(room.sheen || '');
 
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                  <div>
-                    <label className="text-[8px] uppercase font-bold text-[var(--text-muted)] block mb-0.5">
-                      Room / Area Name & Dimensions
-                    </label>
-                    <input
-                      type="text"
-                      value={room.n}
-                      onChange={(e) => updateRoom(idx, 'n', e.target.value)}
-                      placeholder="e.g. Master Bedroom 14x16"
-                      className="w-full bg-[var(--surface)] border border-[var(--border)] focus:border-[var(--accent)] text-[var(--text)] rounded-md px-2.5 py-1.5 text-xs outline-none"
-                    />
+              return (
+                <div
+                  key={idx}
+                  className="bg-[var(--bg)] border border-[var(--border)] rounded-lg p-3 space-y-2.5 relative"
+                >
+                  <div className="flex justify-between items-center">
+                    <span className="text-[10px] font-bold text-[var(--accent)] uppercase">
+                      Area #{idx + 1}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => removeRoom(idx)}
+                      className="text-red-500 font-bold text-xs cursor-pointer"
+                    >
+                      ✕ Remove
+                    </button>
                   </div>
-                  <div>
-                    <label className="text-[8px] uppercase font-bold text-[var(--text-muted)] block mb-0.5">
-                      Labor Price ($)
-                    </label>
-                    <input
-                      type="number"
-                      value={room.r || ''}
-                      onChange={(e) => updateRoom(idx, 'r', parseFloat(e.target.value) || 0)}
-                      placeholder="Auto"
-                      className="w-full bg-[var(--surface)] border border-[var(--border)] focus:border-[var(--accent)] text-[var(--text)] rounded-md px-2.5 py-1.5 text-xs outline-none font-bold"
-                    />
-                  </div>
-                </div>
 
-                {/* Paint Spec (Product, Color, Sheen) */}
-                <div className="grid grid-cols-3 gap-1.5 bg-[var(--surface)] p-2 rounded-md border border-[var(--border)]">
-                  <div>
-                    <label className="text-[7.5px] uppercase font-bold text-[var(--text-muted)] block">
-                      Product
-                    </label>
-                    <input
-                      type="text"
-                      value={room.prod || ''}
-                      onChange={(e) => updateRoom(idx, 'prod', e.target.value)}
-                      placeholder="Emerald"
-                      className="w-full bg-[var(--bg)] border border-[var(--border)] text-[var(--text)] rounded px-1.5 py-1 text-[11px] outline-none"
-                    />
-                  </div>
-                  <div>
-                    <label className="text-[7.5px] uppercase font-bold text-[var(--text-muted)] block">
-                      Color
-                    </label>
-                    <input
-                      type="text"
-                      value={room.color || ''}
-                      onChange={(e) => updateRoom(idx, 'color', e.target.value)}
-                      placeholder="SW 7015"
-                      className="w-full bg-[var(--bg)] border border-[var(--border)] text-[var(--text)] rounded px-1.5 py-1 text-[11px] outline-none"
-                    />
-                  </div>
-                  <div>
-                    <label className="text-[7.5px] uppercase font-bold text-[var(--text-muted)] block">
-                      Sheen
-                    </label>
-                    <input
-                      type="text"
-                      value={room.sheen || ''}
-                      onChange={(e) => updateRoom(idx, 'sheen', e.target.value)}
-                      placeholder="Satin"
-                      className="w-full bg-[var(--bg)] border border-[var(--border)] text-[var(--text)] rounded px-1.5 py-1 text-[11px] outline-none"
-                    />
-                  </div>
-                </div>
-
-                {/* Overrides */}
-                <div className="grid grid-cols-2 gap-2 text-xs">
-                  <div>
-                    <label className="text-[7.5px] uppercase font-bold text-[var(--text-muted)] block">
-                      Override Paint (Gals)
-                    </label>
-                    <input
-                      type="number"
-                      step="0.5"
-                      value={room.og || ''}
-                      onChange={(e) => updateRoom(idx, 'og', e.target.value)}
-                      placeholder="Auto"
-                      className="w-full bg-[var(--surface)] border border-[var(--border)] text-[var(--text)] rounded px-2 py-1 text-xs outline-none font-bold"
-                    />
-                    <div className="text-[9.5px] font-bold text-[var(--accent)] mt-0.5">
-                      Paint Needed: {getRoomPaintGals(room)} Gal (2 coats)
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                    <div>
+                      <label className="text-[8px] uppercase font-bold text-[var(--text-muted)] block mb-0.5">
+                        Room / Area Name &amp; Dimensions
+                      </label>
+                      <input
+                        type="text"
+                        autoComplete="off"
+                        value={room.n}
+                        onChange={(e) => updateRoom(idx, 'n', e.target.value)}
+                        placeholder="e.g. Master Bedroom 14x16"
+                        className="w-full bg-[var(--surface)] border border-[var(--border)] focus:border-[var(--accent)] text-[var(--text)] rounded-md px-2.5 py-1.5 text-xs outline-none"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-[8px] uppercase font-bold text-[var(--text-muted)] block mb-0.5">
+                        Labor Price ($)
+                      </label>
+                      <input
+                        type="number"
+                        autoComplete="off"
+                        value={room.r || ''}
+                        onChange={(e) => updateRoom(idx, 'r', parseFloat(e.target.value) || 0)}
+                        placeholder="Auto"
+                        className="w-full bg-[var(--surface)] border border-[var(--border)] focus:border-[var(--accent)] text-[var(--text)] rounded-md px-2.5 py-1.5 text-xs outline-none font-bold"
+                      />
                     </div>
                   </div>
-                  <div className="flex items-center gap-1.5 pt-3">
-                    <input
-                      type="checkbox"
-                      checked={room.sp !== false}
-                      onChange={(e) => updateRoom(idx, 'sp', e.target.checked)}
-                    />
-                    <span className="text-[10px] text-[var(--text-muted)]">Show paint on estimate</span>
+
+                  {/* Paint Spec (Product, Color, Sheen Dropdown) */}
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-1.5 bg-[var(--surface)] p-2 rounded-md border border-[var(--border)]">
+                    <div>
+                      <label className="text-[7.5px] uppercase font-bold text-[var(--text-muted)] block mb-0.5">
+                        Product
+                      </label>
+                      <input
+                        type="text"
+                        autoComplete="off"
+                        value={room.prod || ''}
+                        onChange={(e) => updateRoom(idx, 'prod', e.target.value)}
+                        placeholder="e.g. Emerald"
+                        className="w-full bg-[var(--bg)] border border-[var(--border)] text-[var(--text)] rounded px-2 py-1.5 text-[11px] outline-none"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-[7.5px] uppercase font-bold text-[var(--text-muted)] block mb-0.5">
+                        Color
+                      </label>
+                      <input
+                        type="text"
+                        autoComplete="off"
+                        value={room.color || ''}
+                        onChange={(e) => updateRoom(idx, 'color', e.target.value)}
+                        placeholder="e.g. SW 7015"
+                        className="w-full bg-[var(--bg)] border border-[var(--border)] text-[var(--text)] rounded px-2 py-1.5 text-[11px] outline-none"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-[7.5px] uppercase font-bold text-[var(--text-muted)] block mb-0.5">
+                        Sheen
+                      </label>
+                      <select
+                        autoComplete="off"
+                        value={room.sheen || ''}
+                        onChange={(e) => updateRoom(idx, 'sheen', e.target.value)}
+                        className="w-full bg-[var(--bg)] border border-[var(--border)] focus:border-[#f1c40f] text-[var(--text)] rounded px-2 py-1.5 text-[11px] outline-none font-semibold cursor-pointer"
+                      >
+                        <option value="">Select Sheen...</option>
+                        {PAINT_SHEEN_OPTIONS.map((sheenOpt) => (
+                          <option key={sheenOpt} value={sheenOpt}>
+                            {sheenOpt}
+                          </option>
+                        ))}
+                        {hasCustomLegacySheen && room.sheen && (
+                          <option value={room.sheen}>{room.sheen}</option>
+                        )}
+                      </select>
+                    </div>
+                  </div>
+
+                  {/* Per-Room Prep & Setup Process Checklist */}
+                  <div className="bg-[var(--surface)] border border-[var(--border)] rounded-md overflow-hidden">
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setExpandedRoomPrep((prev) => ({ ...prev, [idx]: !prev[idx] }))
+                      }
+                      className="w-full px-2.5 py-2 flex items-center justify-between text-left hover:bg-[var(--border)]/40 transition-colors cursor-pointer"
+                    >
+                      <div className="flex items-center gap-1.5 flex-wrap">
+                        <span className="text-[10px] font-extrabold uppercase tracking-wider text-[#f1c40f]">
+                          🧰 Room Prep &amp; Setup Checklist
+                        </span>
+                        {selectedRoomPrep.length > 0 && (
+                          <span className="bg-[#2c2317] text-[#f1c40f] border border-[#f1c40f]/40 text-[9px] font-black px-1.5 py-0.5 rounded-full">
+                            {selectedRoomPrep.length} selected
+                          </span>
+                        )}
+                      </div>
+                      <span className="text-[10px] font-bold text-[var(--text-muted)]">
+                        {isRoomPrepOpen ? '▲ Hide' : '▼ Select'}
+                      </span>
+                    </button>
+
+                    {/* Compact preview of selected items when collapsed */}
+                    {!isRoomPrepOpen && selectedRoomPrep.length > 0 && (
+                      <div className="px-2.5 pb-2 flex flex-wrap gap-1">
+                        {selectedRoomPrep.map((item) => (
+                          <span
+                            key={item}
+                            className="text-[9.5px] font-bold bg-[#2c2317] text-[#f1c40f] border border-[#f1c40f]/30 px-1.5 py-0.5 rounded"
+                          >
+                            ✓ {item}
+                          </span>
+                        ))}
+                      </div>
+                    )}
+
+                    {/* Expanded 2-category fast-tap multi-select checklist */}
+                    {isRoomPrepOpen && (
+                      <div className="p-2.5 border-t border-[var(--border)] space-y-2.5 bg-[var(--bg)]/60">
+                        {PREP_CHECKLIST_CATEGORIES.map((category) => (
+                          <div key={category.id} className="space-y-1.5">
+                            <div className="text-[9px] font-extrabold uppercase tracking-wider text-[var(--text-muted)] flex items-center gap-1">
+                              <span>{category.icon}</span>
+                              <span>{category.label}</span>
+                            </div>
+                            <div className="flex flex-wrap gap-1.5">
+                              {category.items.map((item) => {
+                                const isSelected = selectedRoomPrep.includes(item);
+                                return (
+                                  <button
+                                    key={item}
+                                    type="button"
+                                    onClick={() => toggleRoomPrepItem(idx, item)}
+                                    className={`text-[10px] px-2 py-1 rounded-md border transition-all cursor-pointer flex items-center gap-1 active:scale-95 ${
+                                      isSelected
+                                        ? 'bg-[#f1c40f] text-[#231709] border-[#f1c40f] font-black'
+                                        : 'bg-[var(--surface)] text-[var(--text)] border-[var(--border)] hover:border-[#f1c40f]/60 font-semibold'
+                                    }`}
+                                  >
+                                    <span>{isSelected ? '✓' : '+'}</span>
+                                    <span>{item}</span>
+                                  </button>
+                                );
+                              })}
+                            </div>
+                          </div>
+                        ))}
+
+                        {selectedRoomPrep.length > 0 && (
+                          <div className="flex justify-end pt-1 border-t border-[var(--border)]/60">
+                            <button
+                              type="button"
+                              onClick={() => clearRoomPrepItems(idx)}
+                              className="text-[9.5px] font-bold text-red-400 hover:underline cursor-pointer"
+                            >
+                              Clear room prep ({selectedRoomPrep.length})
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Overrides */}
+                  <div className="grid grid-cols-2 gap-2 text-xs">
+                    <div>
+                      <label className="text-[7.5px] uppercase font-bold text-[var(--text-muted)] block">
+                        Override Paint (Gals)
+                      </label>
+                      <input
+                        type="number"
+                        step="0.5"
+                        autoComplete="off"
+                        value={room.og || ''}
+                        onChange={(e) => updateRoom(idx, 'og', e.target.value)}
+                        placeholder="Auto"
+                        className="w-full bg-[var(--surface)] border border-[var(--border)] text-[var(--text)] rounded px-2 py-1 text-xs outline-none font-bold"
+                      />
+                      <div className="text-[9.5px] font-bold text-[var(--accent)] mt-0.5">
+                        Paint Needed: {getRoomPaintGals(room)} Gal (2 coats)
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-1.5 pt-3">
+                      <input
+                        type="checkbox"
+                        checked={room.sp !== false}
+                        onChange={(e) => updateRoom(idx, 'sp', e.target.checked)}
+                      />
+                      <span className="text-[10px] text-[var(--text-muted)]">Show paint on estimate</span>
+                    </div>
                   </div>
                 </div>
-              </div>
-            ))}
+              );
+            })}
 
             <div>
               <button
@@ -840,6 +1047,7 @@ export const JobModal: React.FC<JobModalProps> = ({
               <div key={idx} className="flex gap-2 items-center bg-[var(--bg)] p-2 rounded-lg border border-[var(--border)]">
                 <input
                   type="text"
+                  autoComplete="off"
                   value={rep.d}
                   onChange={(e) => updateRepair(idx, 'd', e.target.value)}
                   placeholder="Repair description (e.g. rotted sill replacement)"
@@ -848,6 +1056,7 @@ export const JobModal: React.FC<JobModalProps> = ({
                 <div className="w-20">
                   <input
                     type="number"
+                    autoComplete="off"
                     value={rep.h || ''}
                     onChange={(e) => updateRepair(idx, 'h', parseFloat(e.target.value) || 0)}
                     placeholder="Hrs"
@@ -880,7 +1089,7 @@ export const JobModal: React.FC<JobModalProps> = ({
         {/* Rates & Discounts */}
         <details open className="bg-[var(--surface-subtle)] border border-[var(--border)] rounded-xl overflow-hidden">
           <summary className="px-3.5 py-2.5 font-bold text-xs text-[var(--text)] cursor-pointer flex justify-between">
-            <span>💰 Rates, Coatings & Discounts</span>
+            <span>💰 Rates, Coatings &amp; Discounts</span>
             <span className="text-[10px]">▼</span>
           </summary>
           <div className="p-3 space-y-3 border-t border-[var(--border)]">
@@ -892,6 +1101,7 @@ export const JobModal: React.FC<JobModalProps> = ({
                 <input
                   type="number"
                   step="0.05"
+                  autoComplete="off"
                   value={paintRate}
                   onChange={(e) => setPaintRate(e.target.value)}
                   className="w-full bg-[var(--bg)] border border-[var(--border)] text-[var(--text)] rounded-md px-2.5 py-1.5 text-xs outline-none"
@@ -903,6 +1113,7 @@ export const JobModal: React.FC<JobModalProps> = ({
                 </label>
                 <input
                   type="number"
+                  autoComplete="off"
                   value={repairRate}
                   onChange={(e) => setRepairRate(parseFloat(e.target.value) || 0)}
                   className="w-full bg-[var(--bg)] border border-[var(--border)] text-[var(--text)] rounded-md px-2.5 py-1.5 text-xs outline-none"
@@ -922,6 +1133,7 @@ export const JobModal: React.FC<JobModalProps> = ({
                   </label>
                   <input
                     type="text"
+                    autoComplete="off"
                     value={discLabel}
                     onChange={(e) => setDiscLabel(e.target.value)}
                     placeholder="Package Discount"
@@ -933,6 +1145,7 @@ export const JobModal: React.FC<JobModalProps> = ({
                     Type
                   </label>
                   <select
+                    autoComplete="off"
                     value={discType}
                     onChange={(e) => setDiscType(e.target.value as any)}
                     className="w-full bg-[var(--surface)] border border-[var(--border)] text-[var(--text)] rounded px-2 py-1 text-xs outline-none"
@@ -947,6 +1160,7 @@ export const JobModal: React.FC<JobModalProps> = ({
                   </label>
                   <input
                     type="number"
+                    autoComplete="off"
                     value={disc}
                     onChange={(e) => setDisc(parseFloat(e.target.value) || 0)}
                     className="w-full bg-[var(--surface)] border border-[var(--border)] text-[var(--text)] rounded px-2 py-1 text-xs outline-none font-bold"
@@ -988,6 +1202,7 @@ export const JobModal: React.FC<JobModalProps> = ({
                     <span className="text-xs font-bold text-[var(--text)]">$</span>
                     <input
                       type="number"
+                      autoComplete="off"
                       value={paintPricePerGal}
                       onChange={(e) => setPaintPricePerGal(parseFloat(e.target.value) || 0)}
                       className="w-16 bg-[var(--bg)] border border-[var(--border)] rounded px-1.5 py-0.5 text-xs font-bold text-[var(--text)] outline-none text-center"
@@ -1011,6 +1226,7 @@ export const JobModal: React.FC<JobModalProps> = ({
                   </label>
                   <input
                     type="number"
+                    autoComplete="off"
                     value={matVal}
                     onChange={(e) => setMatVal(parseFloat(e.target.value) || 0)}
                     className="w-full bg-[var(--surface)] border border-[var(--border)] text-[var(--text)] rounded-md px-2.5 py-1.5 text-xs outline-none font-bold"
@@ -1039,6 +1255,7 @@ export const JobModal: React.FC<JobModalProps> = ({
                 </label>
                 <input
                   type="number"
+                  autoComplete="off"
                   disabled={matsIncluded}
                   value={sunVal}
                   onChange={(e) => setSunVal(parseFloat(e.target.value) || 0)}
@@ -1070,7 +1287,7 @@ export const JobModal: React.FC<JobModalProps> = ({
                 onClick={markJobPaid}
                 className="flex-1 py-1.5 bg-[var(--accent-tertiary)] text-white text-[11px] font-bold rounded-lg cursor-pointer"
               >
-                ✔ Mark Paid & Close
+                ✔ Mark Paid &amp; Close
               </button>
             </div>
 
@@ -1078,6 +1295,7 @@ export const JobModal: React.FC<JobModalProps> = ({
               <div key={idx} className="flex gap-2 items-center bg-[var(--bg)] p-2 rounded-lg border border-[var(--border)]">
                 <input
                   type="date"
+                  autoComplete="off"
                   value={p.date}
                   onChange={(e) => {
                     const updated = [...payments];
@@ -1088,6 +1306,7 @@ export const JobModal: React.FC<JobModalProps> = ({
                 />
                 <input
                   type="number"
+                  autoComplete="off"
                   value={p.amt || ''}
                   onChange={(e) => {
                     const updated = [...payments];
@@ -1203,7 +1422,7 @@ export const JobModal: React.FC<JobModalProps> = ({
         >
           Save Project / Estimate
         </button>
-      </div>
+      </form>
     </div>
   );
 };

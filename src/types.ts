@@ -7,6 +7,7 @@ export interface RoomArea {
   prod?: string; // Paint product (e.g. "Emerald")
   color?: string; // Color code (e.g. "SW 7015 Repose Gray")
   sheen?: string; // Sheen (e.g. "Satin")
+  prep?: string[]; // Room-specific prep & setup checklist items
 }
 
 export interface RepairItem {

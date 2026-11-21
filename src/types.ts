@@ -258,3 +258,29 @@ export interface RegionalWeatherSnapshot {
   workabilityLabel: string;
 }
 
+export type SupplyPinCategory = 'PAINT_STORE' | 'GAS_STOP' | 'HARDWARE' | 'STORAGE';
+
+export interface SupplyStopPin {
+  id: string;
+  name: string;
+  category: SupplyPinCategory;
+  address: string;
+  lat: number;
+  lng: number;
+  phone?: string;
+  notes?: string;
+  isPreset?: boolean;
+}
+
+export type JobMapStatus = 'UNQUOTED' | 'QUOTED' | 'SCHEDULED' | 'COMPLETED';
+
+export interface RouteStopItem {
+  id: string;
+  kind: 'CUSTOMER' | 'SUPPLY';
+  refId: string | number;
+  name: string;
+  address: string;
+  lat: number;
+  lng: number;
+  subtitle?: string;
+}

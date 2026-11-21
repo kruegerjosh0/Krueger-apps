@@ -1,6 +1,7 @@
 import React from 'react';
 import { PrintSettings } from '../types';
 import { User } from 'firebase/auth';
+import { TabType } from './Navigation';
 
 interface HeaderProps {
   settings: PrintSettings;
@@ -9,7 +10,7 @@ interface HeaderProps {
   onBackup: () => void;
   onRestore: (file: File) => void;
   onOpenNewCustomer: () => void;
-  onNavigateTab: (tab: 'dash' | 'weather' | 'notes' | 'tools') => void;
+  onNavigateTab: (tab: TabType) => void;
   onOpenCalc: () => void;
   onOpenCloudSync?: () => void;
   onOpenAccountModal?: () => void;

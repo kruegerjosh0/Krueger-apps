@@ -14,6 +14,7 @@ import {
   SystemConstants,
   LocationInfo,
   WeatherCondition,
+  SupplyStopPin,
 } from './types';
 import {
   loadRecord,
@@ -44,6 +45,7 @@ import {
 import { Header } from './components/Header';
 import { Navigation, TabType } from './components/Navigation';
 import { DashboardView } from './components/DashboardView';
+import { JobsiteMapView } from './components/JobsiteMapView';
 import { WeatherView } from './components/WeatherView';
 import { NotesView } from './components/NotesView';
 import { ToolsView } from './components/ToolsView';
@@ -88,6 +90,7 @@ export default function App() {
   const [shoppingList, setShoppingList] = useState<ShoppingItem[]>([]);
   const [priceBook, setPriceBook] = useState<PriceBookItem[]>([]);
   const [webPhotos, setWebPhotos] = useState<WebPhoto[]>([]);
+  const [customSupplyPins, setCustomSupplyPins] = useState<SupplyStopPin[]>([]);
   const [settings, setSettings] = useState<PrintSettings>(DEFAULT_PRINT_SETTINGS);
   const [constants, setConstants] = useState<SystemConstants>(DEFAULT_SYSTEM_CONSTANTS);
   const [customLogo, setCustomLogo] = useState<string | null>(null);
@@ -249,6 +252,10 @@ export default function App() {
 
     if (payload.rawStorage && Object.keys(payload.rawStorage).length > 0) {
       rawKeysRestored = await restoreRawStorageEntries(payload.rawStorage);
+      const restoredPins = await loadRecord<SupplyStopPin[]>('KMaster_MapPins', []);
+      if (Array.isArray(restoredPins)) {
+        setCustomSupplyPins(restoredPins);
+      }
     }
 
     localStorage.setItem('KMaster_LastBackupTS', Date.now().toString());
@@ -285,6 +292,7 @@ export default function App() {
       let activeShopping = await loadRecord<ShoppingItem[]>('KMaster_Shopping', []);
       let activePriceBook = await loadRecord<PriceBookItem[]>('KMaster_PriceBook', []);
       let activeWebPhotos = await loadRecord<WebPhoto[]>('KMaster_WebPhotos', []);
+      const activeCustomPins = await loadRecord<SupplyStopPin[]>('KMaster_MapPins', []);
       let activeSettings = await loadRecord<PrintSettings>('KMaster_Settings', DEFAULT_PRINT_SETTINGS);
       let activeConstants = await loadRecord<SystemConstants>('KMaster_Constants', DEFAULT_SYSTEM_CONSTANTS);
 
@@ -337,6 +345,7 @@ export default function App() {
       setShoppingList(activeShopping);
       setPriceBook(activePriceBook);
       setWebPhotos(activeWebPhotos);
+      setCustomSupplyPins(Array.isArray(activeCustomPins) ? activeCustomPins : []);
       setSettings(activeSettings);
       setConstants(activeConstants);
 
@@ -1017,6 +1026,22 @@ export default function App() {
     showToast('✔ Opened in Estimator Tool with your notes!');
   };
 
+  const handleSaveCustomPin = (pin: SupplyStopPin) => {
+    setCustomSupplyPins((prev) => {
+      const updated = [pin, ...prev.filter((p) => p.id !== pin.id)];
+      saveRecord('KMaster_MapPins', updated);
+      return updated;
+    });
+  };
+
+  const handleDeleteCustomPin = (pinId: string) => {
+    setCustomSupplyPins((prev) => {
+      const updated = prev.filter((p) => p.id !== pinId);
+      saveRecord('KMaster_MapPins', updated);
+      return updated;
+    });
+  };
+
   return (
     <div className="min-h-screen bg-[var(--bg)] text-[var(--text)] transition-colors duration-200">
       {/* Toast Banner */}
@@ -1054,6 +1079,27 @@ export default function App() {
               if (c) setActiveFolderCustomer(c);
             }}
             onTogglePin={handleTogglePin}
+          />
+        )}
+
+        {activeTab === 'map' && (
+          <JobsiteMapView
+            customers={customers}
+            constants={constants}
+            customSupplyPins={customSupplyPins}
+            onSaveCustomPin={handleSaveCustomPin}
+            onDeleteCustomPin={handleDeleteCustomPin}
+            onOpenFolder={(cId) => {
+              const c = customers.find((x) => x.id === cId);
+              if (c) setActiveFolderCustomer(c);
+            }}
+            onUpdateCustomer={handleUpdateCustomer}
+            onSaveMileage={(entry) => {
+              const updated = [entry, ...mileage];
+              setMileage(updated);
+              saveRecord('KMaster_Mil', updated);
+            }}
+            onToast={showToast}
           />
         )}
 
@@ -1096,7 +1142,7 @@ export default function App() {
             onOpenMileage={() => setMileageOpen(true)}
             onOpenExpenses={() => setExpenseOpen(true)}
             onOpenShoppingList={() => setShoppingListOpen(true)}
-            onOpenRegionalMap={() => setRegionalMapOpen(true)}
+            onOpenRegionalMap={() => setActiveTab('map')}
             onSyncCalendar={() => setCalendarSyncOpen(true)}
             onOpenSettings={() => setSettingsOpen(true)}
             onOpenCloudSync={() => setCloudSyncOpen(true)}

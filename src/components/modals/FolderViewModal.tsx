@@ -21,6 +21,7 @@ import {
 import {
   exportSingleCustomerJobIcs,
   getCustomerCalendarSyncStatus,
+  buildGoogleCalendarTemplateUrl,
 } from '../../utils/calendarIcs';
 
 interface FolderViewModalProps {
@@ -247,9 +248,7 @@ export const FolderViewModal: React.FC<FolderViewModalProps> = ({
       onMarkCalendarSynced(customer.id, Date.now());
     }
     const seq = latestCust.calendarSequence ?? 0;
-    onToast(
-      `✔ ${result.outcome === 'SHARED' ? 'Opened Calendar Import' : 'Downloaded .ICS'} (Seq #${seq} — overwrite-safe)`
-    );
+    onToast(`✔ Downloaded single-event .ICS (Seq #${seq} — overwrite-safe)`);
   };
 
   const calendarSyncStatus = getCustomerCalendarSyncStatus(customer);
@@ -631,25 +630,45 @@ export const FolderViewModal: React.FC<FolderViewModalProps> = ({
                         📅 Scheduled: <b>{dateRange}</b> • Created: {j.date}
                       </div>
                       {j.schedDate && (
-                        <button
-                          type="button"
-                          onClick={() => handleSyncJobToCalendar(j)}
-                          className={`text-[9.5px] font-black px-2 py-0.5 rounded-md border cursor-pointer transition-transform active:scale-95 flex items-center gap-1 shrink-0 ${
-                            calendarSyncStatus === 'SYNCED'
-                              ? 'bg-emerald-500/15 text-emerald-400 border-emerald-500/40 hover:bg-emerald-500/25'
-                              : 'bg-[#0a84ff]/20 text-[#60a5fa] border-[#0a84ff]/50 hover:bg-[#0a84ff]/30'
-                          }`}
-                          title="Export overwrite-safe .ics event for this customer (same UID & SEQUENCE)"
-                        >
-                          <span>📅</span>
-                          <span>
-                            {calendarSyncStatus === 'UPDATED'
-                              ? 'Update in Calendar'
-                              : calendarSyncStatus === 'SYNCED'
-                              ? 'Sync to Calendar ✓'
-                              : 'Sync to Calendar'}
-                          </span>
-                        </button>
+                        <div className="flex items-center gap-1.5 flex-wrap shrink-0">
+                          <a
+                            href={buildGoogleCalendarTemplateUrl(
+                              {
+                                ...customer,
+                                name: name.trim() || customer.name,
+                                address: address.trim(),
+                                phone: phone.trim(),
+                                email: email.trim(),
+                              },
+                              j
+                            )}
+                            target="_blank"
+                            rel="noreferrer"
+                            onClick={() => {
+                              if (onMarkCalendarSynced) {
+                                onMarkCalendarSynced(customer.id, Date.now());
+                              }
+                            }}
+                            className="text-[9.5px] font-black px-2 py-0.5 rounded-md bg-[#0a84ff] hover:opacity-95 text-white transition-transform active:scale-95 flex items-center gap-1 shadow-xs"
+                            title="Open directly in Google Calendar app (zero file download)"
+                          >
+                            <span>📅</span>
+                            <span>Open in Google Calendar</span>
+                          </a>
+                          <button
+                            type="button"
+                            onClick={() => handleSyncJobToCalendar(j)}
+                            className={`text-[9.5px] font-black px-2 py-0.5 rounded-md border cursor-pointer transition-transform active:scale-95 flex items-center gap-1 ${
+                              calendarSyncStatus === 'SYNCED'
+                                ? 'bg-emerald-500/15 text-emerald-400 border-emerald-500/40 hover:bg-emerald-500/25'
+                                : 'bg-[var(--surface-subtle)] text-[var(--text)] border-[var(--border)] hover:border-[#f1c40f]/60'
+                            }`}
+                            title="Download single-event overwrite-safe .ics file (persistent UID & SEQUENCE)"
+                          >
+                            <span>📥</span>
+                            <span>{calendarSyncStatus === 'SYNCED' ? '.ICS ✓' : '.ICS'}</span>
+                          </button>
+                        </div>
                       )}
                     </div>
                   </div>
@@ -717,27 +736,42 @@ export const FolderViewModal: React.FC<FolderViewModalProps> = ({
                         ✏️ Edit
                       </button>
                       {j.schedDate ? (
-                        <button
-                          type="button"
-                          onClick={() => handleSyncJobToCalendar(j)}
+                        <a
+                          href={buildGoogleCalendarTemplateUrl(
+                            {
+                              ...customer,
+                              name: name.trim() || customer.name,
+                              address: address.trim(),
+                              phone: phone.trim(),
+                              email: email.trim(),
+                            },
+                            j
+                          )}
+                          target="_blank"
+                          rel="noreferrer"
+                          onClick={() => {
+                            if (onMarkCalendarSynced) {
+                              onMarkCalendarSynced(customer.id, Date.now());
+                            }
+                          }}
                           className="py-1.5 bg-[#0a84ff] hover:opacity-95 text-white font-extrabold text-[10px] rounded-lg cursor-pointer transition-transform active:scale-95 flex items-center justify-center gap-1 shadow-sm"
-                          title="Export overwrite-safe .ics event to add or update in your calendar"
+                          title="Open directly in Google Calendar app (zero file download)"
                         >
                           <span>📅</span>
-                          <span>Sync .ICS</span>
-                        </button>
+                          <span>Google Cal</span>
+                        </a>
                       ) : (
                         <button
                           type="button"
                           onClick={() => {
                             onOpenJobModal(j);
-                            onToast('Set a start date first to sync this project to calendar');
+                            onToast('Set a start date first to open in Google Calendar');
                           }}
                           className="py-1.5 bg-[var(--surface-subtle)] hover:bg-[var(--border)] border border-[var(--border)] text-gray-400 font-bold text-[10px] rounded-lg cursor-pointer flex items-center justify-center gap-1"
-                          title="Set start date first to sync to calendar"
+                          title="Set start date first to open in Google Calendar"
                         >
                           <span>📅</span>
-                          <span>Sync .ICS</span>
+                          <span>Google Cal</span>
                         </button>
                       )}
                       <button

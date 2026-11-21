@@ -5,6 +5,7 @@ import {
   collectScheduledCalendarEntries,
   buildIcsCalendarFile,
   deliverIcsCalendarFile,
+  buildGoogleCalendarTemplateUrl,
 } from '../../utils/calendarIcs';
 
 interface CalendarSyncModalProps {
@@ -55,12 +56,7 @@ export const CalendarSyncModal: React.FC<CalendarSyncModalProps> = ({
           ? `Krueger_Calendar_Updates_${todayTag}.ics`
           : `Krueger_Calendar_Full_Schedule_${todayTag}.ics`;
 
-      const outcome = await deliverIcsCalendarFile(
-        icsString,
-        fileName,
-        'Krueger Painting Schedule Sync',
-        `Import ${targetEntries.length} scheduled job${targetEntries.length === 1 ? '' : 's'} into your calendar`
-      );
+      await deliverIcsCalendarFile(icsString, fileName);
 
       const syncedAt = Date.now();
       const exportedCustomerIds = Array.from(
@@ -68,11 +64,11 @@ export const CalendarSyncModal: React.FC<CalendarSyncModalProps> = ({
       );
       onMarkCustomersCalendarSynced(exportedCustomerIds, syncedAt);
 
-      const summary = `${
-        outcome === 'SHARED' ? 'Opened calendar import' : 'Downloaded .ics file'
-      } with ${targetEntries.length} job${targetEntries.length === 1 ? '' : 's'} (overwrite-safe UID + SEQUENCE).`;
+      const summary = `Downloaded ${fileName} with ${targetEntries.length} job${
+        targetEntries.length === 1 ? '' : 's'
+      } (overwrite-safe UID + SEQUENCE).`;
       setLastExportSummary(summary);
-      onToast(`✔ Exported ${targetEntries.length} job${targetEntries.length === 1 ? '' : 's'} to .ICS`);
+      onToast(`✔ Downloaded ${targetEntries.length} job${targetEntries.length === 1 ? '' : 's'} to .ICS`);
     } catch (err: any) {
       console.error('ICS export failed:', err);
       onToast('Could not generate calendar file.');
@@ -181,21 +177,33 @@ export const CalendarSyncModal: React.FC<CalendarSyncModalProps> = ({
                       </div>
                     </div>
 
-                    <span
-                      className={`text-[9px] font-black px-2 py-0.5 rounded shrink-0 ${
-                        syncStatus === 'NEW'
-                          ? 'bg-[#2c2317] text-[#f1c40f] border border-[#f1c40f]/40'
+                    <div className="flex items-center gap-1.5 shrink-0">
+                      <a
+                        href={buildGoogleCalendarTemplateUrl(customer, job)}
+                        target="_blank"
+                        rel="noreferrer"
+                        onClick={() => onMarkCustomersCalendarSynced([customer.id], Date.now())}
+                        className="text-[9px] font-black px-2 py-0.5 rounded bg-[#0a84ff] hover:opacity-95 text-white transition-transform active:scale-95"
+                        title="Open this event directly in Google Calendar app (zero file download)"
+                      >
+                        ↗ GCal
+                      </a>
+                      <span
+                        className={`text-[9px] font-black px-2 py-0.5 rounded ${
+                          syncStatus === 'NEW'
+                            ? 'bg-[#2c2317] text-[#f1c40f] border border-[#f1c40f]/40'
+                            : syncStatus === 'UPDATED'
+                            ? 'bg-amber-500/20 text-amber-300 border border-amber-500/50'
+                            : 'bg-emerald-500/15 text-emerald-400 border border-emerald-500/40'
+                        }`}
+                      >
+                        {syncStatus === 'NEW'
+                          ? '🆕 New'
                           : syncStatus === 'UPDATED'
-                          ? 'bg-amber-500/20 text-amber-300 border border-amber-500/50'
-                          : 'bg-emerald-500/15 text-emerald-400 border border-emerald-500/40'
-                      }`}
-                    >
-                      {syncStatus === 'NEW'
-                        ? '🆕 New'
-                        : syncStatus === 'UPDATED'
-                        ? `✏️ Updated • Seq #${sequence}`
-                        : `✓ Synced • Seq #${sequence}`}
-                    </span>
+                          ? `✏️ Seq #${sequence}`
+                          : `✓ Synced`}
+                      </span>
+                    </div>
                   </div>
                 );
               })
@@ -243,10 +251,26 @@ export const CalendarSyncModal: React.FC<CalendarSyncModalProps> = ({
           </button>
         </div>
 
-        {/* Zero-Auth Explanation Footer */}
-        <p className="text-[10px] text-[var(--text-muted)] leading-relaxed text-center pt-1 border-t border-[var(--border)]">
-          No Google login required. Open the exported <strong className="text-[var(--text)]">.ics</strong> file to import into Google Calendar or Apple Calendar—matching jobs overwrite existing events cleanly via persistent <code className="text-[#f1c40f]">UID</code> &amp; <code className="text-[#f1c40f]">SEQUENCE</code>.
-        </p>
+        {/* Clear Bulk Import Helper Tip */}
+        <div className="bg-[var(--surface-subtle)] border border-[var(--border)] rounded-xl p-3 space-y-1.5 text-[10.5px] text-[var(--text-muted)] leading-relaxed">
+          <div>
+            <strong className="text-[#f1c40f]">Tip:</strong> For multi-job <code className="text-[var(--text)]">.ics</code> batch files, import via{' '}
+            <strong className="text-[var(--text)]">calendar.google.com → Settings → Import &amp; export</strong> so Google Calendar updates existing entries cleanly without duplicates.
+          </div>
+          <div className="flex items-center justify-between gap-2 pt-1 border-t border-[var(--border)]/60 flex-wrap">
+            <span className="text-[10px]">
+              For a single job on Android, tap <strong className="text-[#60a5fa]">↗ GCal</strong> above for instant 1-tap open.
+            </span>
+            <a
+              href="https://calendar.google.com/calendar/u/0/r/settings/export"
+              target="_blank"
+              rel="noreferrer"
+              className="text-[10px] font-extrabold text-[#f1c40f] hover:underline shrink-0"
+            >
+              Open Import &amp; Export ↗
+            </a>
+          </div>
+        </div>
       </div>
     </div>
   );

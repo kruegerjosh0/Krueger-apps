@@ -74,7 +74,7 @@ import {
 } from './utils/googleWorkspace';
 import {
   hasCalendarRelevantChanges,
-  exportSingleCustomerJobIcs,
+  buildGoogleCalendarTemplateUrl,
 } from './utils/calendarIcs';
 
 export default function App() {
@@ -668,12 +668,10 @@ export default function App() {
     handleUpdateCustomer(updated);
     showToast('✔ Estimate Scheduled!');
 
-    if (confirm('Estimate scheduled! Export .ICS calendar event to add to your phone calendar now?')) {
-      const res = await exportSingleCustomerJobIcs(updated, estJob);
-      if (res.exportedCount > 0) {
-        handleMarkCustomersCalendarSynced([updated.id], Date.now());
-        showToast('✔ Exported Estimate .ICS to Calendar');
-      }
+    if (confirm('Estimate scheduled! Open directly in Google Calendar app now?')) {
+      window.open(buildGoogleCalendarTemplateUrl(updated, estJob), '_blank', 'noopener,noreferrer');
+      handleMarkCustomersCalendarSynced([updated.id], Date.now());
+      showToast('✔ Opened in Google Calendar');
     }
   };
 

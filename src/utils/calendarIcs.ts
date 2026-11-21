@@ -10,6 +10,13 @@ export interface ScheduledCalendarEntry {
   syncStatus: 'NEW' | 'UPDATED' | 'SYNCED';
 }
 
+const utf8Encoder = typeof TextEncoder !== 'undefined' ? new TextEncoder() : null;
+
+function utf8ByteLength(str: string): number {
+  if (utf8Encoder) return utf8Encoder.encode(str).length;
+  return unescape(encodeURIComponent(str)).length;
+}
+
 function escapeIcsText(raw?: string | null): string {
   return (raw || '')
     .replace(/\\/g, '\\\\')
@@ -20,38 +27,89 @@ function escapeIcsText(raw?: string | null): string {
 }
 
 /**
- * RFC 5545 line folding (max 75 octets per line, continuation lines prefixed with a single space).
+ * Strict RFC 5545 UTF-8 octet-safe line folding:
+ * - Every line is strictly <= 75 UTF-8 bytes (74 on first line, 73 + leading space on continuations)
+ * - Never splits multi-byte Unicode code points (emojis, em-dashes)
+ * - Never splits inside a backslash escape sequence (\n, \,, \;)
  */
 function foldIcsLine(line: string): string {
-  if (line.length <= 74) return line;
+  if (utf8ByteLength(line) <= 74) return line;
+
+  const chars = Array.from(line);
   const chunks: string[] = [];
-  let idx = 0;
-  let limit = 74;
-  while (idx < line.length) {
-    let end = Math.min(idx + limit, line.length);
-    if (end < line.length && line[end - 1] === '\\') {
-      end -= 1;
+  let current = '';
+  let currentBytes = 0;
+  let maxBytes = 74;
+
+  for (let i = 0; i < chars.length; i++) {
+    const ch = chars[i];
+    const chBytes = utf8ByteLength(ch);
+
+    if (currentBytes + chBytes > maxBytes && current.length > 0) {
+      // Avoid breaking right after an escape backslash
+      if (current.endsWith('\\') && current.length > 1) {
+        chunks.push(chunks.length === 0 ? current.slice(0, -1) : ' ' + current.slice(0, -1));
+        current = '\\' + ch;
+        currentBytes = 1 + chBytes;
+      } else {
+        chunks.push(chunks.length === 0 ? current : ' ' + current);
+        current = ch;
+        currentBytes = chBytes;
+      }
+      maxBytes = 73;
+    } else {
+      current += ch;
+      currentBytes += chBytes;
     }
-    chunks.push(idx === 0 ? line.slice(idx, end) : ' ' + line.slice(idx, end));
-    idx = end;
-    limit = 73;
   }
+
+  if (current.length > 0) {
+    chunks.push(chunks.length === 0 ? current : ' ' + current);
+  }
+
   return chunks.join('\r\n');
 }
 
+/**
+ * Normalizes any date string (YYYY-MM-DD, MM/DD/YYYY, etc.) into strict local YYYY-MM-DD.
+ * Returns empty string if invalid so malformed DTSTART/DTEND lines can never be emitted.
+ */
+export function normalizeToStrictIsoDate(rawDate?: string | null): string {
+  if (!rawDate) return '';
+  const trimmed = rawDate.trim();
+  const isoMatch = trimmed.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
+  if (isoMatch) {
+    const y = Number(isoMatch[1]);
+    const m = Number(isoMatch[2]);
+    const d = Number(isoMatch[3]);
+    if (y >= 2000 && y <= 2100 && m >= 1 && m <= 12 && d >= 1 && d <= 31) {
+      return `${String(y).padStart(4, '0')}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+    }
+  }
+
+  const ms = parseLocalDateMs(trimmed);
+  if (ms === null) return '';
+  const dt = new Date(ms);
+  const y = dt.getFullYear();
+  const m = String(dt.getMonth() + 1).padStart(2, '0');
+  const d = String(dt.getDate()).padStart(2, '0');
+  return `${y}-${m}-${d}`;
+}
+
 function formatDateCompact(isoDate: string): string {
-  return (isoDate || '').trim().replace(/-/g, '').slice(0, 8);
+  const strict = normalizeToStrictIsoDate(isoDate);
+  return strict ? strict.replace(/-/g, '') : '';
 }
 
 function addDaysToIsoDate(isoDate: string, daysToAdd: number): string {
-  const match = (isoDate || '').trim().match(/^(\d{4})-(\d{2})-(\d{2})/);
-  if (!match) return isoDate;
-  const d = new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3]));
-  d.setDate(d.getDate() + daysToAdd);
-  const y = d.getFullYear();
-  const m = String(d.getMonth() + 1).padStart(2, '0');
-  const day = String(d.getDate()).padStart(2, '0');
-  return `${y}-${m}-${day}`;
+  const strict = normalizeToStrictIsoDate(isoDate);
+  if (!strict) return '';
+  const [y, m, d] = strict.split('-').map(Number);
+  const dt = new Date(y, m - 1, d);
+  dt.setDate(dt.getDate() + daysToAdd);
+  return `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}-${String(
+    dt.getDate()
+  ).padStart(2, '0')}`;
 }
 
 function formatUtcDtstamp(date: Date = new Date()): string {
@@ -63,8 +121,8 @@ function formatUtcDtstamp(date: Date = new Date()): string {
 }
 
 /**
- * Attempts to parse an appointment clock time (e.g. "9:00 AM", "2:30 PM") from a job title
- * such as "On-Site Estimate (9:00 AM)" so timed appointments get exact DTSTART/DTEND times.
+ * Parses an appointment clock time (e.g. "9:00 AM", "2:30 PM") from a job title
+ * such as "On-Site Estimate (9:00 AM)" so timed appointments get clean local YYYYMMDDTHHMMSS timestamps.
  */
 function extractAppointmentTime(title?: string): { hour24: number; minute: number } | null {
   if (!title) return null;
@@ -77,6 +135,30 @@ function extractAppointmentTime(title?: string): { hour24: number; minute: numbe
   if (period === 'PM' && hour !== 12) hour += 12;
   if (period === 'AM' && hour === 12) hour = 0;
   return { hour24: hour, minute };
+}
+
+function buildEventDescriptionText(customer: Customer, job: JobProject): string {
+  const descParts: string[] = [];
+  if (job.title && job.title.trim()) {
+    descParts.push(`Project: ${job.title.trim()}`);
+  }
+  if (customer.phone && customer.phone.trim()) {
+    descParts.push(`Phone: ${customer.phone.trim()}`);
+  }
+  if (customer.email && customer.email.trim()) {
+    descParts.push(`Email: ${customer.email.trim()}`);
+  }
+  if (job.prepScope && job.prepScope.trim()) {
+    descParts.push('');
+    descParts.push('Prep & Setup:');
+    descParts.push(job.prepScope.trim());
+  }
+  if (job.scope && job.scope.trim()) {
+    descParts.push('');
+    descParts.push('Scope Notes:');
+    descParts.push(job.scope.trim());
+  }
+  return descParts.join('\n');
 }
 
 /**
@@ -93,6 +175,49 @@ export function buildJobCalendarUid(
     return `krueger-job-${customerId}-${yyyymmdd}-${disambiguateJobId}@kruegerpaintingwi.com`;
   }
   return `krueger-job-${customerId}-${yyyymmdd}@kruegerpaintingwi.com`;
+}
+
+/**
+ * Builds a direct "Open in Google Calendar" template URL that opens natively in the
+ * Google Calendar app on Android/iOS or web without downloading any file.
+ */
+export function buildGoogleCalendarTemplateUrl(customer: Customer, job: JobProject): string {
+  const startIso = normalizeToStrictIsoDate(job.schedDate);
+  if (!startIso) return 'https://calendar.google.com/calendar/render?action=TEMPLATE';
+
+  const rawEndIso = normalizeToStrictIsoDate(job.schedEndDate);
+  const effectiveEndIso = rawEndIso && rawEndIso >= startIso ? rawEndIso : startIso;
+  const startCompact = formatDateCompact(startIso);
+
+  const summary = `Krueger Painting — ${(customer.name || 'Client').trim()}`;
+  const details = buildEventDescriptionText(customer, job);
+  const location = (customer.address || '').trim();
+
+  const pad = (n: number) => String(n).padStart(2, '0');
+  const parsedTime = startIso === effectiveEndIso ? extractAppointmentTime(job.title) : null;
+
+  let datesParam: string;
+  if (parsedTime) {
+    const startH = parsedTime.hour24;
+    const endH = startH < 23 ? startH + 1 : 23;
+    const endMin = startH < 23 ? parsedTime.minute : 59;
+    datesParam = `${startCompact}T${pad(startH)}${pad(parsedTime.minute)}00/${startCompact}T${pad(
+      endH
+    )}${pad(endMin)}00`;
+  } else {
+    const endExclusive = formatDateCompact(addDaysToIsoDate(effectiveEndIso, 1));
+    datesParam = `${startCompact}/${endExclusive}`;
+  }
+
+  const params = new URLSearchParams({
+    action: 'TEMPLATE',
+    text: summary,
+    dates: datesParam,
+  });
+  if (location) params.set('location', location);
+  if (details) params.set('details', details);
+
+  return `https://calendar.google.com/calendar/render?${params.toString()}`;
 }
 
 /**
@@ -156,10 +281,10 @@ export function collectScheduledCalendarEntries(customers: Customer[]): Schedule
 
   customers.forEach((customer) => {
     const eligibleDatedJobs = (customer.jobs || []).filter(
-      (j) => isJobEligibleForScheduledList(customer, j) && Boolean(j.schedDate?.trim())
+      (j) =>
+        isJobEligibleForScheduledList(customer, j) && Boolean(normalizeToStrictIsoDate(j.schedDate))
     );
 
-    // Track if a single customer has multiple distinct jobs on the exact same date
     const dateCounts = new Map<string, number>();
     eligibleDatedJobs.forEach((j) => {
       const k = formatDateCompact(j.schedDate);
@@ -183,7 +308,7 @@ export function collectScheduledCalendarEntries(customers: Customer[]): Schedule
         job,
         uid,
         sequence,
-        sortMs: parseLocalDateMs(job.schedDate) ?? Number.MAX_SAFE_INTEGER,
+        sortMs: parseLocalDateMs(normalizeToStrictIsoDate(job.schedDate)) ?? Number.MAX_SAFE_INTEGER,
         syncStatus,
       });
     });
@@ -198,51 +323,40 @@ export function collectScheduledCalendarEntries(customers: Customer[]): Schedule
 }
 
 /**
- * Builds an RFC 5545 VEVENT block for a single scheduled job entry with persistent UID & SEQUENCE.
+ * Builds a strict RFC 5545 VEVENT block compatible with Android Google Calendar,
+ * Apple Calendar, and Google Calendar Web Import.
  */
 function buildVeventLines(entry: ScheduledCalendarEntry, dtstamp: string): string[] {
   const { customer, job, uid, sequence } = entry;
-  const startIso = (job.schedDate || '').trim();
-  const endIso = (job.schedEndDate || job.schedDate || '').trim();
+  const startIso = normalizeToStrictIsoDate(job.schedDate);
+  if (!startIso) return [];
+
+  const rawEndIso = normalizeToStrictIsoDate(job.schedEndDate);
+  // Guarantee DTEND is strictly after DTSTART (prevents Android "Unable to launch event")
+  const effectiveEndIso = rawEndIso && rawEndIso >= startIso ? rawEndIso : startIso;
   const startCompact = formatDateCompact(startIso);
 
   const summary = `Krueger Painting — ${(customer.name || 'Client').trim()}`;
-
-  const descParts: string[] = [];
-  if (job.title && job.title.trim()) {
-    descParts.push(`Project: ${job.title.trim()}`);
-  }
-  if (customer.phone && customer.phone.trim()) {
-    descParts.push(`Phone: ${customer.phone.trim()}`);
-  }
-  if (customer.email && customer.email.trim()) {
-    descParts.push(`Email: ${customer.email.trim()}`);
-  }
-  if (job.prepScope && job.prepScope.trim()) {
-    descParts.push('');
-    descParts.push('Prep & Setup:');
-    descParts.push(job.prepScope.trim());
-  }
-  if (job.scope && job.scope.trim()) {
-    descParts.push('');
-    descParts.push('Scope Notes:');
-    descParts.push(job.scope.trim());
-  }
+  const description = buildEventDescriptionText(customer, job);
 
   const pad = (n: number) => String(n).padStart(2, '0');
-  const parsedTime = startIso === endIso ? extractAppointmentTime(job.title) : null;
+  const parsedTime = startIso === effectiveEndIso ? extractAppointmentTime(job.title) : null;
 
   let dtStartLine: string;
   let dtEndLine: string;
+  let transpLine = 'TRANSP:OPAQUE';
+
   if (parsedTime) {
-    const endHour = Math.min(23, parsedTime.hour24 + 1);
-    dtStartLine = `DTSTART:${startCompact}T${pad(parsedTime.hour24)}${pad(parsedTime.minute)}00`;
-    dtEndLine = `DTEND:${startCompact}T${pad(endHour)}${pad(parsedTime.minute)}00`;
+    const startH = parsedTime.hour24;
+    const endH = startH < 23 ? startH + 1 : 23;
+    const endMin = startH < 23 ? parsedTime.minute : 59;
+    dtStartLine = `DTSTART:${startCompact}T${pad(startH)}${pad(parsedTime.minute)}00`;
+    dtEndLine = `DTEND:${startCompact}T${pad(endH)}${pad(endMin)}00`;
   } else {
-    // Standard RFC 5545 all-day event (DTEND is exclusive -> add 1 day to inclusive end date)
-    const endExclusive = formatDateCompact(addDaysToIsoDate(endIso, 1));
+    const endExclusive = formatDateCompact(addDaysToIsoDate(effectiveEndIso, 1));
     dtStartLine = `DTSTART;VALUE=DATE:${startCompact}`;
     dtEndLine = `DTEND;VALUE=DATE:${endExclusive}`;
+    transpLine = 'TRANSP:TRANSPARENT';
   }
 
   const lines: string[] = [
@@ -250,6 +364,7 @@ function buildVeventLines(entry: ScheduledCalendarEntry, dtstamp: string): strin
     foldIcsLine(`UID:${uid}`),
     `SEQUENCE:${sequence}`,
     `DTSTAMP:${dtstamp}`,
+    `LAST-MODIFIED:${dtstamp}`,
     dtStartLine,
     dtEndLine,
     foldIcsLine(`SUMMARY:${escapeIcsText(summary)}`),
@@ -259,17 +374,18 @@ function buildVeventLines(entry: ScheduledCalendarEntry, dtstamp: string): strin
     lines.push(foldIcsLine(`LOCATION:${escapeIcsText(customer.address.trim())}`));
   }
 
-  if (descParts.length > 0) {
-    lines.push(foldIcsLine(`DESCRIPTION:${escapeIcsText(descParts.join('\n'))}`));
+  if (description) {
+    lines.push(foldIcsLine(`DESCRIPTION:${escapeIcsText(description)}`));
   }
 
   lines.push('STATUS:CONFIRMED');
+  lines.push(transpLine);
   lines.push('END:VEVENT');
   return lines;
 }
 
 /**
- * Generates a complete, RFC 5545 compliant .ics calendar file string from one or more entries.
+ * Generates a strict RFC 5545 UTF-8 .ics calendar file string using CRLF (\r\n) line endings.
  */
 export function buildIcsCalendarFile(entries: ScheduledCalendarEntry[]): string {
   const dtstamp = formatUtcDtstamp(new Date());
@@ -279,7 +395,6 @@ export function buildIcsCalendarFile(entries: ScheduledCalendarEntry[]): string 
     'PRODID:-//Krueger Painting OS//Calendar Sync//EN',
     'CALSCALE:GREGORIAN',
     'METHOD:PUBLISH',
-    'X-WR-CALNAME:Krueger Painting Schedule',
   ];
 
   entries.forEach((entry) => {
@@ -287,34 +402,18 @@ export function buildIcsCalendarFile(entries: ScheduledCalendarEntry[]): string 
   });
 
   lines.push('END:VCALENDAR');
+  // Strictly CRLF line endings everywhere
   return lines.join('\r\n') + '\r\n';
 }
 
 /**
- * Opens the native mobile share sheet or downloads the generated .ics file directly.
+ * Downloads the generated .ics file directly with strict UTF-8 text/calendar MIME type
+ * (direct download avoids Android Web Share MIME mangling that causes "Unable to launch event").
  */
 export async function deliverIcsCalendarFile(
   icsContent: string,
-  fileName: string,
-  shareTitle: string,
-  shareText: string
-): Promise<'SHARED' | 'DOWNLOADED'> {
-  if (typeof navigator !== 'undefined' && navigator.share) {
-    try {
-      const file = new File([icsContent], fileName, { type: 'text/calendar' });
-      if (navigator.canShare && navigator.canShare({ files: [file] })) {
-        await navigator.share({
-          title: shareTitle,
-          text: shareText,
-          files: [file],
-        });
-        return 'SHARED';
-      }
-    } catch (err: any) {
-      if (err?.name === 'AbortError') return 'SHARED';
-    }
-  }
-
+  fileName: string
+): Promise<'DOWNLOADED'> {
   const blob = new Blob([icsContent], { type: 'text/calendar;charset=utf-8' });
   const url = URL.createObjectURL(blob);
   const link = document.createElement('a');
@@ -328,36 +427,35 @@ export async function deliverIcsCalendarFile(
 }
 
 /**
- * Builds and exports a single customer's scheduled job(s) into a duplicate-proof .ics file.
+ * Exports a clean SINGLE-VEVENT .ics file for one customer job so Android Google Calendar
+ * opens it natively without rejecting multi-event files.
  */
 export async function exportSingleCustomerJobIcs(
   customer: Customer,
   targetJob?: JobProject
 ): Promise<{
   exportedCount: number;
-  outcome: 'SHARED' | 'DOWNLOADED';
+  outcome: 'DOWNLOADED';
   fileName: string;
 }> {
   const allCustEntries = collectScheduledCalendarEntries([customer]);
-  const selectedEntries = targetJob
-    ? allCustEntries.filter((e) => e.job.id === targetJob.id)
-    : allCustEntries;
+  const chosenEntry = targetJob
+    ? allCustEntries.find((e) => e.job.id === targetJob.id)
+    : allCustEntries[0];
 
-  if (selectedEntries.length === 0) {
+  if (!chosenEntry) {
     return { exportedCount: 0, outcome: 'DOWNLOADED', fileName: '' };
   }
 
-  const icsContent = buildIcsCalendarFile(selectedEntries);
-  const safeName = (customer.name || 'Client').replace(/[^a-zA-Z0-9]+/g, '_').replace(/^_|_$/g, '');
-  const dateTag = formatDateCompact(selectedEntries[0].job.schedDate);
+  // Strictly single-VEVENT .ics for native Android Calendar compatibility
+  const icsContent = buildIcsCalendarFile([chosenEntry]);
+  const safeName = (customer.name || 'Client')
+    .replace(/[^a-zA-Z0-9]+/g, '_')
+    .replace(/^_|_$/g, '');
+  const dateTag = formatDateCompact(chosenEntry.job.schedDate);
   const fileName = `Krueger_${safeName}_${dateTag}.ics`;
 
-  const outcome = await deliverIcsCalendarFile(
-    icsContent,
-    fileName,
-    `Krueger Painting — ${customer.name}`,
-    `Add or update ${customer.name} in your calendar`
-  );
+  const outcome = await deliverIcsCalendarFile(icsContent, fileName);
 
-  return { exportedCount: selectedEntries.length, outcome, fileName };
+  return { exportedCount: 1, outcome, fileName };
 }

@@ -30,6 +30,118 @@ export const DEFAULT_SYSTEM_CONSTANTS: SystemConstants = {
   paintCostPerGal: 65,
 };
 
+const DEMO_PURGE_FLAG_KEY = 'KMaster_DemoPurge_v1';
+const LEGACY_DEMO_IDS = new Set<number>([1710000001, 1710000002, 1710000003]);
+const LEGACY_DEMO_JOB_IDS = new Set<number>([201, 202, 203]);
+const LEGACY_DEMO_EMAIL_HASHES = new Set<string>(['3f2f79ab', 'b737c3d9', 'dfb329ca']);
+const LEGACY_DEMO_NAME_ADDR_HASHES = new Set<string>(['abb852bc', 'd68528e3', '7763a4db']);
+const LEGACY_DEMO_NAME_HASHES = new Set<string>(['c68b1e6e', '60cec53e', '8e9a0118']);
+
+function hashNormalizedString(raw?: string | null): string {
+  const s = (raw || '').trim().toLowerCase().replace(/\s+/g, ' ');
+  let h = 5381;
+  for (let i = 0; i < s.length; i++) {
+    h = ((h << 5) + h + s.charCodeAt(i)) >>> 0;
+  }
+  return h.toString(16);
+}
+
+/**
+ * Identifies the 3 legacy starter/demo customer entries that earlier versions
+ * automatically seeded into localStorage/IndexedDB, without matching real client records.
+ */
+export function isLegacyDemoCustomer(customer: Customer | null | undefined): boolean {
+  if (!customer || typeof customer !== 'object') return false;
+  if (LEGACY_DEMO_IDS.has(Number(customer.id))) return true;
+
+  if (customer.email && LEGACY_DEMO_EMAIL_HASHES.has(hashNormalizedString(customer.email))) {
+    return true;
+  }
+
+  if (customer.name && customer.address) {
+    const pairHash = hashNormalizedString(`${customer.name}|${customer.address}`);
+    if (LEGACY_DEMO_NAME_ADDR_HASHES.has(pairHash)) return true;
+  }
+
+  if (
+    customer.name &&
+    LEGACY_DEMO_NAME_HASHES.has(hashNormalizedString(customer.name)) &&
+    Array.isArray(customer.jobs) &&
+    customer.jobs.some((j) => LEGACY_DEMO_JOB_IDS.has(Number(j?.id)))
+  ) {
+    return true;
+  }
+
+  return false;
+}
+
+/**
+ * Filters out any legacy demo customers while leaving real customers untouched.
+ */
+export function purgeLegacyDemoCustomers(customers: Customer[]): {
+  cleaned: Customer[];
+  removedCount: number;
+} {
+  if (!Array.isArray(customers) || customers.length === 0) {
+    return { cleaned: [], removedCount: 0 };
+  }
+  const cleaned = customers.filter((c) => !isLegacyDemoCustomer(c));
+  return {
+    cleaned,
+    removedCount: customers.length - cleaned.length,
+  };
+}
+
+/**
+ * One-time startup migration that removes previously seeded demo clients from both
+ * localStorage (`KMaster_C`) and IndexedDB (`KruegerOS_OfflineDB_v2`) while preserving
+ * all real customer records.
+ */
+export async function runOneTimeDemoDataPurge(loadedCustomers: Customer[]): Promise<Customer[]> {
+  let alreadyDone = false;
+  try {
+    alreadyDone = typeof localStorage !== 'undefined' && localStorage.getItem(DEMO_PURGE_FLAG_KEY) === '1';
+  } catch {
+    alreadyDone = false;
+  }
+
+  if (alreadyDone) {
+    return loadedCustomers;
+  }
+
+  const { cleaned, removedCount } = purgeLegacyDemoCustomers(loadedCustomers);
+
+  // Also check raw localStorage in case IndexedDB and localStorage diverged
+  let rawLsHadDemo = false;
+  try {
+    if (typeof localStorage !== 'undefined') {
+      const rawLs = localStorage.getItem('KMaster_C');
+      if (rawLs) {
+        const parsedLs = JSON.parse(rawLs);
+        if (Array.isArray(parsedLs) && parsedLs.some((c) => isLegacyDemoCustomer(c))) {
+          rawLsHadDemo = true;
+        }
+      }
+    }
+  } catch {
+    // Ignore malformed legacy localStorage value
+  }
+
+  if (removedCount > 0 || rawLsHadDemo) {
+    await saveRecord('KMaster_C', cleaned);
+  }
+
+  try {
+    if (typeof localStorage !== 'undefined') {
+      localStorage.setItem(DEMO_PURGE_FLAG_KEY, '1');
+    }
+  } catch {
+    // Ignore storage quota errors
+  }
+
+  return cleaned;
+}
+
 let dbInstance: IDBDatabase | null = null;
 
 export function openDatabase(): Promise<IDBDatabase> {

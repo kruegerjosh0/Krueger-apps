@@ -24,6 +24,7 @@ import {
   getFullBackupFilename,
   parseBackupJson,
   restoreRawStorageEntries,
+  runOneTimeDemoDataPurge,
   NormalizedRestorePayload,
 } from './utils/db';
 import {
@@ -271,6 +272,7 @@ export default function App() {
       applyAccents(a1, a2, a3);
 
       let activeCustomers = await loadRecord<Customer[]>('KMaster_C', []);
+      activeCustomers = await runOneTimeDemoDataPurge(activeCustomers);
       let activeNotes = await loadRecord<FieldNote[]>('KMaster_Notes', []);
       let activeExpenses = await loadRecord<ExpenseEntry[]>('KMaster_Exp', []);
       let activeMileage = await loadRecord<MileageEntry[]>('KMaster_Mil', []);

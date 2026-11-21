@@ -1,5 +1,6 @@
 import { jsPDF } from 'jspdf';
 import { Customer, JobProject, PrintSettings, SystemConstants } from '../types';
+import { resolvePrepOptionScopeText } from './projectHelpers';
 
 export interface GeneratedPdfResult {
   doc: jsPDF;
@@ -413,22 +414,47 @@ export async function generateEstimateOrBillPdf(
   if (rawJobPrep) {
     drawSectionHeader('PREP WORK');
     doc.setFont('helvetica', 'normal');
-    doc.setFontSize(10);
+    doc.setFontSize(9.5);
     doc.setTextColor(30, 30, 30);
 
-    const formattedJobPrep = rawJobPrep
-      .split('\n')
-      .map((line) => {
-        const t = line.trim();
-        if (!t) return '';
-        return t.startsWith('- ') ? `• ${t.slice(2)}` : t;
-      })
-      .join('\n');
+    const prepRawLines = rawJobPrep.split('\n');
+    const bulletIndent = 12;
+    const lineHeight = 13.5;
 
-    const prepLines = doc.splitTextToSize(formattedJobPrep, contentWidth);
-    checkPageBreak(prepLines.length * 14 + 10);
-    doc.text(prepLines, margin, y);
-    y += prepLines.length * 14 + 12;
+    prepRawLines.forEach((rawLine) => {
+      const t = rawLine.trim();
+      if (!t) {
+        y += 5;
+        return;
+      }
+
+      const isBullet = /^[-•*]\s+/.test(t);
+      if (isBullet) {
+        const bodyText = t.replace(/^[-•*]\s+/, '');
+        const wrapped = doc.splitTextToSize(bodyText, contentWidth - bulletIndent);
+        checkPageBreak(wrapped.length * lineHeight + 4);
+        doc.setFont('helvetica', 'normal');
+        doc.setFontSize(9.5);
+        doc.setTextColor(30, 30, 30);
+        doc.text('•', margin + 2, y);
+        wrapped.forEach((wLine: string, wIdx: number) => {
+          doc.text(wLine, margin + bulletIndent, y + wIdx * lineHeight);
+        });
+        y += wrapped.length * lineHeight + 3;
+      } else {
+        const wrapped = doc.splitTextToSize(t, contentWidth);
+        checkPageBreak(wrapped.length * lineHeight + 4);
+        doc.setFont('helvetica', 'normal');
+        doc.setFontSize(9.5);
+        doc.setTextColor(30, 30, 30);
+        wrapped.forEach((wLine: string, wIdx: number) => {
+          doc.text(wLine, margin, y + wIdx * lineHeight);
+        });
+        y += wrapped.length * lineHeight + 3;
+      }
+    });
+
+    y += 8;
   }
 
   // Reserved width for price column on the right (strictly prevents any text overlap)
@@ -473,9 +499,9 @@ export async function generateEstimateOrBillPdf(
         paintDetail = paintParts.join(' - ');
       }
 
-      // Room-specific prep & setup checklist items
+      // Room-specific prep & setup checklist items (expanded to client-ready estimate phrasing)
       const roomPrepList = Array.isArray(r.prep)
-        ? r.prep.map((p) => p.trim()).filter(Boolean)
+        ? r.prep.map((p) => resolvePrepOptionScopeText(p)).filter(Boolean)
         : [];
       const roomPrepDetail =
         roomPrepList.length > 0 ? `Prep & Setup: ${roomPrepList.join(' • ')}` : '';

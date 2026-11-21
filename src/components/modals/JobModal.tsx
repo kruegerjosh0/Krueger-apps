@@ -6,6 +6,8 @@ import {
   normalizePipelineStage,
   isPrepLineChecked,
   togglePrepScopeLine,
+  hasAnyCheckedPrepLine,
+  clearChecklistPrepLines,
 } from '../../utils/projectHelpers';
 
 interface JobModalProps {
@@ -638,11 +640,12 @@ export const JobModal: React.FC<JobModalProps> = ({
                 <label className="text-[9px] uppercase font-extrabold text-[#f1c40f] tracking-wider">
                   Quick-Tap Job Prep &amp; Setup Checklist
                 </label>
-                {prepScope.trim() && (
+                {hasAnyCheckedPrepLine(prepScope) && (
                   <button
                     type="button"
-                    onClick={() => setPrepScope('')}
+                    onClick={() => setPrepScope((prev) => clearChecklistPrepLines(prev))}
                     className="text-[9.5px] font-bold text-red-400 hover:underline cursor-pointer"
+                    title="Remove quick-tap checklist lines while keeping custom notes"
                   >
                     Clear Prep
                   </button>
@@ -664,8 +667,9 @@ export const JobModal: React.FC<JobModalProps> = ({
                         const checked = isPrepLineChecked(prepScope, prepOption);
                         return (
                           <button
-                            key={prepOption}
+                            key={prepOption.label}
                             type="button"
+                            title={prepOption.scopeText}
                             onClick={() => setPrepScope((prev) => togglePrepScopeLine(prev, prepOption))}
                             className={`text-[10.5px] px-2.5 py-1.5 rounded-lg border transition-all cursor-pointer flex items-center gap-1.5 active:scale-95 ${
                               checked
@@ -674,7 +678,7 @@ export const JobModal: React.FC<JobModalProps> = ({
                             }`}
                           >
                             <span>{checked ? '✓' : '+'}</span>
-                            <span>{prepOption}</span>
+                            <span>{prepOption.label}</span>
                           </button>
                         );
                       })}
@@ -684,12 +688,12 @@ export const JobModal: React.FC<JobModalProps> = ({
               </div>
 
               <textarea
-                rows={3}
+                rows={5}
                 autoComplete="off"
                 value={prepScope}
                 onChange={(e) => setPrepScope(e.target.value)}
-                placeholder="Selected prep items appear here — or type custom prep notes..."
-                className="w-full bg-[var(--bg)] border border-[var(--border)] focus:border-[var(--accent)] text-[var(--text)] rounded-lg p-2 text-xs outline-none"
+                placeholder="Selected prep scope lines appear here — or type custom prep notes..."
+                className="w-full bg-[var(--bg)] border border-[var(--border)] focus:border-[var(--accent)] text-[var(--text)] rounded-lg p-2.5 text-xs leading-relaxed outline-none"
               />
             </div>
 
@@ -872,13 +876,14 @@ export const JobModal: React.FC<JobModalProps> = ({
                               <span>{category.label}</span>
                             </div>
                             <div className="flex flex-wrap gap-1.5">
-                              {category.items.map((item) => {
-                                const isSelected = selectedRoomPrep.includes(item);
+                              {category.items.map((prepOption) => {
+                                const isSelected = selectedRoomPrep.includes(prepOption.label);
                                 return (
                                   <button
-                                    key={item}
+                                    key={prepOption.label}
                                     type="button"
-                                    onClick={() => toggleRoomPrepItem(idx, item)}
+                                    title={prepOption.scopeText}
+                                    onClick={() => toggleRoomPrepItem(idx, prepOption.label)}
                                     className={`text-[10px] px-2 py-1 rounded-md border transition-all cursor-pointer flex items-center gap-1 active:scale-95 ${
                                       isSelected
                                         ? 'bg-[#f1c40f] text-[#231709] border-[#f1c40f] font-black'
@@ -886,7 +891,7 @@ export const JobModal: React.FC<JobModalProps> = ({
                                     }`}
                                   >
                                     <span>{isSelected ? '✓' : '+'}</span>
-                                    <span>{item}</span>
+                                    <span>{prepOption.label}</span>
                                   </button>
                                 );
                               })}

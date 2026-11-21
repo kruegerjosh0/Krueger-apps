@@ -9,11 +9,16 @@ export const PAINT_SHEEN_OPTIONS = [
   'Primer / Sealer',
 ] as const;
 
+export interface PrepChecklistOption {
+  label: string;
+  scopeText: string;
+}
+
 export interface PrepCategory {
   id: 'protection' | 'surface';
   label: string;
   icon: string;
-  items: readonly string[];
+  items: readonly PrepChecklistOption[];
 }
 
 export const PREP_CHECKLIST_CATEGORIES: readonly PrepCategory[] = [
@@ -22,11 +27,26 @@ export const PREP_CHECKLIST_CATEGORIES: readonly PrepCategory[] = [
     label: 'Protection & Masking',
     icon: '🛡️',
     items: [
-      'Mask/tape baseboards',
-      'Mask windows & trim',
-      'Cover furniture & fixtures',
-      'Lay canvas drop cloths',
-      'Lay rosin paper / floor protection',
+      {
+        label: 'Mask/tape baseboards',
+        scopeText: '- Tape and mask all baseboards and trim edges for clean paint lines',
+      },
+      {
+        label: 'Mask windows & trim',
+        scopeText: '- Mask and protect all windows, casings, and adjacent trim surfaces',
+      },
+      {
+        label: 'Cover furniture & fixtures',
+        scopeText: '- Cover all furniture, cabinetry, and fixtures with new plastic sheeting',
+      },
+      {
+        label: 'Lay canvas drop cloths',
+        scopeText: '- Cover all floors and walkways with heavy-duty canvas drop cloths',
+      },
+      {
+        label: 'Lay rosin paper / floor protection',
+        scopeText: '- Protect hard flooring and high-traffic paths with rosin paper and tape',
+      },
     ],
   },
   {
@@ -34,15 +54,46 @@ export const PREP_CHECKLIST_CATEGORIES: readonly PrepCategory[] = [
     label: 'Surface Prep',
     icon: '🔧',
     items: [
-      'Patch nail holes & minor drywall',
-      'Sand & scuff surfaces',
-      'Scrape loose/peeling paint',
-      'Caulk trim & gaps',
-      'Degrease / wash walls (Spray Nine)',
-      'Prime stains / bare spots',
+      {
+        label: 'Patch nail holes & minor drywall',
+        scopeText: '- Patch all nail holes, dings, and minor drywall imperfections, sand smooth, and spot-prime',
+      },
+      {
+        label: 'Full drywall patch process',
+        scopeText:
+          '- Drywall Patches: Cut/replace damaged drywall as needed, apply drywall tape to joints, apply two coats of drywall compound (sanding smooth between coats), and apply matching texture to blend with existing surface',
+      },
+      {
+        label: 'Sand & scuff surfaces',
+        scopeText: '- Scuff-sand all glossy or previously painted surfaces to ensure proper paint adhesion',
+      },
+      {
+        label: 'Scrape loose/peeling paint',
+        scopeText: '- Scrape and feather-sand all loose or peeling paint areas necessary to ensure proper bonding',
+      },
+      {
+        label: 'Caulk trim & gaps',
+        scopeText: '- Caulk all open gaps, trim seams, and minor cracks with paintable elastomeric caulk',
+      },
+      {
+        label: 'Degrease / wash walls (Spray Nine)',
+        scopeText: '- Clean and degrease soiled walls and high-touch surfaces (Spray Nine) prior to coating',
+      },
+      {
+        label: 'Prime stains / bare spots',
+        scopeText:
+          '- Spot-prime all water stains, bare wood/drywall, and patched areas with appropriate bonding/stain-blocking primer',
+      },
+      {
+        label: 'Pressure wash exterior',
+        scopeText: '- Pressure wash exterior surfaces to remove dirt, chalking, and mildew in preparation for coating',
+      },
     ],
   },
 ] as const;
+
+export const ALL_PREP_CHECKLIST_OPTIONS: readonly PrepChecklistOption[] =
+  PREP_CHECKLIST_CATEGORIES.flatMap((category) => category.items);
 
 export type PipelineStage = 'ACTIVE' | 'SCHEDULED' | 'PENDING' | 'COMPLETED';
 
@@ -210,37 +261,110 @@ export function getLocalTodayIso(): string {
   return `${y}-${m}-${d}`;
 }
 
-/**
- * Checks if a checklist bullet item is currently present in a multiline prepScope string.
- */
-export function isPrepLineChecked(prepScope: string, item: string): boolean {
-  const target = item.trim().toLowerCase();
-  return prepScope
-    .split('\n')
-    .some((line) => line.replace(/^[-•*]\s*/, '').trim().toLowerCase() === target);
+function normalizePrepLine(line: string): string {
+  return line
+    .replace(/^[-•*]\s*/, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toLowerCase();
+}
+
+function getOptionMatchTargets(option: PrepChecklistOption | string): Set<string> {
+  if (typeof option === 'string') {
+    const matched = ALL_PREP_CHECKLIST_OPTIONS.find(
+      (opt) =>
+        normalizePrepLine(opt.label) === normalizePrepLine(option) ||
+        normalizePrepLine(opt.scopeText) === normalizePrepLine(option)
+    );
+    if (matched) {
+      return new Set([normalizePrepLine(matched.scopeText), normalizePrepLine(matched.label)]);
+    }
+    return new Set([normalizePrepLine(option)]);
+  }
+  return new Set([normalizePrepLine(option.scopeText), normalizePrepLine(option.label)]);
 }
 
 /**
- * Cleanly toggles a checklist item inside a multiline prepScope string without corrupting custom notes.
+ * Checks if a checklist option's descriptive estimate line (or legacy short label)
+ * is currently present in a multiline prepScope string.
  */
-export function togglePrepScopeLine(prepScope: string, item: string): string {
-  const target = item.trim().toLowerCase();
-  const lines = prepScope
+export function isPrepLineChecked(prepScope: string, option: PrepChecklistOption | string): boolean {
+  const targets = getOptionMatchTargets(option);
+  return prepScope
     .split('\n')
-    .map((l) => l.trimEnd());
+    .some((line) => targets.has(normalizePrepLine(line)));
+}
 
-  const exists = lines.some(
-    (line) => line.replace(/^[-•*]\s*/, '').trim().toLowerCase() === target
-  );
+/**
+ * Cleanly toggles a checklist option's descriptive scope line inside a multiline prepScope string
+ * without corrupting any custom manual notes.
+ */
+export function togglePrepScopeLine(
+  prepScope: string,
+  option: PrepChecklistOption | string
+): string {
+  const targets = getOptionMatchTargets(option);
+  const scopeTextToInsert =
+    typeof option === 'string'
+      ? ALL_PREP_CHECKLIST_OPTIONS.find(
+          (opt) => normalizePrepLine(opt.label) === normalizePrepLine(option)
+        )?.scopeText || (option.trim().startsWith('-') ? option.trim() : `- ${option.trim()}`)
+      : option.scopeText;
+
+  const lines = prepScope.split('\n').map((l) => l.trimEnd());
+  const exists = lines.some((line) => targets.has(normalizePrepLine(line)));
 
   if (exists) {
     return lines
-      .filter((line) => line.replace(/^[-•*]\s*/, '').trim().toLowerCase() !== target)
+      .filter((line) => !targets.has(normalizePrepLine(line)))
       .join('\n')
       .replace(/\n{3,}/g, '\n\n')
       .trim();
   }
 
   const trimmed = prepScope.trim();
-  return trimmed ? `${trimmed}\n- ${item}` : `- ${item}`;
+  return trimmed ? `${trimmed}\n${scopeTextToInsert}` : scopeTextToInsert;
 }
+
+/**
+ * Returns true if at least one quick-tap checklist option is present in prepScope.
+ */
+export function hasAnyCheckedPrepLine(prepScope: string): boolean {
+  return ALL_PREP_CHECKLIST_OPTIONS.some((opt) => isPrepLineChecked(prepScope, opt));
+}
+
+/**
+ * Removes all quick-tap checklist lines from prepScope while preserving any
+ * custom text typed manually by the contractor.
+ */
+export function clearChecklistPrepLines(prepScope: string): string {
+  const allTargets = new Set<string>();
+  ALL_PREP_CHECKLIST_OPTIONS.forEach((opt) => {
+    allTargets.add(normalizePrepLine(opt.scopeText));
+    allTargets.add(normalizePrepLine(opt.label));
+  });
+
+  return prepScope
+    .split('\n')
+    .map((l) => l.trimEnd())
+    .filter((line) => !allTargets.has(normalizePrepLine(line)))
+    .join('\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
+/**
+ * Resolves a stored room-level prep label to its full client-ready description (without leading dash)
+ * for professional PDF output, falling back to the raw string for custom items.
+ */
+export function resolvePrepOptionScopeText(labelOrText: string): string {
+  const norm = normalizePrepLine(labelOrText);
+  const matched = ALL_PREP_CHECKLIST_OPTIONS.find(
+    (opt) => normalizePrepLine(opt.label) === norm || normalizePrepLine(opt.scopeText) === norm
+  );
+  if (matched) {
+    return matched.scopeText.replace(/^[-•*]\s*/, '').trim();
+  }
+  return labelOrText.replace(/^[-•*]\s*/, '').trim();
+}
+

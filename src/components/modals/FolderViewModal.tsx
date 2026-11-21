@@ -14,6 +14,10 @@ import {
   normalizePipelineStage,
   formatScheduledDate,
 } from '../../utils/projectHelpers';
+import {
+  exportCustomerVcardToContacts,
+  formatCustomerFirstSavedDate,
+} from '../../utils/businessCard';
 
 interface FolderViewModalProps {
   customer: Customer;
@@ -31,6 +35,7 @@ interface FolderViewModalProps {
   onViewDocFile?: (file: { name: string; data: string; tag?: string }) => void;
   onGenerateCollage: () => void;
   onScheduleEstimate: () => void;
+  onShareBusinessCard?: () => void;
   onToast: (msg: string) => void;
 }
 
@@ -46,6 +51,7 @@ export const FolderViewModal: React.FC<FolderViewModalProps> = ({
   onViewDocFile,
   onGenerateCollage,
   onScheduleEstimate,
+  onShareBusinessCard,
   onToast,
 }) => {
   const normalizedOverride =
@@ -198,7 +204,28 @@ export const FolderViewModal: React.FC<FolderViewModalProps> = ({
     }
   };
 
+  const handleSaveToPhoneContacts = () => {
+    const resolvedCreatedAt = customer.createdAt || new Date().toISOString();
+    const customerForExport: Customer = {
+      ...customer,
+      name: name.trim() || customer.name,
+      address: address.trim(),
+      phone: phone.trim(),
+      email: email.trim(),
+      createdAt: resolvedCreatedAt,
+    };
+
+    // Persist initial createdAt date onto older records that didn't have one yet
+    if (!customer.createdAt) {
+      onUpdateCustomer(customerForExport);
+    }
+
+    const { firstSavedLabel } = exportCustomerVcardToContacts(customerForExport);
+    onToast(`✔ Contact Card (.vcf) Ready • First saved: ${firstSavedLabel}`);
+  };
+
   const mapUrl = `http://maps.google.com/?q=${encodeURIComponent(address || '')}`;
+  const firstSavedDisplay = formatCustomerFirstSavedDate(customer.createdAt);
 
   return (
     <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-sm flex flex-col p-2 sm:p-5 overflow-y-auto animate-in fade-in">
@@ -207,7 +234,7 @@ export const FolderViewModal: React.FC<FolderViewModalProps> = ({
         <div className="flex flex-col sm:flex-row sm:items-center justify-between border-b border-[var(--border)] pb-2.5 gap-2">
           <div>
             <span className="text-[10px] font-extrabold uppercase tracking-wide text-[var(--accent)]">
-              Customer File Cabinet
+              Customer File Cabinet • First saved: {firstSavedDisplay}
             </span>
             <h2 className="text-sm sm:text-lg font-black text-[var(--text)]">{name}</h2>
           </div>
@@ -360,6 +387,30 @@ export const FolderViewModal: React.FC<FolderViewModalProps> = ({
           >
             📧 Email Rev
           </button>
+        </div>
+
+        {/* Contact Export & Business Card Bar */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5">
+          <button
+            type="button"
+            onClick={handleSaveToPhoneContacts}
+            className="py-2 px-3 bg-[#1c2e1f] hover:bg-[#243c28] border border-[#30d158]/60 text-[#30d158] font-extrabold text-[10.5px] rounded-lg cursor-pointer transition-transform active:scale-95 flex items-center justify-center gap-1.5 shadow-xs"
+            title="Download/open standard vCard (.vcf) to save this customer to phone contacts"
+          >
+            <span>📇</span>
+            <span>Save to Phone Contacts</span>
+          </button>
+          {onShareBusinessCard && (
+            <button
+              type="button"
+              onClick={onShareBusinessCard}
+              className="py-2 px-3 bg-[#111111] hover:bg-[#1c1d25] border border-[#f1c40f]/70 text-[#f1c40f] font-extrabold text-[10.5px] rounded-lg cursor-pointer transition-transform active:scale-95 flex items-center justify-center gap-1.5 shadow-xs"
+              title="Share Joshua Krueger — Krueger Painting digital business card or .vcf"
+            >
+              <span>💼</span>
+              <span>Share Business Card</span>
+            </button>
+          )}
         </div>
 
         {/* Customer General Notes */}

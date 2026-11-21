@@ -66,6 +66,7 @@ import { ImageViewerModal } from './components/modals/ImageViewerModal';
 import { DataBackupModal } from './components/modals/DataBackupModal';
 import { LetterheadModal } from './components/modals/LetterheadModal';
 import { CalendarSyncModal } from './components/modals/CalendarSyncModal';
+import { ShareBusinessCardModal } from './components/modals/ShareBusinessCardModal';
 import { OfflineIndicator } from './components/OfflineIndicator';
 import {
   GoogleCalendarEvent,
@@ -130,6 +131,7 @@ export default function App() {
   const [cloudSyncOpen, setCloudSyncOpen] = useState(false);
   const [letterheadOpen, setLetterheadOpen] = useState(false);
   const [calendarSyncOpen, setCalendarSyncOpen] = useState(false);
+  const [shareBusinessCardOpen, setShareBusinessCardOpen] = useState(false);
 
   const showToast = (msg: string) => {
     setToastMsg(msg);
@@ -448,16 +450,17 @@ export default function App() {
   // Customers Management
   const handleSaveCustomer = (partial: Partial<Customer>) => {
     const newCust: Customer = {
-      id: Date.now(),
+      id: partial.id || Date.now(),
       name: partial.name || 'Valued Customer',
       address: partial.address || '',
       phone: partial.phone || '',
       email: partial.email || '',
-      notes: '',
-      statusOverride: 'AUTO',
-      isPinned: false,
-      files: [],
-      jobs: [],
+      notes: partial.notes || '',
+      statusOverride: partial.statusOverride || 'AUTO',
+      isPinned: partial.isPinned || false,
+      files: partial.files || [],
+      jobs: partial.jobs || [],
+      createdAt: partial.createdAt || new Date().toISOString(),
       lastActive: Date.now(),
     };
     const updated = [newCust, ...customers];
@@ -1071,6 +1074,7 @@ export default function App() {
 
         {activeTab === 'tools' && (
           <ToolsView
+            onOpenBusinessCard={() => setShareBusinessCardOpen(true)}
             onOpenLetterhead={() => setLetterheadOpen(true)}
             onOpenTaxReport={() => setTaxReportOpen(true)}
             onOpenCalc={() => setCalcOpen(true)}
@@ -1119,6 +1123,7 @@ export default function App() {
           onViewDocFile={handleViewDocFile}
           onGenerateCollage={() => handleGenerateBeforeAfterCollage(activeFolderCustomer)}
           onScheduleEstimate={() => handleScheduleEstimate(activeFolderCustomer)}
+          onShareBusinessCard={() => setShareBusinessCardOpen(true)}
           onToast={showToast}
         />
       )}
@@ -1135,6 +1140,7 @@ export default function App() {
             setActiveEditingJob(null);
           }}
           onSaveJob={handleSaveJob}
+          onShareBusinessCard={() => setShareBusinessCardOpen(true)}
           onToast={showToast}
         />
       )}
@@ -1493,6 +1499,14 @@ export default function App() {
           customers={customers}
           onPersistEventIds={handlePersistCalendarEventIds}
           onClose={() => setCalendarSyncOpen(false)}
+          onToast={showToast}
+        />
+      )}
+
+      {/* On-Demand Digital Business Card & Owner .vcf Share Modal */}
+      {shareBusinessCardOpen && (
+        <ShareBusinessCardModal
+          onClose={() => setShareBusinessCardOpen(false)}
           onToast={showToast}
         />
       )}

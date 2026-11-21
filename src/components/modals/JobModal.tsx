@@ -16,6 +16,7 @@ interface JobModalProps {
   constants: SystemConstants;
   onClose: () => void;
   onSaveJob: (savedJob: JobProject) => void;
+  onShareBusinessCard?: () => void;
   onToast: (msg: string) => void;
 }
 
@@ -36,6 +37,7 @@ export const JobModal: React.FC<JobModalProps> = ({
   constants,
   onClose,
   onSaveJob,
+  onShareBusinessCard,
   onToast,
 }) => {
   const [title, setTitle] = useState(job?.title || '');
@@ -482,7 +484,18 @@ export const JobModal: React.FC<JobModalProps> = ({
               {customer.name}
             </h2>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-1.5">
+            {onShareBusinessCard && (
+              <button
+                type="button"
+                onClick={onShareBusinessCard}
+                className="bg-[#111111] hover:bg-[#1c1d25] border border-[#f1c40f]/70 text-[#f1c40f] font-extrabold text-[10.5px] px-2.5 py-1.5 rounded-lg cursor-pointer transition-transform active:scale-95 flex items-center gap-1"
+                title="Share Joshua Krueger — Krueger Painting business card or .vcf"
+              >
+                <span>💼</span>
+                <span>Share Business Card</span>
+              </button>
+            )}
             <button
               type="button"
               onClick={onClose}

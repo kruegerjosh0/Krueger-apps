@@ -1,6 +1,7 @@
 import { jsPDF } from 'jspdf';
 import { Customer, JobProject, PrintSettings, SystemConstants } from '../types';
 import { resolvePrepOptionScopeText } from './projectHelpers';
+import { KRUEGER_BUSINESS_CARD, getQrMatrix } from './businessCard';
 
 export interface GeneratedPdfResult {
   doc: jsPDF;
@@ -814,9 +815,42 @@ export async function generateEstimateOrBillPdf(
     y += 42;
   }
 
-  // 10. TWO-COLUMN LEGAL & WARRANTY POLICIES AT FOOTER
-  // Ensure legal policies fit on the bottom or on next page
-  if (y + 65 > pageHeight) {
+  // 10. TWO-COLUMN LEGAL & WARRANTY POLICIES + SUBTLE ESTIMATE FOOTER CARD
+  const colWidth = (contentWidth - 16) / 2;
+  const col1X = margin;
+  const col2X = margin + colWidth + 16;
+
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(7);
+  const t1Lines = doc.splitTextToSize(
+    settings.t1 ||
+      'Krueger Painting uses high-quality coatings and prep work for lasting finishes. Standard projects include full two-coat application.',
+    colWidth
+  );
+  const t2Lines = doc.splitTextToSize(
+    settings.t2 ||
+      'A 50% deposit is requested on the first day to initiate work. The remaining balance is due upon physical completion.',
+    colWidth
+  );
+  const t3Lines = doc.splitTextToSize(
+    settings.t3 ||
+      'Final color selections must be provided by the homeowner before the start date. Assistance available upon request.',
+    colWidth
+  );
+  const t4Lines = doc.splitTextToSize(
+    settings.t4 ||
+      'Warranty excludes damage caused by structural settling or moisture issues. Unforeseen issues will be discussed immediately.',
+    colWidth
+  );
+
+  const row1Height = Math.max(t1Lines.length, t2Lines.length) * 8 + 12;
+  const row2Height = Math.max(t3Lines.length, t4Lines.length) * 8 + 10;
+  const legalBlockHeight = 10 + row1Height + row2Height;
+  const includeEstimateFooterCard = type === 'ESTIMATE';
+  const reservedFooterHeight = includeEstimateFooterCard ? 66 : 16;
+
+  // Keep legal policies and subtle estimate footer card together on the final page (never create an orphan card page)
+  if (y + legalBlockHeight + reservedFooterHeight > pageHeight - 14) {
     doc.addPage();
     y = 40;
   }
@@ -826,23 +860,14 @@ export async function generateEstimateOrBillPdf(
   doc.line(margin, y, rightMargin, y);
   y += 10;
 
-  const colWidth = (contentWidth - 16) / 2;
-  const col1X = margin;
-  const col2X = margin + colWidth + 16;
-
   // Row 1: Term 1 & 2
-  let row1Y = y;
+  const row1Y = y;
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(7);
   doc.setTextColor(0, 0, 0);
   doc.text('1. QUALITY & MATERIAL STANDARDS:', col1X, row1Y);
   doc.setFont('helvetica', 'normal');
   doc.setTextColor(70, 70, 70);
-  const t1Lines = doc.splitTextToSize(
-    settings.t1 ||
-      'Krueger Painting uses high-quality coatings and prep work for lasting finishes. Standard projects include full two-coat application.',
-    colWidth
-  );
   doc.text(t1Lines, col1X, row1Y + 8);
 
   doc.setFont('helvetica', 'bold');
@@ -850,27 +875,15 @@ export async function generateEstimateOrBillPdf(
   doc.text('2. PAYMENT POLICY:', col2X, row1Y);
   doc.setFont('helvetica', 'normal');
   doc.setTextColor(70, 70, 70);
-  const t2Lines = doc.splitTextToSize(
-    settings.t2 ||
-      'A 50% deposit is requested on the first day to initiate work. The remaining balance is due upon physical completion.',
-    colWidth
-  );
   doc.text(t2Lines, col2X, row1Y + 8);
 
   // Row 2: Term 3 & 4
-  const row1Height = Math.max(t1Lines.length, t2Lines.length) * 8 + 12;
   const row2Y = row1Y + row1Height;
-
   doc.setFont('helvetica', 'bold');
   doc.setTextColor(0, 0, 0);
   doc.text('3. COLOR SELECTION POLICY:', col1X, row2Y);
   doc.setFont('helvetica', 'normal');
   doc.setTextColor(70, 70, 70);
-  const t3Lines = doc.splitTextToSize(
-    settings.t3 ||
-      'Final color selections must be provided by the homeowner before the start date. Assistance available upon request.',
-    colWidth
-  );
   doc.text(t3Lines, col1X, row2Y + 8);
 
   doc.setFont('helvetica', 'bold');
@@ -878,12 +891,102 @@ export async function generateEstimateOrBillPdf(
   doc.text('4. EXCLUSIONS & WARRANTY TERMS:', col2X, row2Y);
   doc.setFont('helvetica', 'normal');
   doc.setTextColor(70, 70, 70);
-  const t4Lines = doc.splitTextToSize(
-    settings.t4 ||
-      'Warranty excludes damage caused by structural settling or moisture issues. Unforeseen issues will be discussed immediately.',
-    colWidth
-  );
   doc.text(t4Lines, col2X, row2Y + 8);
+
+  // 11. SUBTLE EMBEDDED HORIZONTAL BUSINESS CARD FOOTER STRIP (Estimate PDFs Only — Existing Final Page)
+  if (includeEstimateFooterCard) {
+    const afterLegalY = row2Y + row2Height;
+    const cardHeight = 52;
+    const bottomPadding = 18;
+    const pinnedBottomY = pageHeight - bottomPadding - cardHeight;
+    // Pin cleanly at the very bottom footer of the existing final page, or sit directly below legal text if tight
+    const cardY = Math.min(Math.max(afterLegalY + 8, pinnedBottomY), pageHeight - cardHeight - 10);
+
+    // Dark sleek horizontal strip (#111111) with gold accent stripe (#f1c40f)
+    doc.setFillColor(17, 17, 17);
+    doc.roundedRect(margin, cardY, contentWidth, cardHeight, 4, 4, 'F');
+
+    // Subtle gold left bar & hairline top accent
+    doc.setFillColor(241, 196, 15);
+    doc.rect(margin, cardY, 4, cardHeight, 'F');
+    doc.setDrawColor(241, 196, 15);
+    doc.setLineWidth(0.9);
+    doc.line(margin + 4, cardY + 0.5, rightMargin - 2, cardY + 0.5);
+
+    const textLeftX = margin + 14;
+    const biz = KRUEGER_BUSINESS_CARD;
+
+    // Row 1: Company Name + Owner
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(9.5);
+    doc.setTextColor(241, 196, 15);
+    const companyText = biz.company.toUpperCase();
+    doc.text(companyText, textLeftX, cardY + 16);
+
+    const companyWidth = doc.getTextWidth(companyText);
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(8.5);
+    doc.setTextColor(120, 120, 128);
+    doc.text('|', textLeftX + companyWidth + 6, cardY + 16);
+
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(8.5);
+    doc.setTextColor(255, 255, 255);
+    doc.text(biz.owner, textLeftX + companyWidth + 14, cardY + 16);
+
+    // Row 2: Phone • Email • Website
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(7.8);
+    doc.setTextColor(240, 244, 248);
+    doc.text(
+      `${biz.phoneDisplay}   •   ${biz.email}   •   ${biz.websiteDisplay}`,
+      textLeftX,
+      cardY + 30
+    );
+
+    // Row 3: Mailing Address
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(7.2);
+    doc.setTextColor(186, 194, 204);
+    doc.text(biz.addressLine, textLeftX, cardY + 42);
+
+    // Right Side: Crisp Vector QR Code linking to https://kruegerpaintingwi.com
+    const qrBoxSize = 40;
+    const qrBoxX = rightMargin - qrBoxSize - 6;
+    const qrBoxY = cardY + (cardHeight - qrBoxSize) / 2;
+
+    doc.setFillColor(255, 255, 255);
+    doc.roundedRect(qrBoxX, qrBoxY, qrBoxSize, qrBoxSize, 2.5, 2.5, 'F');
+
+    const qr = getQrMatrix(biz.websiteUrl);
+    const quietPad = 3;
+    const qrDrawSize = qrBoxSize - quietPad * 2;
+    const cell = qrDrawSize / qr.size;
+
+    doc.setFillColor(17, 17, 17);
+    for (let r = 0; r < qr.size; r++) {
+      for (let cIdx = 0; cIdx < qr.size; cIdx++) {
+        if (qr.isDark(r, cIdx)) {
+          doc.rect(qrBoxX + quietPad + cIdx * cell, qrBoxY + quietPad + r * cell, cell + 0.08, cell + 0.08, 'F');
+        }
+      }
+    }
+
+    // Make QR clickable in digital PDF viewers
+    doc.link(qrBoxX, qrBoxY, qrBoxSize, qrBoxSize, { url: biz.websiteUrl });
+
+    // Subtle right-aligned scan caption beside the QR code
+    const captionRightX = qrBoxX - 7;
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(6.8);
+    doc.setTextColor(241, 196, 15);
+    doc.text('Scan to visit website', captionRightX, cardY + 23, { align: 'right' });
+
+    doc.setFont('helvetica', 'italic');
+    doc.setFontSize(6.5);
+    doc.setTextColor(203, 213, 225);
+    doc.text('or save contact', captionRightX, cardY + 33, { align: 'right' });
+  }
 
   // Output vector PDF
   const blob = doc.output('blob');

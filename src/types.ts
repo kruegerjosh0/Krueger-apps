@@ -71,6 +71,7 @@ export interface Customer {
   isPinned?: boolean;
   files: CustomerFile[];
   jobs: JobProject[];
+  createdAt?: string;
   lastActive: number;
   lat?: number;
   lng?: number;

@@ -2,6 +2,7 @@ import React from 'react';
 
 interface ToolsViewProps {
   onOpenLetterhead?: () => void;
+  onOpenBusinessCard?: () => void;
   onOpenTaxReport: () => void;
   onOpenCalc: () => void;
   onOpenPriceBook: () => void;
@@ -17,6 +18,7 @@ interface ToolsViewProps {
 
 export const ToolsView: React.FC<ToolsViewProps> = ({
   onOpenLetterhead,
+  onOpenBusinessCard,
   onOpenTaxReport,
   onOpenCalc,
   onOpenPriceBook,
@@ -30,6 +32,7 @@ export const ToolsView: React.FC<ToolsViewProps> = ({
   onOpenCloudSync,
 }) => {
   const tools = [
+    { title: 'Share Business Card', icon: '💼', desc: 'Send card image or .vcf contact', action: onOpenBusinessCard || onOpenSettings },
     { title: 'Blank Letterhead PDF', icon: '📝', desc: 'Official black & yellow stationery PDF', action: onOpenLetterhead || onOpenSettings },
     { title: 'Backup & Restore', icon: '💾', desc: 'Download or upload .JSON data backup', action: onOpenCloudSync || onOpenSettings },
     { title: 'Sync Calendar', icon: '📅', desc: 'Full Google Calendar sync (no duplicates)', action: onSyncCalendar },

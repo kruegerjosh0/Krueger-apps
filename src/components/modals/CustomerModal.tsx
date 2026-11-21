@@ -101,7 +101,7 @@ export const CustomerModal: React.FC<CustomerModalProps> = ({ onClose, onSaveCus
               autoComplete="off"
               value={name}
               onChange={(e) => setName(e.target.value)}
-              placeholder="e.g. John & Sarah Miller"
+              placeholder="Enter client full name"
               className="w-full bg-[var(--bg)] border border-[var(--border)] focus:border-[var(--accent)] text-[var(--text)] rounded-lg px-3 py-2.5 text-xs outline-none"
             />
           </div>
@@ -115,7 +115,7 @@ export const CustomerModal: React.FC<CustomerModalProps> = ({ onClose, onSaveCus
               autoComplete="off"
               value={address}
               onChange={(e) => setAddress(e.target.value)}
-              placeholder="e.g. 1425 Main St, West Bend, WI 53095"
+              placeholder="Street address, City, WI ZIP"
               className="w-full bg-[var(--bg)] border border-[var(--border)] focus:border-[var(--accent)] text-[var(--text)] rounded-lg px-3 py-2.5 text-xs outline-none"
             />
           </div>
@@ -130,7 +130,7 @@ export const CustomerModal: React.FC<CustomerModalProps> = ({ onClose, onSaveCus
                 autoComplete="off"
                 value={phone}
                 onChange={(e) => setPhone(e.target.value)}
-                placeholder="(262) 555-0199"
+                placeholder="(262) 000-0000"
                 className="w-full bg-[var(--bg)] border border-[var(--border)] focus:border-[var(--accent)] text-[var(--text)] rounded-lg px-3 py-2.5 text-xs outline-none"
               />
             </div>
@@ -143,7 +143,7 @@ export const CustomerModal: React.FC<CustomerModalProps> = ({ onClose, onSaveCus
                 autoComplete="off"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
-                placeholder="client@example.com"
+                placeholder="name@email.com"
                 className="w-full bg-[var(--bg)] border border-[var(--border)] focus:border-[var(--accent)] text-[var(--text)] rounded-lg px-3 py-2.5 text-xs outline-none"
               />
             </div>

@@ -149,13 +149,25 @@ export interface LocationInfo {
   isGps?: boolean;
 }
 
+export type PrecipType = 'NONE' | 'SNOW' | 'FREEZING_RAIN' | 'WINTRY_MIX' | 'RAIN';
+
+export type WorkabilityStatus = 'GO' | 'CAUTION' | 'SNOW_ICE_RISK';
+
 export interface WeatherCondition {
   temp: number;
+  feelsLike: number;
   humidity: number;
   windSpeed: number;
+  windGusts: number;
   precipitation: number;
+  snowfallIn: number;
   weatherCode: number;
+  wmoDescription: string;
   rainProb: number;
+  precipType: PrecipType;
+  precipTypeLabel: string;
+  workability: WorkabilityStatus;
+  workabilityLabel: string;
   conditionText: string;
   badgeBg: string;
   badgeText: string;
@@ -163,10 +175,19 @@ export interface WeatherCondition {
 }
 
 export interface HourlyForecast {
+  isoTime: string;
+  dayLabel: string;
   timeStr: string;
   temp: number;
+  feelsLike: number;
   rainProb: number;
   windSpeed: number;
+  windGusts: number;
+  snowfallIn: number;
+  precipIn: number;
+  weatherCode: number;
+  precipType: PrecipType;
+  precipIcon: string;
 }
 
 export interface DailyForecast {
@@ -174,6 +195,62 @@ export interface DailyForecast {
   dayName: string;
   tempMax: number;
   tempMin: number;
+  feelsLikeMax: number;
+  feelsLikeMin: number;
   rainProb: number;
+  snowfallIn: number;
+  precipSumIn: number;
+  windSpeedMax: number;
+  windGustsMax: number;
   weatherCode: number;
+  wmoDescription: string;
+  precipType: PrecipType;
+  precipTypeLabel: string;
+  precipIcon: string;
+  workability: WorkabilityStatus;
+  workabilityLabel: string;
+  workabilityHint: string;
 }
+
+export interface WinterAdvisoryItem {
+  icon: string;
+  title: string;
+  detail: string;
+  tone: 'danger' | 'warn' | 'cold' | 'ok';
+}
+
+export interface WinterOutlookSummary {
+  snow48hIn: number;
+  snow7dIn: number;
+  snow10dIn: number;
+  snowDaysCount7d: number;
+  lowestTemp7d: number;
+  lowestFeelsLike7d: number;
+  peakGust7d: number;
+  freezingNights7d: number;
+  hasFreezingRainRisk: boolean;
+  severity: 'CLEAR' | 'COLD_WATCH' | 'ADVISORY' | 'STORM_ALERT';
+  headline: string;
+  advisories: WinterAdvisoryItem[];
+  nextSnowEvent?: {
+    dayName: string;
+    snowfallIn: number;
+    precipProb: number;
+    windGustsMax: number;
+    precipTypeLabel: string;
+  };
+}
+
+export interface RegionalWeatherSnapshot {
+  location: LocationInfo;
+  temp: number;
+  feelsLike: number;
+  windGusts: number;
+  snow48hIn: number;
+  snow7dIn: number;
+  precipType: PrecipType;
+  precipTypeLabel: string;
+  workability: WorkabilityStatus;
+  workabilityLabel: string;
+}
+

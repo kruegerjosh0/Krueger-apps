@@ -166,7 +166,7 @@ export const LetterheadModal: React.FC<LetterheadModalProps> = ({
             autoComplete="off"
             value={recipientName}
             onChange={(e) => setRecipientName(e.target.value)}
-            placeholder="Recipient Name or Company (e.g. John & Sarah Miller)"
+            placeholder="Recipient Name or Company"
             className="w-full bg-[var(--bg)] border border-[var(--border)] focus:border-[#f1c40f] text-[var(--text)] rounded-lg px-3 py-2 text-xs outline-none"
           />
           <textarea

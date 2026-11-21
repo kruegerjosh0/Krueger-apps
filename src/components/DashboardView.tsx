@@ -345,9 +345,9 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
       if (stageFilterMatch && selectedFilter !== stageFilterMatch) return null;
     }
 
-    // Hide empty folders unless user explicitly selected that filter tab
-    if (list.length === 0) {
-      if (selectedFilter !== 'ALL' && stageFilterMatch === selectedFilter) {
+    // Hide Pinned folder when empty; always show the 4 core pipeline stages (unless filtered out by search)
+    if (list.length === 0 && (key === 'pinned' || q.length > 0)) {
+      if (q.length === 0 && selectedFilter !== 'ALL' && stageFilterMatch === selectedFilter) {
         return (
           <div
             className="bg-[var(--surface)] border border-[var(--border)] rounded-xl p-5 text-center mb-3 shadow-sm"
@@ -394,20 +394,28 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
 
         {isOpen && (
           <div className="p-3 space-y-2">
-            {visibleItems.map((c) => renderCustomerCard(c, key))}
+            {list.length === 0 ? (
+              <div className="py-3 text-center text-[11px] text-[var(--text-muted)]">
+                {emptyDesc}
+              </div>
+            ) : (
+              <>
+                {visibleItems.map((c) => renderCustomerCard(c, key))}
 
-            {/* Show All (X) / Show Top 3 Toggle */}
-            {key !== 'pinned' && list.length > TOP_CARD_LIMIT && q.length === 0 && (
-              <button
-                type="button"
-                onClick={() => toggleFolderExpanded(key)}
-                className="w-full py-2.5 bg-[#1c1d25] hover:bg-[#252733] border border-dashed border-[#f1c40f]/60 hover:border-[#f1c40f] rounded-lg text-xs font-black uppercase tracking-wider text-[#f1c40f] cursor-pointer transition-all flex items-center justify-center gap-1.5 shadow-sm mt-1"
-              >
-                <span>{isExpanded ? '▲' : '▼'}</span>
-                <span>
-                  {isExpanded ? `Show Top ${TOP_CARD_LIMIT}` : `Show All (${list.length})`}
-                </span>
-              </button>
+                {/* Show All (X) / Show Top 3 Toggle */}
+                {key !== 'pinned' && list.length > TOP_CARD_LIMIT && q.length === 0 && (
+                  <button
+                    type="button"
+                    onClick={() => toggleFolderExpanded(key)}
+                    className="w-full py-2.5 bg-[#1c1d25] hover:bg-[#252733] border border-dashed border-[#f1c40f]/60 hover:border-[#f1c40f] rounded-lg text-xs font-black uppercase tracking-wider text-[#f1c40f] cursor-pointer transition-all flex items-center justify-center gap-1.5 shadow-sm mt-1"
+                  >
+                    <span>{isExpanded ? '▲' : '▼'}</span>
+                    <span>
+                      {isExpanded ? `Show Top ${TOP_CARD_LIMIT}` : `Show All (${list.length})`}
+                    </span>
+                  </button>
+                )}
+              </>
             )}
           </div>
         )}
@@ -421,7 +429,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
       <div
         onClick={onOpenWeatherHub}
         className="bg-[var(--surface)] border border-[var(--border)] rounded-xl p-3 sm:p-3.5 shadow-sm border-l-4 border-l-[#f1c40f] flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 cursor-pointer hover:border-[#f1c40f] transition-all active:scale-[0.99]"
-        title="Tap for 7-day contractor weather hub"
+        title="Tap for Winter & Snow Outlook Tracker"
       >
         <div className="flex-1 min-w-0">
           <div className="text-xs font-bold text-[var(--text)] flex items-center gap-1.5 flex-wrap">
@@ -438,14 +446,14 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
 
             <span className="font-extrabold truncate">
               {currentWeather
-                ? `${currentLocation.name}: ${currentWeather.temp}°F • 💨 ${currentWeather.windSpeed} mph`
-                : `${currentLocation.name} Weather`}
+                ? `${currentLocation.name}: ${currentWeather.temp}°F (Feels ${currentWeather.feelsLike}°) • 💨 ${currentWeather.windGusts} mph`
+                : `${currentLocation.name} Winter Weather`}
             </span>
           </div>
 
           <div className="text-[10px] sm:text-[11px] text-[var(--text-muted)] mt-1 flex items-center gap-2 flex-wrap">
             <span className="truncate">
-              {currentWeather ? currentWeather.conditionText : 'Tap for spray forecast'}
+              {currentWeather ? currentWeather.conditionText : 'Tap for winter & snow outlook'}
             </span>
             {onToggleFollowMe && (
               <button
@@ -684,7 +692,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
             '🎨 Active Jobs',
             '#30d158',
             activeCusts,
-            'No active jobs in progress right now.',
+            'No active jobs.',
             'ACTIVE'
           )}
           {renderFolderGroup(
@@ -692,7 +700,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
             '📅 Scheduled Jobs',
             '#0a84ff',
             scheduledCusts,
-            'No scheduled jobs yet. Add a start date or set status to Scheduled on a project.',
+            'No scheduled jobs.',
             'SCHEDULED'
           )}
           {renderFolderGroup(
@@ -700,7 +708,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
             '⏳ Pending Estimates & Leads',
             '#f1c40f',
             pendingCusts,
-            'No pending estimates or leads right now.',
+            'No pending estimates or leads.',
             'PENDING'
           )}
           {renderFolderGroup(
@@ -708,11 +716,11 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
             '✅ Complete / Paid',
             '#38bdf8',
             completedCusts,
-            'No completed or paid projects yet.',
+            'No completed or paid jobs.',
             'COMPLETED'
           )}
 
-          {filtered.length === 0 && (
+          {q.length > 0 && filtered.length === 0 && (
             <div className="text-center py-10 bg-[var(--surface)] border border-[var(--border)] rounded-xl text-xs text-[var(--text-muted)]">
               No customers match &ldquo;{searchQuery}&rdquo;.
             </div>
@@ -721,20 +729,24 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
       </div>
 
       {/* Scheduled Jobs Quick List — Strictly Chronological with Exact Dates */}
-      {chronologicalScheduledJobs.length > 0 && (
-        <div className="mt-4 bg-[var(--surface)] border border-[#0a84ff]/40 rounded-xl p-3.5 shadow-sm">
-          <div className="flex items-center justify-between gap-2 mb-2.5">
-            <div className="flex items-center gap-2">
-              <span className="text-sm">📅</span>
-              <h3 className="text-xs font-black text-[#0a84ff] uppercase tracking-wider">
-                Scheduled Jobs Quick List
-              </h3>
-            </div>
-            <span className="text-[10px] font-bold text-[var(--text-muted)]">
-              Soonest First ({chronologicalScheduledJobs.length})
-            </span>
+      <div className="mt-4 bg-[var(--surface)] border border-[#0a84ff]/40 rounded-xl p-3.5 shadow-sm">
+        <div className="flex items-center justify-between gap-2 mb-2.5">
+          <div className="flex items-center gap-2">
+            <span className="text-sm">📅</span>
+            <h3 className="text-xs font-black text-[#0a84ff] uppercase tracking-wider">
+              Scheduled Jobs Quick List
+            </h3>
           </div>
+          <span className="text-[10px] font-bold text-[var(--text-muted)]">
+            Soonest First ({chronologicalScheduledJobs.length})
+          </span>
+        </div>
 
+        {chronologicalScheduledJobs.length === 0 ? (
+          <div className="py-4 text-center text-[11px] text-[var(--text-muted)] bg-[var(--surface-subtle)] border border-dashed border-[var(--border)] rounded-lg">
+            No upcoming scheduled jobs.
+          </div>
+        ) : (
           <div className="space-y-1.5">
             {chronologicalScheduledJobs.map((entry) => {
               const isToday = entry.sortMs !== null && entry.sortMs === todayMs;
@@ -774,8 +786,8 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
               );
             })}
           </div>
-        </div>
-      )}
+        )}
+      </div>
 
       {/* + New Customer Button */}
       <button

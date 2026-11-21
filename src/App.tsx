@@ -20,7 +20,6 @@ import {
   saveRecord,
   DEFAULT_PRINT_SETTINGS,
   DEFAULT_SYSTEM_CONSTANTS,
-  DEFAULT_STARTER_CUSTOMERS,
   buildFullBackupPayload,
   getFullBackupFilename,
   parseBackupJson,
@@ -96,7 +95,7 @@ export default function App() {
   // Location & Weather
   const [currentLocation, setCurrentLocation] = useState<LocationInfo>(DEFAULT_WISCONSIN_PRESETS[0]);
   const [currentWeather, setCurrentWeather] = useState<WeatherCondition | null>(null);
-  const [isFollowingGps, setIsFollowingGps] = useState<boolean>(true);
+  const [isFollowingGps, setIsFollowingGps] = useState<boolean>(false);
 
   // Backup health
   const [isBackupDue, setIsBackupDue] = useState(false);
@@ -320,10 +319,6 @@ export default function App() {
         } else if (Array.isArray(injectedCustomers) && injectedCustomers.length > 0) {
           activeCustomers = injectedCustomers;
           saveRecord('KMaster_C', activeCustomers);
-        } else {
-          // Provide realistic contractor starter data so dashboard active jobs match preview
-          activeCustomers = DEFAULT_STARTER_CUSTOMERS;
-          saveRecord('KMaster_C', activeCustomers);
         }
       }
 
@@ -342,13 +337,15 @@ export default function App() {
         setCustomLogo(loadedLogo);
       }
 
-      // Initialize location: prioritize user's current device location
+      // Initialize location: prioritize user's current device location, else West Bend / Washington County default
       try {
         const freshGps = await getCurrentGpsPosition();
         setCurrentLocation(freshGps);
+        setIsFollowingGps(true);
       } catch {
         const savedLoc = await loadRecord<LocationInfo>('KMaster_WeatherLoc', DEFAULT_WISCONSIN_PRESETS[0]);
         setCurrentLocation(savedLoc);
+        setIsFollowingGps(false);
       }
     };
 

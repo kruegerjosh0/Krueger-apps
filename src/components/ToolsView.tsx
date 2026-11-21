@@ -35,7 +35,7 @@ export const ToolsView: React.FC<ToolsViewProps> = ({
     { title: 'Share Business Card', icon: '💼', desc: 'Send card image or .vcf contact', action: onOpenBusinessCard || onOpenSettings },
     { title: 'Blank Letterhead PDF', icon: '📝', desc: 'Official black & yellow stationery PDF', action: onOpenLetterhead || onOpenSettings },
     { title: 'Backup & Restore', icon: '💾', desc: 'Download or upload .JSON data backup', action: onOpenCloudSync || onOpenSettings },
-    { title: 'Sync Calendar', icon: '📅', desc: 'Full Google Calendar sync (no duplicates)', action: onSyncCalendar },
+    { title: 'Sync Calendar', icon: '📅', desc: 'Zero-auth .ICS weekly batch sync', action: onSyncCalendar },
     { title: 'Tax Report', icon: '📊', desc: 'Monthly gross & IRS deductions', action: onOpenTaxReport },
     { title: 'Calculator', icon: '📐', desc: 'Net sqft & 2-coat paint gals', action: onOpenCalc },
     { title: 'Price Book', icon: '🏷️', desc: 'Sherwin & Menards prices', action: onOpenPriceBook },

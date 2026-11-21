@@ -72,6 +72,10 @@ import {
   GoogleCalendarEvent,
   deleteGoogleCalendarEvent,
 } from './utils/googleWorkspace';
+import {
+  hasCalendarRelevantChanges,
+  exportSingleCustomerJobIcs,
+} from './utils/calendarIcs';
 
 export default function App() {
   const [activeTab, setActiveTab] = useState<TabType>('dash');
@@ -461,6 +465,8 @@ export default function App() {
       files: partial.files || [],
       jobs: partial.jobs || [],
       createdAt: partial.createdAt || new Date().toISOString(),
+      calendarSequence: partial.calendarSequence ?? 0,
+      calendarUpdatedAt: partial.calendarUpdatedAt ?? Date.now(),
       lastActive: Date.now(),
     };
     const updated = [newCust, ...customers];
@@ -471,11 +477,21 @@ export default function App() {
   };
 
   const handleUpdateCustomer = (updatedCust: Customer) => {
-    const updatedList = customers.map((c) => (c.id === updatedCust.id ? updatedCust : c));
+    const prevCust = customers.find((c) => c.id === updatedCust.id);
+    let nextCust = updatedCust;
+    if (prevCust && hasCalendarRelevantChanges(prevCust, updatedCust)) {
+      nextCust = {
+        ...updatedCust,
+        calendarSequence: (prevCust.calendarSequence ?? 0) + 1,
+        calendarUpdatedAt: Date.now(),
+      };
+    }
+
+    const updatedList = customers.map((c) => (c.id === nextCust.id ? nextCust : c));
     setCustomers(updatedList);
     saveRecord('KMaster_C', updatedList);
-    if (activeFolderCustomer?.id === updatedCust.id) {
-      setActiveFolderCustomer(updatedCust);
+    if (activeFolderCustomer?.id === nextCust.id) {
+      setActiveFolderCustomer(nextCust);
     }
   };
 
@@ -568,31 +584,32 @@ export default function App() {
     }
   };
 
-  // Persist Google Calendar event IDs onto synced jobs to prevent duplicate events on re-sync
-  const handlePersistCalendarEventIds = (eventIdMap: Record<number, string>) => {
-    const updated = customers.map((c) => {
-      let changed = false;
-      const updatedJobs = (c.jobs || []).map((j) => {
-        const syncedEventId = eventIdMap[j.id];
-        if (syncedEventId && (j.googleEventId !== syncedEventId || j.googleCalendarEventId !== syncedEventId)) {
-          changed = true;
-          return {
-            ...j,
-            googleEventId: syncedEventId,
-            googleCalendarEventId: syncedEventId,
-          };
-        }
-        return j;
-      });
-      return changed ? { ...c, jobs: updatedJobs } : c;
+  // Record lastCalendarSyncedAt on exported customers without bumping calendarSequence
+  const handleMarkCustomersCalendarSynced = (customerIds: number[], syncedAt: number) => {
+    const idSet = new Set<number>(customerIds);
+    setCustomers((prev) => {
+      const updated = prev.map((c) =>
+        idSet.has(c.id)
+          ? {
+              ...c,
+              calendarSequence: c.calendarSequence ?? 0,
+              lastCalendarSyncedAt: syncedAt,
+            }
+          : c
+      );
+      saveRecord('KMaster_C', updated);
+      return updated;
     });
 
-    setCustomers(updated);
-    saveRecord('KMaster_C', updated);
-    if (activeFolderCustomer) {
-      const refreshed = updated.find((c) => c.id === activeFolderCustomer.id);
-      if (refreshed) setActiveFolderCustomer(refreshed);
-    }
+    setActiveFolderCustomer((prevActive) =>
+      prevActive && idSet.has(prevActive.id)
+        ? {
+            ...prevActive,
+            calendarSequence: prevActive.calendarSequence ?? 0,
+            lastCalendarSyncedAt: syncedAt,
+          }
+        : prevActive
+    );
   };
 
   // View Document / Saved PDF directly from Customer Files
@@ -606,7 +623,7 @@ export default function App() {
   };
 
   // Schedule Estimate Quick Action
-  const handleScheduleEstimate = (cust: Customer) => {
+  const handleScheduleEstimate = async (cust: Customer) => {
     const todayStr = new Date().toISOString().split('T')[0];
     const dateInput = prompt('Enter on-site estimate date (YYYY-MM-DD):', todayStr);
     if (!dateInput) return;
@@ -640,25 +657,23 @@ export default function App() {
       clientSig: '',
     };
 
-    const updated = {
+    const nextSeq = (cust.calendarSequence ?? 0) + 1;
+    const updated: Customer = {
       ...cust,
       jobs: [...(cust.jobs || []), estJob],
+      calendarSequence: nextSeq,
+      calendarUpdatedAt: Date.now(),
       lastActive: Date.now(),
     };
     handleUpdateCustomer(updated);
     showToast('✔ Estimate Scheduled!');
 
-    if (confirm('Estimate scheduled! Open Google Calendar to add this appointment to your phone?')) {
-      const sFormatted = dateInput.replace(/-/g, '');
-      const details = `Krueger Painting Estimate for ${cust.name}\nTime: ${timeInput}\nPhone: ${cust.phone || ''}`;
-      window.open(
-        `https://calendar.google.com/calendar/render?action=TEMPLATE&text=${encodeURIComponent(
-          `Estimate: ${cust.name} (${timeInput})`
-        )}&dates=${sFormatted}/${sFormatted}&details=${encodeURIComponent(details)}&location=${encodeURIComponent(
-          cust.address || ''
-        )}`,
-        '_blank'
-      );
+    if (confirm('Estimate scheduled! Export .ICS calendar event to add to your phone calendar now?')) {
+      const res = await exportSingleCustomerJobIcs(updated, estJob);
+      if (res.exportedCount > 0) {
+        handleMarkCustomersCalendarSynced([updated.id], Date.now());
+        showToast('✔ Exported Estimate .ICS to Calendar');
+      }
     }
   };
 
@@ -1124,6 +1139,7 @@ export default function App() {
           onGenerateCollage={() => handleGenerateBeforeAfterCollage(activeFolderCustomer)}
           onScheduleEstimate={() => handleScheduleEstimate(activeFolderCustomer)}
           onShareBusinessCard={() => setShareBusinessCardOpen(true)}
+          onMarkCalendarSynced={(cId, ts) => handleMarkCustomersCalendarSynced([cId], ts)}
           onToast={showToast}
         />
       )}
@@ -1493,11 +1509,11 @@ export default function App() {
         />
       )}
 
-      {/* Google Calendar Full Sync Modal (Duplicate-Proof Upsert) */}
+      {/* Zero-Auth Weekly .ICS Calendar Sync Modal */}
       {calendarSyncOpen && (
         <CalendarSyncModal
           customers={customers}
-          onPersistEventIds={handlePersistCalendarEventIds}
+          onMarkCustomersCalendarSynced={handleMarkCustomersCalendarSynced}
           onClose={() => setCalendarSyncOpen(false)}
           onToast={showToast}
         />

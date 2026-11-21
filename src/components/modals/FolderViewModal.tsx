@@ -18,6 +18,10 @@ import {
   exportCustomerVcardToContacts,
   formatCustomerFirstSavedDate,
 } from '../../utils/businessCard';
+import {
+  exportSingleCustomerJobIcs,
+  getCustomerCalendarSyncStatus,
+} from '../../utils/calendarIcs';
 
 interface FolderViewModalProps {
   customer: Customer;
@@ -36,6 +40,7 @@ interface FolderViewModalProps {
   onGenerateCollage: () => void;
   onScheduleEstimate: () => void;
   onShareBusinessCard?: () => void;
+  onMarkCalendarSynced?: (customerId: number, syncedAt: number) => void;
   onToast: (msg: string) => void;
 }
 
@@ -52,6 +57,7 @@ export const FolderViewModal: React.FC<FolderViewModalProps> = ({
   onGenerateCollage,
   onScheduleEstimate,
   onShareBusinessCard,
+  onMarkCalendarSynced,
   onToast,
 }) => {
   const normalizedOverride =
@@ -224,6 +230,29 @@ export const FolderViewModal: React.FC<FolderViewModalProps> = ({
     onToast(`✔ Contact Card (.vcf) Ready • First saved: ${firstSavedLabel}`);
   };
 
+  const handleSyncJobToCalendar = async (targetJob?: JobProject) => {
+    const latestCust: Customer = {
+      ...customer,
+      name: name.trim() || customer.name,
+      address: address.trim(),
+      phone: phone.trim(),
+      email: email.trim(),
+    };
+    const result = await exportSingleCustomerJobIcs(latestCust, targetJob);
+    if (result.exportedCount === 0) {
+      onToast('Set a scheduled start date first to sync to calendar.');
+      return;
+    }
+    if (onMarkCalendarSynced) {
+      onMarkCalendarSynced(customer.id, Date.now());
+    }
+    const seq = latestCust.calendarSequence ?? 0;
+    onToast(
+      `✔ ${result.outcome === 'SHARED' ? 'Opened Calendar Import' : 'Downloaded .ICS'} (Seq #${seq} — overwrite-safe)`
+    );
+  };
+
+  const calendarSyncStatus = getCustomerCalendarSyncStatus(customer);
   const mapUrl = `http://maps.google.com/?q=${encodeURIComponent(address || '')}`;
   const firstSavedDisplay = formatCustomerFirstSavedDate(customer.createdAt);
 
@@ -597,8 +626,31 @@ export const FolderViewModal: React.FC<FolderViewModalProps> = ({
                       }}
                       className="font-black text-sm text-[var(--text)] bg-transparent border-b border-dashed border-[var(--border)] focus:border-[var(--accent)] w-full outline-none"
                     />
-                    <div className="text-[10px] text-[var(--text-muted)] font-semibold mt-0.5">
-                      📅 Scheduled: <b>{dateRange}</b> • Created: {j.date}
+                    <div className="flex items-center justify-between gap-2 flex-wrap mt-1">
+                      <div className="text-[10px] text-[var(--text-muted)] font-semibold">
+                        📅 Scheduled: <b>{dateRange}</b> • Created: {j.date}
+                      </div>
+                      {j.schedDate && (
+                        <button
+                          type="button"
+                          onClick={() => handleSyncJobToCalendar(j)}
+                          className={`text-[9.5px] font-black px-2 py-0.5 rounded-md border cursor-pointer transition-transform active:scale-95 flex items-center gap-1 shrink-0 ${
+                            calendarSyncStatus === 'SYNCED'
+                              ? 'bg-emerald-500/15 text-emerald-400 border-emerald-500/40 hover:bg-emerald-500/25'
+                              : 'bg-[#0a84ff]/20 text-[#60a5fa] border-[#0a84ff]/50 hover:bg-[#0a84ff]/30'
+                          }`}
+                          title="Export overwrite-safe .ics event for this customer (same UID & SEQUENCE)"
+                        >
+                          <span>📅</span>
+                          <span>
+                            {calendarSyncStatus === 'UPDATED'
+                              ? 'Update in Calendar'
+                              : calendarSyncStatus === 'SYNCED'
+                              ? 'Sync to Calendar ✓'
+                              : 'Sync to Calendar'}
+                          </span>
+                        </button>
+                      )}
                     </div>
                   </div>
 
@@ -665,28 +717,27 @@ export const FolderViewModal: React.FC<FolderViewModalProps> = ({
                         ✏️ Edit
                       </button>
                       {j.schedDate ? (
-                        <a
-                          href={createGoogleCalendarUrl(customer.name, j, customer.address, customer.phone)}
-                          target="_blank"
-                          rel="noreferrer"
-                          className="py-1.5 bg-[#4285f4] hover:bg-[#3367d6] text-white font-extrabold text-[10px] rounded-lg cursor-pointer transition-transform active:scale-95 flex items-center justify-center gap-1 shadow-sm"
-                          title="Open in Google Calendar"
+                        <button
+                          type="button"
+                          onClick={() => handleSyncJobToCalendar(j)}
+                          className="py-1.5 bg-[#0a84ff] hover:opacity-95 text-white font-extrabold text-[10px] rounded-lg cursor-pointer transition-transform active:scale-95 flex items-center justify-center gap-1 shadow-sm"
+                          title="Export overwrite-safe .ics event to add or update in your calendar"
                         >
                           <span>📅</span>
-                          <span>Cal</span>
-                        </a>
+                          <span>Sync .ICS</span>
+                        </button>
                       ) : (
                         <button
                           type="button"
                           onClick={() => {
                             onOpenJobModal(j);
-                            onToast('Set a start date to sync this project to Google Calendar');
+                            onToast('Set a start date first to sync this project to calendar');
                           }}
                           className="py-1.5 bg-[var(--surface-subtle)] hover:bg-[var(--border)] border border-[var(--border)] text-gray-400 font-bold text-[10px] rounded-lg cursor-pointer flex items-center justify-center gap-1"
                           title="Set start date first to sync to calendar"
                         >
                           <span>📅</span>
-                          <span>Cal</span>
+                          <span>Sync .ICS</span>
                         </button>
                       )}
                       <button

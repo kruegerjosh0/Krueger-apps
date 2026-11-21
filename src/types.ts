@@ -77,6 +77,9 @@ export interface Customer {
   lng?: number;
   googleContactId?: string;
   googleContactEtag?: string;
+  calendarSequence?: number;
+  lastCalendarSyncedAt?: number;
+  calendarUpdatedAt?: number;
 }
 
 export interface FieldNote {

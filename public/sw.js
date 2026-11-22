@@ -1,5 +1,5 @@
 // Krueger Painting OS Service Worker
-const CACHE_NAME = 'krueger-os-cache-v1';
+const CACHE_NAME = 'krueger-os-cache-v3';
 const PRECACHE_ASSETS = [
   '/',
   '/index.html',
@@ -35,31 +35,57 @@ self.addEventListener('activate', (event) => {
 });
 
 self.addEventListener('fetch', (event) => {
-  // Only cache GET requests, skip chrome-extension and API calls
   if (event.request.method !== 'GET') return;
   const url = new URL(event.request.url);
-  if (url.pathname.startsWith('/api/') || url.pathname.includes('googleapis.com') || url.pathname.includes('firestore')) {
+
+  // Never serve stale cache for APIs, live weather, geocoding, or routing
+  if (
+    url.pathname.startsWith('/api/') ||
+    url.hostname.includes('open-meteo.com') ||
+    url.hostname.includes('nominatim.openstreetmap.org') ||
+    url.hostname.includes('project-osrm.org') ||
+    url.hostname.includes('googleapis.com') ||
+    url.hostname.includes('firestore') ||
+    url.hostname.includes('bigdatacloud.net')
+  ) {
     return;
   }
 
+  // Network-first for HTML page navigations so new deployments load immediately
+  const isHtmlRequest =
+    event.request.mode === 'navigate' ||
+    (event.request.headers.get('accept') || '').includes('text/html');
+
+  if (isHtmlRequest) {
+    event.respondWith(
+      fetch(event.request)
+        .then((networkResponse) => {
+          if (networkResponse && networkResponse.status === 200) {
+            const copy = networkResponse.clone();
+            caches.open(CACHE_NAME).then((cache) => cache.put(event.request, copy));
+          }
+          return networkResponse;
+        })
+        .catch(() => caches.match(event.request).then((res) => res || caches.match('/index.html')))
+    );
+    return;
+  }
+
+  // Cache-first with background refresh for static assets
   event.respondWith(
     caches.match(event.request).then((cachedResponse) => {
       if (cachedResponse) {
-        // Return cached, but refresh in background
-        fetch(event.request).then((networkResponse) => {
-          if (networkResponse && networkResponse.status === 200) {
-            caches.open(CACHE_NAME).then((cache) => cache.put(event.request, networkResponse));
-          }
-        }).catch(() => {});
+        fetch(event.request)
+          .then((networkResponse) => {
+            if (networkResponse && networkResponse.status === 200) {
+              caches.open(CACHE_NAME).then((cache) => cache.put(event.request, networkResponse));
+            }
+          })
+          .catch(() => {});
         return cachedResponse;
       }
 
-      return fetch(event.request).catch(() => {
-        // Offline fallback
-        if (event.request.headers.get('accept')?.includes('text/html')) {
-          return caches.match('/index.html');
-        }
-      });
+      return fetch(event.request);
     })
   );
 });

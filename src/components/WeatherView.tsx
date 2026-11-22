@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import {
   DailyForecast,
   LocationInfo,
@@ -50,27 +50,15 @@ function getWorkabilityPillStyle(status: WorkabilityStatus): string {
   }
 }
 
-function getGuardVerdictStyle(status: 'GO' | 'CAUTION' | 'HOLD'): {
-  card: string;
-  badge: string;
-} {
+function getGuardPillStyle(status: 'GO' | 'CAUTION' | 'HOLD'): string {
   switch (status) {
     case 'HOLD':
-      return {
-        card: 'border-red-500/45 bg-red-950/25',
-        badge: 'bg-red-500 text-white',
-      };
+      return 'bg-red-500 text-white';
     case 'CAUTION':
-      return {
-        card: 'border-amber-500/45 bg-amber-950/25',
-        badge: 'bg-amber-400 text-slate-950',
-      };
+      return 'bg-amber-400 text-slate-950';
     case 'GO':
     default:
-      return {
-        card: 'border-emerald-500/45 bg-emerald-950/25',
-        badge: 'bg-emerald-500 text-slate-950',
-      };
+      return 'bg-emerald-500 text-slate-950';
   }
 }
 
@@ -94,19 +82,19 @@ function renderDailyAccumulationText(day: DailyForecast): string {
     const parts: string[] = [];
     if (day.snowfallIn > 0) parts.push(`${formatSnowInches(day.snowfallIn)} snow`);
     if (day.rainSumIn > 0) parts.push(`${formatRainInches(day.rainSumIn)} rain`);
-    return parts.length > 0 ? `Wintry Mix: ${parts.join(' + ')}` : `Wintry Mix (${day.rainProb}% chance)`;
+    return parts.length > 0 ? `Wintry Mix: ${parts.join(' + ')}` : `Wintry Mix (${day.rainProb}%)`;
   }
   if (day.precipMode === 'SNOW') {
     return day.snowfallIn > 0
-      ? `Est. Snowfall: ${formatSnowInches(day.snowfallIn)} (${day.rainProb}% chance)`
-      : `Light Snow (${day.rainProb}% chance)`;
+      ? `Snow: ${formatSnowInches(day.snowfallIn)} (${day.rainProb}%)`
+      : `Snow (${day.rainProb}%)`;
   }
   if (day.precipMode === 'RAIN') {
     return day.rainSumIn > 0
-      ? `Rainfall: ${formatRainInches(day.rainSumIn)} (${day.rainProb}% chance)`
-      : `Rain Chance: ${day.rainProb}%`;
+      ? `Rain: ${formatRainInches(day.rainSumIn)} (${day.rainProb}%)`
+      : `Rain chance: ${day.rainProb}%`;
   }
-  return 'Dry / Clear (<20% precip chance)';
+  return 'Dry / Clear';
 }
 
 export const WeatherView: React.FC<WeatherViewProps> = ({
@@ -119,7 +107,7 @@ export const WeatherView: React.FC<WeatherViewProps> = ({
   const [loading, setLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
 
-  // Clean 3-tab segmented control
+  // Strict single-panel active tab: Hourly (default) | 7-Day | Work Guard
   const [activeSubTab, setActiveSubTab] = useState<WeatherSubTab>('HOURLY');
   const [expandedDayDate, setExpandedDayDate] = useState<string | null>(null);
 
@@ -197,44 +185,68 @@ export const WeatherView: React.FC<WeatherViewProps> = ({
   const daily7 = weather?.daily.slice(0, 7) || [];
   const guard = weather?.exteriorGuard;
 
-  // Helper for current hero active precipitation status text (strictly mutually exclusive)
+  // Next 7 Days Alerts: ONLY days with snow, freeze risk (<=32°F), or rain
+  const next7DayAlerts = useMemo(() => {
+    return daily7
+      .map((day) => {
+        const tags: Array<{ label: string; tone: 'snow' | 'freeze' | 'rain' }> = [];
+        if (day.precipMode === 'WINTRY_MIX') {
+          const parts: string[] = [];
+          if (day.snowfallIn > 0) parts.push(`${formatSnowInches(day.snowfallIn)} snow`);
+          if (day.rainSumIn > 0) parts.push(`${formatRainInches(day.rainSumIn)} rain`);
+          tags.push({
+            label: `🌨️ Mix${parts.length ? ` (${parts.join(' + ')})` : ` (${day.rainProb}%)`}`,
+            tone: 'snow',
+          });
+        } else if (day.precipMode === 'SNOW') {
+          tags.push({
+            label: `❄️ Snow${day.snowfallIn > 0 ? ` (${formatSnowInches(day.snowfallIn)})` : ` (${day.rainProb}%)`}`,
+            tone: 'snow',
+          });
+        } else if (day.precipMode === 'RAIN') {
+          tags.push({
+            label: `${day.precipIcon} ${day.precipTypeLabel} (${day.rainProb}%${day.rainSumIn > 0 ? ` • ${formatRainInches(day.rainSumIn)}` : ''})`,
+            tone: 'rain',
+          });
+        }
+
+        if (day.tempMin <= 32) {
+          tags.push({ label: `🌡️ Freeze (${day.tempMin}°F)`, tone: 'freeze' });
+        }
+
+        return { dayName: day.dayName, dateStr: day.dateStr, tags };
+      })
+      .filter((entry) => entry.tags.length > 0);
+  }, [daily7]);
+
   const renderCurrentPrecipPill = () => {
     if (!current) return null;
     if (current.precipMode === 'WINTRY_MIX') {
-      const parts: string[] = [];
-      if (current.snowfallIn > 0) parts.push(`${formatSnowInches(current.snowfallIn)} snow`);
-      if (current.rainIn > 0) parts.push(`${formatRainInches(current.rainIn)} rain`);
       return (
-        <span className={`inline-flex items-center gap-1 text-[11px] font-extrabold px-2.5 py-1 rounded-full ${getPrecipBadgeStyle('WINTRY_MIX')}`}>
+        <span className={`inline-flex items-center gap-1 text-[10.5px] font-extrabold px-2.5 py-1 rounded-full whitespace-nowrap ${getPrecipBadgeStyle('WINTRY_MIX')}`}>
           <span>🌨️</span>
-          <span>Wintry Mix{parts.length ? ` • ${parts.join(' + ')}` : ''}</span>
+          <span>Wintry Mix</span>
         </span>
       );
     }
     if (current.precipMode === 'SNOW') {
       return (
-        <span className={`inline-flex items-center gap-1 text-[11px] font-extrabold px-2.5 py-1 rounded-full ${getPrecipBadgeStyle('SNOW')}`}>
+        <span className={`inline-flex items-center gap-1 text-[10.5px] font-extrabold px-2.5 py-1 rounded-full whitespace-nowrap ${getPrecipBadgeStyle('SNOW')}`}>
           <span>❄️</span>
-          <span>
-            Snow • {current.rainProb}%
-            {current.snowfallIn > 0 ? ` • ${formatSnowInches(current.snowfallIn)}` : ''}
-          </span>
+          <span>Snow • {current.rainProb}%</span>
         </span>
       );
     }
     if (current.precipMode === 'RAIN') {
       return (
-        <span className={`inline-flex items-center gap-1 text-[11px] font-extrabold px-2.5 py-1 rounded-full ${getPrecipBadgeStyle('RAIN')}`}>
+        <span className={`inline-flex items-center gap-1 text-[10.5px] font-extrabold px-2.5 py-1 rounded-full whitespace-nowrap ${getPrecipBadgeStyle('RAIN')}`}>
           <span>{current.precipIcon}</span>
-          <span>
-            {current.precipTypeLabel} • {current.rainProb}%
-            {current.rainIn > 0 ? ` • ${formatRainInches(current.rainIn)}` : ''}
-          </span>
+          <span>{current.precipTypeLabel} • {current.rainProb}%</span>
         </span>
       );
     }
     return (
-      <span className={`inline-flex items-center gap-1 text-[11px] font-extrabold px-2.5 py-1 rounded-full ${getPrecipBadgeStyle('DRY')}`}>
+      <span className={`inline-flex items-center gap-1 text-[10.5px] font-extrabold px-2.5 py-1 rounded-full whitespace-nowrap ${getPrecipBadgeStyle('DRY')}`}>
         <span>✓</span>
         <span>Dry / Clear</span>
       </span>
@@ -242,45 +254,44 @@ export const WeatherView: React.FC<WeatherViewProps> = ({
   };
 
   return (
-    <div className="space-y-3 max-w-2xl mx-auto pb-24 animate-in fade-in">
-      {/* Compact Location & Controls Bar */}
-      <div className="bg-[var(--surface)] border border-[var(--border)] rounded-2xl p-3 shadow-sm space-y-2.5">
+    <div className="space-y-2.5 max-w-2xl mx-auto pb-20">
+      {/* Sticky Top Controls + 3-Tab Segmented Bar */}
+      <div className="sticky top-[52px] sm:top-[60px] z-30 bg-[var(--surface)]/95 backdrop-blur-md border border-[var(--border)] rounded-2xl p-2.5 shadow-md space-y-2">
         <div className="flex items-center justify-between gap-2">
-          <div className="min-w-0 flex items-center gap-2">
-            <span className="text-lg shrink-0">{current?.precipIcon || '🌦️'}</span>
-            <div className="min-w-0">
-              <div className="text-sm font-black text-[var(--text)] flex items-center gap-1.5 flex-wrap">
-                <span className="truncate">{currentLocation.name}</span>
-                {isFollowingGps && (
-                  <span className="text-[9px] font-extrabold uppercase px-1.5 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/40">
-                    GPS
-                  </span>
-                )}
-              </div>
-              <p className="text-[10px] text-[var(--text-muted)] truncate">
-                {currentLocation.region || 'Washington County, WI'}
-                {weather?.fetchedAt ? ` • Updated ${weather.fetchedAt}` : ''}
-              </p>
-            </div>
+          <div className="min-w-0 flex items-center gap-1.5">
+            <span className="text-base shrink-0">{current?.precipIcon || '🌦️'}</span>
+            <span className="text-xs sm:text-sm font-black text-[var(--text)] truncate">
+              {currentLocation.name}
+            </span>
+            {isFollowingGps && (
+              <span className="text-[8.5px] font-extrabold uppercase px-1.5 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 shrink-0">
+                GPS
+              </span>
+            )}
+            {weather?.fetchedAt && (
+              <span className="text-[9.5px] text-[var(--text-muted)] hidden sm:inline">
+                • {weather.fetchedAt}
+              </span>
+            )}
           </div>
 
-          <div className="flex items-center gap-1.5 shrink-0">
+          <div className="flex items-center gap-1 shrink-0">
             <button
               type="button"
               onClick={handleUseGps}
               disabled={gpsLoading}
-              className="px-2.5 py-1.5 rounded-xl bg-[var(--surface-subtle)] border border-[var(--border)] text-[10.5px] font-bold text-[var(--text)] hover:border-[var(--accent)] cursor-pointer disabled:opacity-50"
-              title="Use device GPS location"
+              className="px-2 py-1 rounded-lg bg-[var(--surface-subtle)] border border-[var(--border)] text-[10px] font-bold text-[var(--text)] hover:border-[var(--accent)] cursor-pointer disabled:opacity-50"
+              title="Use GPS"
             >
               {gpsLoading ? '…' : '📍 GPS'}
             </button>
             <button
               type="button"
               onClick={() => setShowLocationPicker((prev) => !prev)}
-              className={`px-2.5 py-1.5 rounded-xl border text-[10.5px] font-bold cursor-pointer ${
+              className={`px-2 py-1 rounded-lg border text-[10px] font-bold cursor-pointer ${
                 showLocationPicker
                   ? 'bg-[var(--accent)] text-white border-[var(--accent)]'
-                  : 'bg-[var(--surface-subtle)] border-[var(--border)] text-[var(--text)] hover:border-[var(--accent)]'
+                  : 'bg-[var(--surface-subtle)] border-[var(--border)] text-[var(--text)]'
               }`}
             >
               {showLocationPicker ? 'Done' : 'City'}
@@ -289,16 +300,15 @@ export const WeatherView: React.FC<WeatherViewProps> = ({
               type="button"
               onClick={() => loadWeatherData(currentLocation.lat, currentLocation.lng)}
               disabled={loading}
-              className="p-1.5 rounded-xl bg-[var(--surface-subtle)] border border-[var(--border)] text-xs text-[var(--text)] hover:border-[var(--accent)] cursor-pointer disabled:opacity-50"
-              title="Refresh forecast"
-              aria-label="Refresh forecast"
+              className="px-2 py-1 rounded-lg bg-[var(--surface-subtle)] border border-[var(--border)] text-[10px] text-[var(--text)] cursor-pointer disabled:opacity-50"
+              aria-label="Refresh weather"
             >
               <span className={loading ? 'inline-block animate-spin' : ''}>🔄</span>
             </button>
           </div>
         </div>
 
-        {/* Collapsible Location Search & WI Presets */}
+        {/* Collapsible Location Picker */}
         {showLocationPicker && (
           <div className="pt-2 border-t border-[var(--border)] space-y-2">
             <form onSubmit={handleSearchSubmit} className="flex gap-1.5">
@@ -306,26 +316,26 @@ export const WeatherView: React.FC<WeatherViewProps> = ({
                 type="text"
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
-                placeholder="Search city or zip (e.g. Kewaskum, Hartford)…"
-                className="flex-1 bg-[var(--bg)] border border-[var(--border)] text-[var(--text)] rounded-xl px-3 py-1.5 text-xs outline-none focus:border-[var(--accent)]"
+                placeholder="Search city or zip…"
+                className="flex-1 bg-[var(--bg)] border border-[var(--border)] text-[var(--text)] rounded-lg px-2.5 py-1.5 text-xs outline-none focus:border-[var(--accent)]"
               />
               <button
                 type="submit"
                 disabled={searching}
-                className="px-3 py-1.5 rounded-xl bg-[var(--accent)] text-white text-xs font-extrabold cursor-pointer disabled:opacity-50"
+                className="px-3 py-1.5 rounded-lg bg-[var(--accent)] text-white text-xs font-extrabold cursor-pointer disabled:opacity-50"
               >
                 {searching ? '…' : 'Go'}
               </button>
             </form>
 
             {searchResults.length > 0 && (
-              <div className="bg-[var(--bg)] border border-[var(--border)] rounded-xl divide-y divide-[var(--border)] max-h-40 overflow-y-auto">
+              <div className="bg-[var(--bg)] border border-[var(--border)] rounded-lg divide-y divide-[var(--border)] max-h-36 overflow-y-auto">
                 {searchResults.map((loc, idx) => (
                   <button
                     key={`${loc.name}-${loc.lat}-${idx}`}
                     type="button"
                     onClick={() => selectLocation(loc)}
-                    className="w-full text-left px-3 py-2 text-xs hover:bg-[var(--surface-subtle)] flex items-center justify-between cursor-pointer"
+                    className="w-full text-left px-2.5 py-1.5 text-xs hover:bg-[var(--surface-subtle)] flex items-center justify-between cursor-pointer"
                   >
                     <span className="font-bold text-[var(--text)]">{loc.name}</span>
                     <span className="text-[10px] text-[var(--text-muted)]">
@@ -336,42 +346,32 @@ export const WeatherView: React.FC<WeatherViewProps> = ({
               </div>
             )}
 
-            <div className="flex flex-wrap gap-1.5">
-              {DEFAULT_WISCONSIN_PRESETS.slice(0, 6).map((preset) => {
-                const isSelected =
-                  !isFollowingGps &&
-                  Math.abs(preset.lat - currentLocation.lat) < 0.01 &&
-                  Math.abs(preset.lng - currentLocation.lng) < 0.01;
-                return (
-                  <button
-                    key={preset.name}
-                    type="button"
-                    onClick={() => selectLocation(preset)}
-                    className={`px-2.5 py-1 rounded-full text-[10px] font-bold border cursor-pointer transition-colors ${
-                      isSelected
-                        ? 'bg-[var(--accent)] text-white border-[var(--accent)]'
-                        : 'bg-[var(--bg)] text-[var(--text-muted)] border-[var(--border)] hover:text-[var(--text)]'
-                    }`}
-                  >
-                    {preset.name}
-                  </button>
-                );
-              })}
+            <div className="flex flex-wrap gap-1">
+              {DEFAULT_WISCONSIN_PRESETS.slice(0, 6).map((preset) => (
+                <button
+                  key={preset.name}
+                  type="button"
+                  onClick={() => selectLocation(preset)}
+                  className="px-2 py-0.5 rounded-full text-[10px] font-bold border bg-[var(--bg)] text-[var(--text-muted)] border-[var(--border)] hover:text-[var(--text)] hover:border-[var(--accent)] cursor-pointer"
+                >
+                  {preset.name}
+                </button>
+              ))}
             </div>
           </div>
         )}
 
-        {/* 3-Tab Segmented Control Bar */}
+        {/* Sticky 3-Tab Segmented Bar: Hourly | 7-Day | Work Guard */}
         <div
           role="tablist"
-          aria-label="Weather views"
+          aria-label="Weather tabs"
           className="grid grid-cols-3 gap-1 bg-[var(--bg)] border border-[var(--border)] rounded-xl p-1"
         >
           {(
             [
-              { id: 'HOURLY', label: 'Hourly Today' },
-              { id: 'DAILY', label: '7-Day Outlook' },
-              { id: 'GUARD', label: 'Work & Guard' },
+              { id: 'HOURLY', label: 'Hourly' },
+              { id: 'DAILY', label: '7-Day' },
+              { id: 'GUARD', label: 'Work Guard' },
             ] as const
           ).map((tab) => {
             const active = activeSubTab === tab.id;
@@ -382,7 +382,7 @@ export const WeatherView: React.FC<WeatherViewProps> = ({
                 role="tab"
                 aria-selected={active}
                 onClick={() => setActiveSubTab(tab.id)}
-                className={`py-2 px-1.5 rounded-lg text-[10.5px] sm:text-xs font-extrabold tracking-tight transition-all cursor-pointer truncate ${
+                className={`py-1.5 px-2 rounded-lg text-xs font-extrabold transition-all cursor-pointer ${
                   active
                     ? 'bg-[var(--accent)] text-white shadow'
                     : 'text-[var(--text-muted)] hover:text-[var(--text)]'
@@ -395,7 +395,7 @@ export const WeatherView: React.FC<WeatherViewProps> = ({
         </div>
       </div>
 
-      {/* Error Message */}
+      {/* Error Notice */}
       {errorMsg && (
         <div className="bg-red-950/40 border border-red-500/40 text-red-200 rounded-xl px-3 py-2 text-xs font-semibold">
           {errorMsg}
@@ -404,162 +404,129 @@ export const WeatherView: React.FC<WeatherViewProps> = ({
 
       {/* Initial Loading State */}
       {loading && !weather && (
-        <div className="bg-[var(--surface)] border border-[var(--border)] rounded-2xl p-8 text-center space-y-2">
+        <div className="bg-[var(--surface)] border border-[var(--border)] rounded-2xl p-6 text-center space-y-1.5">
           <div className="text-2xl animate-pulse">🌦️</div>
           <p className="text-xs font-bold text-[var(--text-muted)]">
-            Loading Open-Meteo forecast for {currentLocation.name}…
+            Loading forecast for {currentLocation.name}…
           </p>
         </div>
       )}
 
       {/* ============================================================
-          SUB-TAB 1: HOURLY TODAY
+          SINGLE ACTIVE PANEL — ONLY ONE TAB EXISTS IN DOM AT A TIME
          ============================================================ */}
+
+      {/* TAB 1: HOURLY (DEFAULT) */}
       {weather && current && activeSubTab === 'HOURLY' && (
-        <div className="space-y-3">
-          {/* Current Conditions Hero Card (single source of truth — zero duplicate blocks) */}
-          <div className="bg-[var(--surface)] border border-[var(--border)] rounded-2xl p-4 shadow-md space-y-3.5">
-            <div className="flex items-start justify-between gap-3">
-              <div className="flex items-center gap-3">
-                <span className="text-4xl leading-none">{current.precipIcon}</span>
+        <section role="tabpanel" aria-label="Hourly forecast" className="space-y-2.5">
+          {/* Top Compact Hero Strip */}
+          <div className="bg-[var(--surface)] border border-[var(--border)] rounded-2xl p-3 shadow-sm space-y-2.5">
+            <div className="flex items-center justify-between gap-2">
+              <div className="flex items-center gap-2.5">
+                <span className="text-3xl leading-none">{current.precipIcon}</span>
                 <div>
-                  <div className="text-3xl sm:text-4xl font-black tracking-tight text-[var(--text)] leading-none">
-                    {current.temp}°F
+                  <div className="flex items-baseline gap-2">
+                    <span className="text-2xl sm:text-3xl font-black text-[var(--text)] leading-none">
+                      {current.temp}°F
+                    </span>
+                    <span className="text-[11px] font-bold text-[var(--text-muted)]">
+                      Feels {current.feelsLike}°
+                    </span>
                   </div>
-                  <div className="text-xs font-bold text-[var(--text-muted)] mt-1">
+                  <div className="text-[11px] font-semibold text-[var(--text-muted)] mt-0.5">
                     {current.wmoDescription}
                   </div>
                 </div>
               </div>
-
-              <div className="flex flex-col items-end gap-1.5">
-                {renderCurrentPrecipPill()}
-                {daily7[0] && (
-                  <span className="text-[11px] font-bold text-[var(--text-muted)]">
-                    H {daily7[0].tempMax}° • L {daily7[0].tempMin}°
-                  </span>
-                )}
-              </div>
+              {renderCurrentPrecipPill()}
             </div>
 
-            {/* 4 Core Current Metrics (each metric shown once) */}
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-              <div className="bg-[var(--bg)] border border-[var(--border)] rounded-xl px-3 py-2">
-                <div className="text-[9px] uppercase font-bold text-[var(--text-muted)]">
-                  Feels Like
-                </div>
-                <div className="text-sm font-black text-[var(--text)] mt-0.5">
-                  {current.feelsLike}°F
+            <div className="grid grid-cols-3 gap-1.5 pt-1 border-t border-[var(--border)]/70 text-center">
+              <div className="bg-[var(--bg)] rounded-xl py-1.5 px-2">
+                <div className="text-[8.5px] uppercase font-bold text-[var(--text-muted)]">Wind</div>
+                <div className="text-xs font-black text-[var(--text)]">
+                  {current.windSpeed} <span className="text-[10px] font-semibold text-[var(--text-muted)]">/ G{current.windGusts}</span>
                 </div>
               </div>
-
-              <div className="bg-[var(--bg)] border border-[var(--border)] rounded-xl px-3 py-2">
-                <div className="text-[9px] uppercase font-bold text-[var(--text-muted)]">
-                  Wind / Gusts
-                </div>
-                <div className="text-sm font-black text-[var(--text)] mt-0.5">
-                  {current.windSpeed}{' '}
-                  <span className="text-[10.5px] font-bold text-[var(--text-muted)]">
-                    / G{current.windGusts} mph
-                  </span>
-                </div>
+              <div className="bg-[var(--bg)] rounded-xl py-1.5 px-2">
+                <div className="text-[8.5px] uppercase font-bold text-[var(--text-muted)]">Humidity</div>
+                <div className="text-xs font-black text-[var(--text)]">{current.humidity}%</div>
               </div>
-
-              <div className="bg-[var(--bg)] border border-[var(--border)] rounded-xl px-3 py-2">
-                <div className="text-[9px] uppercase font-bold text-[var(--text-muted)]">
-                  Humidity
-                </div>
-                <div className="text-sm font-black text-[var(--text)] mt-0.5">
-                  {current.humidity}%
-                </div>
-              </div>
-
-              <div className="bg-[var(--bg)] border border-[var(--border)] rounded-xl px-3 py-2">
-                <div className="text-[9px] uppercase font-bold text-[var(--text-muted)]">
-                  Dew Point
-                </div>
-                <div className="text-sm font-black text-[var(--text)] mt-0.5">
-                  {current.dewPoint}°F
-                </div>
+              <div className="bg-[var(--bg)] rounded-xl py-1.5 px-2">
+                <div className="text-[8.5px] uppercase font-bold text-[var(--text-muted)]">Dew Pt</div>
+                <div className="text-xs font-black text-[var(--text)]">{current.dewPoint}°F</div>
               </div>
             </div>
           </div>
 
-          {/* Compact 24-Hour Horizontal Timeline */}
-          <div className="bg-[var(--surface)] border border-[var(--border)] rounded-2xl p-3.5 shadow-sm space-y-2.5">
-            <div className="flex items-center justify-between">
-              <h3 className="text-xs font-black uppercase tracking-wider text-[var(--text)]">
-                Next 24 Hours
-              </h3>
-              <span className="text-[10px] font-semibold text-[var(--text-muted)]">
-                Swipe horizontally →
-              </span>
+          {/* Compact Scrollable 24-Hour List (1 clean row per hour: Time | Icon | Temp | Precip %) */}
+          <div className="bg-[var(--surface)] border border-[var(--border)] rounded-2xl overflow-hidden shadow-sm">
+            <div className="grid grid-cols-[1.2fr_0.7fr_0.8fr_1.3fr] px-3 py-1.5 bg-[var(--bg)]/80 border-b border-[var(--border)] text-[9px] font-black uppercase tracking-wider text-[var(--text-muted)]">
+              <span>Time</span>
+              <span className="text-center">Sky</span>
+              <span className="text-center">Temp</span>
+              <span className="text-right">Precip</span>
             </div>
 
-            <div className="flex gap-2 overflow-x-auto pb-1.5">
+            <div className="max-h-[48vh] overflow-y-auto divide-y divide-[var(--border)]/60">
               {hourly24.map((h, idx) => {
                 const isNow = idx === 0;
-                const isSnowHour = h.precipMode === 'SNOW' || h.precipMode === 'WINTRY_MIX';
+                const isSnowHour = h.snowfallIn > 0 && h.precipMode === 'SNOW';
+                const isMixHour = h.snowfallIn > 0 && h.precipMode === 'WINTRY_MIX';
                 const isRainHour = h.precipMode === 'RAIN';
 
                 return (
                   <div
                     key={h.isoTime}
-                    className={`shrink-0 w-[74px] rounded-xl p-2 border flex flex-col items-center justify-between gap-1 text-center ${
-                      isNow
-                        ? 'bg-[var(--accent)]/15 border-[var(--accent)]'
-                        : 'bg-[var(--bg)] border-[var(--border)]'
+                    className={`grid grid-cols-[1.2fr_0.7fr_0.8fr_1.3fr] items-center px-3 py-2 text-xs ${
+                      isNow ? 'bg-[var(--accent)]/12 font-extrabold' : ''
                     }`}
                   >
-                    <span
-                      className={`text-[10px] font-extrabold ${
-                        isNow ? 'text-[var(--accent)]' : 'text-[var(--text-muted)]'
-                      }`}
-                    >
+                    <span className={isNow ? 'text-[var(--accent)] font-black' : 'font-bold text-[var(--text)]'}>
                       {h.timeStr}
+                      {h.dayLabel !== 'Today' && (
+                        <span className="ml-1 text-[9.5px] font-semibold text-[var(--text-muted)]">
+                          {h.dayLabel}
+                        </span>
+                      )}
                     </span>
 
-                    <span className="text-lg leading-none my-0.5">{h.precipIcon}</span>
+                    <span className="text-base text-center leading-none">{h.precipIcon}</span>
 
-                    <span className="text-sm font-black text-[var(--text)] leading-none">
-                      {h.temp}°
+                    <span className="text-center font-black text-[var(--text)]">{h.temp}°</span>
+
+                    <span className="text-right">
+                      {isMixHour ? (
+                        <span className="text-[10.5px] font-extrabold text-purple-300">
+                          🌨️ Mix {h.rainProb}%
+                        </span>
+                      ) : isSnowHour ? (
+                        <span className="text-[10.5px] font-extrabold text-sky-300">
+                          ❄️ Snow {h.rainProb}%
+                        </span>
+                      ) : isRainHour ? (
+                        <span className="text-[10.5px] font-extrabold text-blue-300">
+                          {h.precipIcon} Rain {h.rainProb}%
+                        </span>
+                      ) : (
+                        <span className="text-[10px] font-bold text-emerald-400/80">Dry</span>
+                      )}
                     </span>
-
-                    {isSnowHour ? (
-                      <span className="text-[9.5px] font-extrabold text-sky-300 leading-tight">
-                        {h.precipMode === 'WINTRY_MIX' ? 'Mix' : 'Snow'} {h.rainProb}%
-                      </span>
-                    ) : isRainHour ? (
-                      <span className="text-[9.5px] font-extrabold text-blue-300 leading-tight">
-                        Rain {h.rainProb}%
-                      </span>
-                    ) : (
-                      <span className="text-[9px] font-bold text-emerald-400/80 leading-tight">
-                        Dry
-                      </span>
-                    )}
                   </div>
                 );
               })}
             </div>
           </div>
-        </div>
+        </section>
       )}
 
-      {/* ============================================================
-          SUB-TAB 2: 7-DAY OUTLOOK (COMPACT EXPANDABLE ROWS)
-         ============================================================ */}
+      {/* TAB 2: 7-DAY (COMPACT SINGLE-LINE ROWS + SINGLE ACCORDION DRAWER) */}
       {weather && activeSubTab === 'DAILY' && (
-        <div className="bg-[var(--surface)] border border-[var(--border)] rounded-2xl overflow-hidden shadow-sm">
-          <div className="px-3.5 py-2.5 border-b border-[var(--border)] flex items-center justify-between">
-            <h3 className="text-xs font-black uppercase tracking-wider text-[var(--text)]">
-              7-Day Forecast
-            </h3>
-            <span className="text-[10px] text-[var(--text-muted)] font-semibold">
-              Tap a day for gusts &amp; exterior details
-            </span>
-          </div>
-
+        <section
+          role="tabpanel"
+          aria-label="7-Day forecast"
+          className="bg-[var(--surface)] border border-[var(--border)] rounded-2xl overflow-hidden shadow-sm"
+        >
           <div className="divide-y divide-[var(--border)]">
             {daily7.map((day) => {
               const isExpanded = expandedDayDate === day.dateStr;
@@ -570,80 +537,61 @@ export const WeatherView: React.FC<WeatherViewProps> = ({
                   : day.precipMode === 'SNOW'
                   ? `Snow ${day.rainProb}%`
                   : day.precipMode === 'RAIN'
-                  ? `${day.precipTypeLabel} ${day.rainProb}%`
+                  ? `Rain ${day.rainProb}%`
                   : 'Dry / Clear';
 
               return (
-                <div key={day.dateStr} className="transition-colors">
+                <div key={day.dateStr}>
                   <button
                     type="button"
                     onClick={() =>
                       setExpandedDayDate((prev) => (prev === day.dateStr ? null : day.dateStr))
                     }
                     aria-expanded={isExpanded}
-                    className="w-full px-3.5 py-3 flex items-center justify-between gap-2 hover:bg-[var(--surface-subtle)]/60 text-left cursor-pointer"
+                    className="w-full px-3 py-2.5 grid grid-cols-[1.35fr_0.45fr_1.05fr_0.95fr] items-center gap-1.5 hover:bg-[var(--surface-subtle)]/60 text-left cursor-pointer"
                   >
-                    {/* Left: Day + Icon */}
-                    <div className="flex items-center gap-2.5 min-w-0 flex-1">
-                      <span className="text-lg shrink-0 leading-none">{day.precipIcon}</span>
-                      <div className="min-w-0">
-                        <div className="text-xs sm:text-sm font-extrabold text-[var(--text)] truncate">
-                          {day.dayName}
-                        </div>
-                        <div className="text-[10px] text-[var(--text-muted)] truncate">
-                          {day.wmoDescription}
-                        </div>
-                      </div>
-                    </div>
-
-                    {/* Middle: Dynamic Rain / Snow / Dry Badge */}
-                    <span
-                      className={`text-[10px] font-extrabold px-2 py-0.5 rounded-full whitespace-nowrap shrink-0 ${getPrecipBadgeStyle(
-                        day.precipMode
-                      )}`}
-                    >
-                      {precipBadgeText}
+                    <span className="text-xs font-extrabold text-[var(--text)] truncate">
+                      {day.dayName}
                     </span>
 
-                    {/* Right: High / Low + Chevron */}
-                    <div className="flex items-center gap-2 shrink-0 min-w-[74px] justify-end">
-                      <span className="text-xs sm:text-sm font-black text-[var(--text)]">
-                        {day.tempMax}°
-                        <span className="text-[var(--text-muted)] font-semibold">
-                          /{day.tempMin}°
-                        </span>
-                      </span>
+                    <span className="text-base text-center leading-none">{day.precipIcon}</span>
+
+                    <span className="flex justify-center">
                       <span
-                        className={`text-[10px] text-[var(--text-muted)] transition-transform ${
+                        className={`text-[9.5px] font-extrabold px-2 py-0.5 rounded-full whitespace-nowrap ${getPrecipBadgeStyle(
+                          day.precipMode
+                        )}`}
+                      >
+                        {precipBadgeText}
+                      </span>
+                    </span>
+
+                    <span className="text-right text-xs font-black text-[var(--text)] whitespace-nowrap">
+                      <span className="text-[var(--text-muted)] font-semibold">{day.tempMin}°</span>
+                      <span className="mx-0.5 text-[var(--text-muted)]">/</span>
+                      <span>{day.tempMax}°</span>
+                      <span
+                        className={`ml-1.5 inline-block text-[10px] text-[var(--text-muted)] transition-transform ${
                           isExpanded ? 'rotate-180' : ''
                         }`}
                       >
                         ▾
                       </span>
-                    </div>
+                    </span>
                   </button>
 
-                  {/* Expanded Single-Day Details */}
                   {isExpanded && (
-                    <div className="px-3.5 pb-3.5 pt-1 bg-[var(--bg)]/60 border-t border-[var(--border)]/60 space-y-2">
-                      <div className="grid grid-cols-2 gap-2">
-                        <div className="bg-[var(--surface)] border border-[var(--border)] rounded-xl px-2.5 py-2">
-                          <div className="text-[9px] uppercase font-bold text-[var(--text-muted)]">
-                            Wind &amp; Gusts
-                          </div>
-                          <div className="text-xs font-extrabold text-[var(--text)] mt-0.5">
-                            💨 {day.windSpeedMax} mph • Gusts {day.windGustsMax} mph
-                          </div>
-                        </div>
-
-                        <div className="bg-[var(--surface)] border border-[var(--border)] rounded-xl px-2.5 py-2">
-                          <div className="text-[9px] uppercase font-bold text-[var(--text-muted)]">
-                            Precipitation
-                          </div>
-                          <div className="text-xs font-extrabold text-[var(--text)] mt-0.5">
-                            {renderDailyAccumulationText(day)}
-                          </div>
-                        </div>
+                    <div className="px-3 pb-3 pt-2 bg-[var(--bg)]/75 border-t border-[var(--border)]/60 space-y-2">
+                      <div className="flex flex-wrap items-center justify-between gap-2 text-[11px]">
+                        <span className="font-bold text-[var(--text)]">
+                          💨 Gusts: {day.windGustsMax} mph{' '}
+                          <span className="text-[var(--text-muted)] font-normal">
+                            (wind {day.windSpeedMax} mph)
+                          </span>
+                        </span>
+                        <span className="font-extrabold text-[var(--text)]">
+                          {renderDailyAccumulationText(day)}
+                        </span>
                       </div>
 
                       <div className="flex items-start justify-between gap-2 bg-[var(--surface)] border border-[var(--border)] rounded-xl px-2.5 py-2">
@@ -664,161 +612,123 @@ export const WeatherView: React.FC<WeatherViewProps> = ({
               );
             })}
           </div>
-        </div>
+        </section>
       )}
 
-      {/* ============================================================
-          SUB-TAB 3: WORK & EXTERIOR GUARD
-         ============================================================ */}
+      {/* TAB 3: WORK GUARD (ONE READINESS CARD + COMPACT NEXT 7 DAYS ALERTS BOX) */}
       {weather && guard && activeSubTab === 'GUARD' && (
-        <div className="space-y-3">
-          {/* Contractor Exterior Painting & Pressure Washing Summary Card */}
-          <div className="bg-[var(--surface)] border border-[var(--border)] rounded-2xl p-3.5 shadow-sm space-y-3">
+        <section role="tabpanel" aria-label="Work Guard" className="space-y-2.5">
+          {/* Card 1: Exterior Paint & Wash Readiness */}
+          <div className="bg-[var(--surface)] border border-[var(--border)] rounded-2xl p-3.5 shadow-sm space-y-2.5">
             <div className="flex items-center justify-between gap-2">
               <h3 className="text-xs font-black uppercase tracking-wider text-[var(--text)]">
-                Today&apos;s Exterior Work Window
+                Exterior Paint &amp; Wash Readiness
               </h3>
-              <span className="text-[10px] font-bold text-[var(--accent)]">
+              <span className="text-[10px] font-bold text-[var(--accent)] truncate">
                 {guard.bestWindowLabel}
               </span>
             </div>
 
-            {/* Painting vs. Pressure Washing Verdict Cards */}
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-              {(() => {
-                const pStyle = getGuardVerdictStyle(guard.paintingStatus);
-                return (
-                  <div className={`rounded-xl border p-3 space-y-1.5 ${pStyle.card}`}>
-                    <div className="flex items-center justify-between gap-2">
-                      <span className="text-xs font-black text-[var(--text)]">
-                        🎨 Exterior Painting
-                      </span>
-                      <span
-                        className={`text-[9.5px] font-black uppercase px-2 py-0.5 rounded-full ${pStyle.badge}`}
-                      >
-                        {guard.paintingLabel}
-                      </span>
-                    </div>
-                    <p className="text-[11px] text-[var(--text-muted)] leading-snug">
-                      {guard.paintingSummary}
-                    </p>
-                  </div>
-                );
-              })()}
+            <div className="grid grid-cols-2 gap-2">
+              <div className="bg-[var(--bg)] border border-[var(--border)] rounded-xl p-2.5 space-y-1">
+                <div className="flex items-center justify-between gap-1">
+                  <span className="text-[11px] font-black text-[var(--text)]">🎨 Painting</span>
+                  <span className={`text-[9px] font-black uppercase px-1.5 py-0.5 rounded-full ${getGuardPillStyle(guard.paintingStatus)}`}>
+                    {guard.paintingLabel}
+                  </span>
+                </div>
+                <p className="text-[10px] text-[var(--text-muted)] leading-snug">
+                  {guard.paintingSummary}
+                </p>
+              </div>
 
-              {(() => {
-                const wStyle = getGuardVerdictStyle(guard.washingStatus);
-                return (
-                  <div className={`rounded-xl border p-3 space-y-1.5 ${wStyle.card}`}>
-                    <div className="flex items-center justify-between gap-2">
-                      <span className="text-xs font-black text-[var(--text)]">
-                        💦 Pressure Washing
-                      </span>
-                      <span
-                        className={`text-[9.5px] font-black uppercase px-2 py-0.5 rounded-full ${wStyle.badge}`}
-                      >
-                        {guard.washingLabel}
-                      </span>
-                    </div>
-                    <p className="text-[11px] text-[var(--text-muted)] leading-snug">
-                      {guard.washingSummary}
-                    </p>
-                  </div>
-                );
-              })()}
+              <div className="bg-[var(--bg)] border border-[var(--border)] rounded-xl p-2.5 space-y-1">
+                <div className="flex items-center justify-between gap-1">
+                  <span className="text-[11px] font-black text-[var(--text)]">💦 Washing</span>
+                  <span className={`text-[9px] font-black uppercase px-1.5 py-0.5 rounded-full ${getGuardPillStyle(guard.washingStatus)}`}>
+                    {guard.washingLabel}
+                  </span>
+                </div>
+                <p className="text-[10px] text-[var(--text-muted)] leading-snug">
+                  {guard.washingSummary}
+                </p>
+              </div>
             </div>
 
-            {/* 4 Focused Threshold Checks */}
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+            <div className="grid grid-cols-2 gap-1.5">
               {guard.checks.map((chk) => {
                 const tone = getCheckToneStyle(chk.status);
                 return (
                   <div
                     key={chk.id}
-                    className="bg-[var(--bg)] border border-[var(--border)] rounded-xl p-2.5 space-y-1"
+                    className="bg-[var(--bg)] border border-[var(--border)] rounded-xl px-2.5 py-1.5 flex items-center justify-between gap-1.5"
                   >
-                    <div className="flex items-center justify-between gap-2">
-                      <span className="text-[11px] font-extrabold text-[var(--text)]">
-                        {chk.label}: <span className="text-[var(--accent)]">{chk.reading}</span>
-                      </span>
-                      <span
-                        className={`text-[9px] font-black uppercase px-1.5 py-0.5 rounded ${tone.pill}`}
-                      >
-                        {tone.label}
-                      </span>
+                    <div className="min-w-0">
+                      <div className="text-[9px] uppercase font-bold text-[var(--text-muted)]">
+                        {chk.label}
+                      </div>
+                      <div className="text-[11px] font-black text-[var(--text)] truncate">
+                        {chk.reading}
+                      </div>
                     </div>
-                    <p className="text-[10.5px] text-[var(--text-muted)] leading-snug">
-                      {chk.detail}
-                    </p>
+                    <span className={`text-[8.5px] font-black uppercase px-1.5 py-0.5 rounded shrink-0 ${tone.pill}`}>
+                      {tone.label}
+                    </span>
                   </div>
                 );
               })}
             </div>
           </div>
 
-          {/* Conditional 7-Day Snow & Freeze Alert Strip (ONLY lights up when snow or freezing temps are forecast) */}
-          {guard.hasSnowOrFreeze7d ? (
-            <div className="rounded-2xl border border-sky-400/50 bg-sky-950/30 p-3.5 space-y-2 shadow-sm">
-              <div className="flex items-center justify-between gap-2">
-                <h3 className="text-xs font-black uppercase tracking-wider text-sky-200 flex items-center gap-1.5">
-                  <span>{guard.snowDays7d.length > 0 ? '❄️' : '🌡️'}</span>
-                  <span>
-                    {guard.snowDays7d.length > 0 && guard.freezeDays7d.length > 0
-                      ? '7-Day Snow & Freeze Alert'
-                      : guard.snowDays7d.length > 0
-                      ? '7-Day Snow Alert'
-                      : '7-Day Freeze Alert'}
-                  </span>
-                </h3>
-                <span className="text-[10px] font-black uppercase px-2 py-0.5 rounded-full bg-sky-400 text-slate-950">
-                  Active
-                </span>
+          {/* Card 2: Next 7 Days Alerts (ONLY days with snow, freeze risk, or rain) */}
+          <div className="bg-[var(--surface)] border border-[var(--border)] rounded-2xl p-3.5 shadow-sm space-y-2">
+            <div className="flex items-center justify-between">
+              <h3 className="text-xs font-black uppercase tracking-wider text-[var(--text)]">
+                Next 7 Days Alerts
+              </h3>
+              <span className="text-[10px] font-bold text-[var(--text-muted)]">
+                {next7DayAlerts.length === 0
+                  ? '0 alerts'
+                  : `${next7DayAlerts.length} flagged ${next7DayAlerts.length === 1 ? 'day' : 'days'}`}
+              </span>
+            </div>
+
+            {next7DayAlerts.length === 0 ? (
+              <div className="bg-emerald-950/25 border border-emerald-500/40 rounded-xl px-3 py-2.5 text-xs font-extrabold text-emerald-300 text-center">
+                ✓ All clear for exterior work
               </div>
-
-              {guard.snowDays7d.length > 0 && (
-                <div className="bg-[var(--bg)]/70 border border-sky-500/30 rounded-xl px-3 py-2 text-[11px] text-sky-100 space-y-1">
-                  <div className="font-extrabold">
-                    ❄️ Projected Snow ({guard.snowDays7d.length}{' '}
-                    {guard.snowDays7d.length === 1 ? 'day' : 'days'}
-                    {guard.totalSnow7dIn > 0 ? ` • ~${formatSnowInches(guard.totalSnow7dIn)} total` : ''})
+            ) : (
+              <div className="divide-y divide-[var(--border)]/70 bg-[var(--bg)] border border-[var(--border)] rounded-xl overflow-hidden">
+                {next7DayAlerts.map((item) => (
+                  <div
+                    key={item.dateStr}
+                    className="px-3 py-2 flex items-center justify-between gap-2 flex-wrap"
+                  >
+                    <span className="text-xs font-extrabold text-[var(--text)]">
+                      {item.dayName}
+                    </span>
+                    <div className="flex flex-wrap items-center gap-1">
+                      {item.tags.map((tag, i) => (
+                        <span
+                          key={i}
+                          className={`text-[10px] font-extrabold px-2 py-0.5 rounded-full ${
+                            tag.tone === 'snow'
+                              ? 'bg-sky-500/20 text-sky-200 border border-sky-400/45'
+                              : tag.tone === 'freeze'
+                              ? 'bg-cyan-500/20 text-cyan-200 border border-cyan-400/45'
+                              : 'bg-blue-500/20 text-blue-200 border border-blue-400/45'
+                          }`}
+                        >
+                          {tag.label}
+                        </span>
+                      ))}
+                    </div>
                   </div>
-                  <div className="flex flex-wrap gap-1.5">
-                    {guard.snowDays7d.map((sd) => (
-                      <span
-                        key={sd.dayName}
-                        className="text-[10px] font-bold bg-sky-500/20 text-sky-200 border border-sky-400/40 px-2 py-0.5 rounded-full"
-                      >
-                        {sd.dayName}
-                        {sd.snowfallIn > 0 ? `: ${formatSnowInches(sd.snowfallIn)}` : ` (${sd.precipProb}%)`}
-                      </span>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              {guard.freezeDays7d.length > 0 && (
-                <div className="bg-[var(--bg)]/70 border border-cyan-500/30 rounded-xl px-3 py-2 text-[11px] text-cyan-100 space-y-0.5">
-                  <div className="font-extrabold">
-                    🌡️ {guard.freezeDays7d.length} Freezing{' '}
-                    {guard.freezeDays7d.length === 1 ? 'Night' : 'Nights'} (Low {guard.lowestTemp7d}°F)
-                  </div>
-                  <p className="text-[10.5px] text-cyan-200/80">
-                    Bring waterborne paint, primers, and caulk indoors overnight—never store latex below 35°F.
-                  </p>
-                </div>
-              )}
-            </div>
-          ) : (
-            <div className="rounded-2xl border border-emerald-500/35 bg-emerald-950/20 px-3.5 py-2.5 flex items-center justify-between gap-2">
-              <span className="text-[11px] font-bold text-emerald-300">
-                ✓ No snow or freezing temperatures forecast over the next 7 days
-              </span>
-              <span className="text-[10px] font-extrabold text-emerald-400 shrink-0">
-                7d Low {guard.lowestTemp7d}°F
-              </span>
-            </div>
-          )}
-        </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </section>
       )}
     </div>
   );

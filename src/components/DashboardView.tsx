@@ -429,7 +429,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
       <div
         onClick={onOpenWeatherHub}
         className="bg-[var(--surface)] border border-[var(--border)] rounded-xl p-3 sm:p-3.5 shadow-sm border-l-4 border-l-[#f1c40f] flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 cursor-pointer hover:border-[#f1c40f] transition-all active:scale-[0.99]"
-        title="Tap for Winter & Snow Outlook Tracker"
+        title="Tap for Jobsite Weather"
       >
         <div className="flex-1 min-w-0">
           <div className="text-xs font-bold text-[var(--text)] flex items-center gap-1.5 flex-wrap">

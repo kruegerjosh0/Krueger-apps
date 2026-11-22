@@ -22,7 +22,9 @@
     <script>
       if ('serviceWorker' in navigator && location.protocol.startsWith('http')) {
         window.addEventListener('load', () => {
-          navigator.serviceWorker.register('/sw.js').catch((err) => {
+          navigator.serviceWorker.register('./sw.js').then((reg) => {
+            if (reg && typeof reg.update === 'function') reg.update();
+          }).catch((err) => {
             console.log('ServiceWorker registration note:', err);
           });
         });

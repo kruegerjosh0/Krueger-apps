@@ -785,7 +785,7 @@ export async function fetchFullWeather(lat: number, lng: number): Promise<FullWe
     `&current=temperature_2m,apparent_temperature,relative_humidity_2m,dew_point_2m,wind_speed_10m,wind_gusts_10m,precipitation,rain,snowfall,weather_code` +
     `&hourly=weather_code,temperature_2m,apparent_temperature,precipitation_probability,rain,snowfall,relative_humidity_2m,dew_point_2m,wind_speed_10m,wind_gusts_10m` +
     `&daily=weather_code,precipitation_probability_max,rain_sum,snowfall_sum,temperature_2m_max,temperature_2m_min,apparent_temperature_max,apparent_temperature_min,wind_speed_10m_max,wind_gusts_10m_max` +
-    `&temperature_unit=fahrenheit&wind_speed_unit=mph&precipitation_unit=inch&timezone=auto&forecast_days=7`;
+    `&temperature_unit=fahrenheit&wind_speed_unit=mph&precipitation_unit=inch&timezone=auto&forecast_days=10`;
 
   const res = await fetch(url);
   if (!res.ok) throw new Error('Failed to fetch weather data from Open-Meteo');
@@ -860,10 +860,10 @@ export async function fetchFullWeather(lat: number, lng: number): Promise<FullWe
     }
   }
 
-  // Build 7-day outlook
+  // Build 10-day outlook
   const dailyList: DailyForecast[] = [];
   if (data.daily?.time) {
-    const count = Math.min(7, data.daily.time.length);
+    const count = Math.min(10, data.daily.time.length);
     for (let d = 0; d < count; d++) {
       const dateStr = data.daily.time[d];
       const dObj = new Date(dateStr + 'T00:00:00');

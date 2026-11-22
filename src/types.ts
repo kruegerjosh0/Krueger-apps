@@ -155,19 +155,25 @@ export interface LocationInfo {
 
 export type PrecipType = 'NONE' | 'SNOW' | 'FREEZING_RAIN' | 'WINTRY_MIX' | 'RAIN';
 
+export type PrecipMode = 'DRY' | 'RAIN' | 'SNOW' | 'WINTRY_MIX';
+
 export type WorkabilityStatus = 'GO' | 'CAUTION' | 'SNOW_ICE_RISK';
 
 export interface WeatherCondition {
   temp: number;
   feelsLike: number;
   humidity: number;
+  dewPoint: number;
   windSpeed: number;
   windGusts: number;
   precipitation: number;
+  rainIn: number;
   snowfallIn: number;
   weatherCode: number;
   wmoDescription: string;
   rainProb: number;
+  precipMode: PrecipMode;
+  precipIcon: string;
   precipType: PrecipType;
   precipTypeLabel: string;
   workability: WorkabilityStatus;
@@ -184,12 +190,17 @@ export interface HourlyForecast {
   timeStr: string;
   temp: number;
   feelsLike: number;
+  humidity: number;
+  dewPoint: number;
   rainProb: number;
   windSpeed: number;
   windGusts: number;
+  rainIn: number;
   snowfallIn: number;
   precipIn: number;
   weatherCode: number;
+  precipMode: PrecipMode;
+  precipLabel: string;
   precipType: PrecipType;
   precipIcon: string;
 }
@@ -202,18 +213,44 @@ export interface DailyForecast {
   feelsLikeMax: number;
   feelsLikeMin: number;
   rainProb: number;
+  rainSumIn: number;
   snowfallIn: number;
   precipSumIn: number;
   windSpeedMax: number;
   windGustsMax: number;
   weatherCode: number;
   wmoDescription: string;
+  precipMode: PrecipMode;
   precipType: PrecipType;
   precipTypeLabel: string;
   precipIcon: string;
   workability: WorkabilityStatus;
   workabilityLabel: string;
   workabilityHint: string;
+}
+
+export interface ExteriorGuardCheck {
+  id: 'temp' | 'wind' | 'humidity' | 'precip';
+  label: string;
+  reading: string;
+  status: 'PASS' | 'WARN' | 'HOLD';
+  detail: string;
+}
+
+export interface ExteriorGuardSummary {
+  paintingStatus: 'GO' | 'CAUTION' | 'HOLD';
+  paintingLabel: string;
+  paintingSummary: string;
+  washingStatus: 'GO' | 'CAUTION' | 'HOLD';
+  washingLabel: string;
+  washingSummary: string;
+  bestWindowLabel: string;
+  checks: ExteriorGuardCheck[];
+  hasSnowOrFreeze7d: boolean;
+  snowDays7d: Array<{ dayName: string; snowfallIn: number; rainSumIn: number; precipProb: number; precipMode: PrecipMode }>;
+  freezeDays7d: Array<{ dayName: string; tempMin: number }>;
+  lowestTemp7d: number;
+  totalSnow7dIn: number;
 }
 
 export interface WinterAdvisoryItem {

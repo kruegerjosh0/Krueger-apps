@@ -447,13 +447,13 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
             <span className="font-extrabold truncate">
               {currentWeather
                 ? `${currentLocation.name}: ${currentWeather.temp}°F (Feels ${currentWeather.feelsLike}°) • 💨 ${currentWeather.windGusts} mph`
-                : `${currentLocation.name} Winter Weather`}
+                : `${currentLocation.name} Jobsite Weather`}
             </span>
           </div>
 
           <div className="text-[10px] sm:text-[11px] text-[var(--text-muted)] mt-1 flex items-center gap-2 flex-wrap">
             <span className="truncate">
-              {currentWeather ? currentWeather.conditionText : 'Tap for winter & snow outlook'}
+              {currentWeather ? currentWeather.conditionText : 'Tap for hourly, 7-day & exterior guard'}
             </span>
             {onToggleFollowMe && (
               <button

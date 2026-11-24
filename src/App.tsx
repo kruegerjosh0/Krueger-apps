@@ -956,9 +956,11 @@ export default function App() {
       proposedRooms.push({
         n: `${roomLabel} ${w}x${l}`,
         r: labor,
+        len: w,
+        wid: l,
         og: String(gals),
-        prod: 'Emerald',
-        sheen: 'Satin',
+        prod: '',
+        sheen: '',
         sp: true,
       });
     }
@@ -1193,12 +1195,18 @@ export default function App() {
         <JobModal
           key={`${jobModalCustomer.id}-${activeEditingJob?.id ?? 'new'}`}
           customer={jobModalCustomer}
+          customers={customers}
           job={activeEditingJob}
           constants={constants}
           onClose={() => {
             setJobModalCustomer(null);
             setActiveEditingJob(null);
           }}
+          onSelectCustomer={(nextCustomer) => {
+            setJobModalCustomer(nextCustomer);
+            setActiveFolderCustomer(nextCustomer);
+          }}
+          onUpdateCustomer={handleUpdateCustomer}
           onSaveJob={handleSaveJob}
           onShareBusinessCard={() => setShareBusinessCardOpen(true)}
           onToast={showToast}

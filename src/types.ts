@@ -1,12 +1,16 @@
 export interface RoomArea {
   n: string; // Name (e.g. "Living Room 12x15")
   r: number; // Labor price ($)
+  len?: number; // Length (ft)
+  wid?: number; // Width (ft)
+  hgt?: number; // Height (ft)
+  manualPrice?: boolean; // True when user explicitly typed a manual labor price override
   og?: string; // Override paint gallons
   ol?: string; // Override labor ($)
   sp?: boolean; // Show paint on estimate
-  prod?: string; // Paint product (e.g. "Emerald")
+  prod?: string; // Paint product (blank by default)
   color?: string; // Color code (e.g. "SW 7015 Repose Gray")
-  sheen?: string; // Sheen (e.g. "Satin")
+  sheen?: string; // Sheen (blank by default)
   prep?: string[]; // Room-specific prep & setup checklist items
 }
 

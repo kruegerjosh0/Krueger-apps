@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { Customer } from '../../types';
+import { formatAddressParts, parseAddressParts } from '../../utils/projectHelpers';
 
 interface CustomerModalProps {
   onClose: () => void;
@@ -8,7 +9,9 @@ interface CustomerModalProps {
 
 export const CustomerModal: React.FC<CustomerModalProps> = ({ onClose, onSaveCustomer }) => {
   const [name, setName] = useState('');
-  const [address, setAddress] = useState('');
+  const [street, setStreet] = useState('');
+  const [city, setCity] = useState('');
+  const [zip, setZip] = useState('');
   const [phone, setPhone] = useState('');
   const [email, setEmail] = useState('');
   const [smartText, setSmartText] = useState('');
@@ -19,27 +22,38 @@ export const CustomerModal: React.FC<CustomerModalProps> = ({ onClose, onSaveCus
 
     // Phone detection
     const phoneMatch = raw.match(/(\+?1[-\.\s]?)?\(?\d{3}\)?[-\.\s]?\d{3}[-\.\s]?\d{4}/);
-    if (phoneMatch && !phone) setPhone(phoneMatch[0]);
+    if (phoneMatch) setPhone(phoneMatch[0].trim());
 
     // Email detection
     const emailMatch = raw.match(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/);
-    if (emailMatch && !email) setEmail(emailMatch[0]);
+    if (emailMatch) setEmail(emailMatch[0].trim());
 
-    // Name detection (first non-empty line)
+    // Zip code detection
+    const zipMatch = raw.match(/\b(\d{5})(?:-\d{4})?\b/);
+    if (zipMatch) setZip(zipMatch[1]);
+
+    // Full street + city/state/zip detection
+    const fullAddrMatch = raw.match(
+      /(\d{1,5}\s+[A-Za-z0-9\.\s#]+?(?:Avenue|Lane|Road|Drive|Street|Blvd|Boulevard|Court|Ct|Way|Trail|Trl|Circle|Cir|Place|Pl|Dr|Rd|Ave|Ln|St)\b(?:,\s*[A-Za-z\s]+)?(?:,?\s*(?:WI|Wisconsin))?(?:\s*\d{5})?)/i
+    );
+    if (fullAddrMatch) {
+      const parsed = parseAddressParts(fullAddrMatch[1]);
+      if (parsed.street) setStreet(parsed.street);
+      if (parsed.city) setCity(parsed.city);
+      if (parsed.zip) setZip(parsed.zip);
+    }
+
+    // Name detection (first non-empty line that doesn't look like a phone/email/street number)
     const lines = raw
       .split('\n')
       .map((l) => l.trim())
       .filter((l) => l.length > 0);
-    if (lines.length > 0 && !name) {
-      setName(lines[0].substring(0, 40));
-    }
-
-    // Address detection
-    const addressMatch = raw.match(
-      /\d{1,5}\s+[A-Za-z0-9\.\,\s#]+(?:Avenue|Lane|Road|Drive|Street|Blvd|Ct|Way|Trl|Dr|Rd|Ave|Ln)\b/i
+    const nameLine = lines.find(
+      (l) => !/^\d{1,5}\s+/.test(l) && !/@/.test(l) && !/^\(?\d{3}\)?/.test(l)
     );
-    if (addressMatch && !address) {
-      setAddress(addressMatch[0] + ', WI');
+    if (nameLine) {
+      const cleanName = nameLine.replace(/^(?:name|client|customer|from)\s*:\s*/i, '').trim();
+      if (cleanName) setName(cleanName.substring(0, 50));
     }
   };
 
@@ -48,9 +62,15 @@ export const CustomerModal: React.FC<CustomerModalProps> = ({ onClose, onSaveCus
       alert('Client Name is required.');
       return;
     }
+    const combinedAddress = formatAddressParts({
+      street,
+      city,
+      state: city.trim() || zip.trim() || street.trim() ? 'WI' : '',
+      zip,
+    });
     onSaveCustomer({
       name: name.trim(),
-      address: address.trim(),
+      address: combinedAddress,
       phone: phone.trim(),
       email: email.trim(),
     });
@@ -79,26 +99,30 @@ export const CustomerModal: React.FC<CustomerModalProps> = ({ onClose, onSaveCus
           </label>
           <textarea
             rows={3}
-            autoComplete="off"
             value={smartText}
             onChange={(e) => parseSmartLeadText(e.target.value)}
             placeholder="Paste text message or email lead inquiry here to auto-fill..."
             className="w-full bg-[var(--bg)] border border-[var(--border)] focus:border-[var(--accent)] text-[var(--text)] rounded-lg p-2.5 text-xs outline-none"
           />
           <p className="text-[10px] text-[var(--text-muted)] leading-tight">
-            Scans incoming lead text for phone, email, name, and Wisconsin street addresses.
+            Scans incoming lead text for name, phone, email, street address, city, and ZIP code.
           </p>
         </div>
 
-        {/* Fields */}
-        <form autoComplete="off" onSubmit={(e) => e.preventDefault()} className="space-y-3">
+        {/* Contact Fields (with standard HTML name & autoComplete for browser autofill) */}
+        <form autoComplete="on" onSubmit={(e) => e.preventDefault()} className="space-y-3">
           <div>
-            <label className="text-[10px] uppercase font-bold text-[var(--text-muted)] tracking-wider block mb-1">
+            <label
+              htmlFor="new-customer-name"
+              className="text-[10px] uppercase font-bold text-[var(--text-muted)] tracking-wider block mb-1"
+            >
               Full Name *
             </label>
             <input
+              id="new-customer-name"
+              name="name"
               type="text"
-              autoComplete="off"
+              autoComplete="name"
               value={name}
               onChange={(e) => setName(e.target.value)}
               placeholder="Enter client full name"
@@ -107,27 +131,77 @@ export const CustomerModal: React.FC<CustomerModalProps> = ({ onClose, onSaveCus
           </div>
 
           <div>
-            <label className="text-[10px] uppercase font-bold text-[var(--text-muted)] tracking-wider block mb-1">
-              Job Site Street Address
+            <label
+              htmlFor="new-customer-street"
+              className="text-[10px] uppercase font-bold text-[var(--text-muted)] tracking-wider block mb-1"
+            >
+              Street Address
             </label>
             <input
+              id="new-customer-street"
+              name="street-address"
               type="text"
-              autoComplete="off"
-              value={address}
-              onChange={(e) => setAddress(e.target.value)}
-              placeholder="Street address, City, WI ZIP"
+              autoComplete="street-address"
+              value={street}
+              onChange={(e) => setStreet(e.target.value)}
+              placeholder="Street address (e.g. 1425 Main St)"
               className="w-full bg-[var(--bg)] border border-[var(--border)] focus:border-[var(--accent)] text-[var(--text)] rounded-lg px-3 py-2.5 text-xs outline-none"
             />
           </div>
 
           <div className="grid grid-cols-2 gap-2">
             <div>
-              <label className="text-[10px] uppercase font-bold text-[var(--text-muted)] tracking-wider block mb-1">
+              <label
+                htmlFor="new-customer-city"
+                className="text-[10px] uppercase font-bold text-[var(--text-muted)] tracking-wider block mb-1"
+              >
+                City / Town
+              </label>
+              <input
+                id="new-customer-city"
+                name="city"
+                type="text"
+                autoComplete="address-level2"
+                value={city}
+                onChange={(e) => setCity(e.target.value)}
+                placeholder="West Bend"
+                className="w-full bg-[var(--bg)] border border-[var(--border)] focus:border-[var(--accent)] text-[var(--text)] rounded-lg px-3 py-2.5 text-xs outline-none"
+              />
+            </div>
+            <div>
+              <label
+                htmlFor="new-customer-zip"
+                className="text-[10px] uppercase font-bold text-[var(--text-muted)] tracking-wider block mb-1"
+              >
+                Zip Code
+              </label>
+              <input
+                id="new-customer-zip"
+                name="postal-code"
+                type="text"
+                inputMode="numeric"
+                autoComplete="postal-code"
+                value={zip}
+                onChange={(e) => setZip(e.target.value)}
+                placeholder="53095"
+                className="w-full bg-[var(--bg)] border border-[var(--border)] focus:border-[var(--accent)] text-[var(--text)] rounded-lg px-3 py-2.5 text-xs outline-none"
+              />
+            </div>
+          </div>
+
+          <div className="grid grid-cols-2 gap-2">
+            <div>
+              <label
+                htmlFor="new-customer-tel"
+                className="text-[10px] uppercase font-bold text-[var(--text-muted)] tracking-wider block mb-1"
+              >
                 Phone Number
               </label>
               <input
+                id="new-customer-tel"
+                name="tel"
                 type="tel"
-                autoComplete="off"
+                autoComplete="tel"
                 value={phone}
                 onChange={(e) => setPhone(e.target.value)}
                 placeholder="(262) 000-0000"
@@ -135,12 +209,17 @@ export const CustomerModal: React.FC<CustomerModalProps> = ({ onClose, onSaveCus
               />
             </div>
             <div>
-              <label className="text-[10px] uppercase font-bold text-[var(--text-muted)] tracking-wider block mb-1">
+              <label
+                htmlFor="new-customer-email"
+                className="text-[10px] uppercase font-bold text-[var(--text-muted)] tracking-wider block mb-1"
+              >
                 Email Address
               </label>
               <input
+                id="new-customer-email"
+                name="email"
                 type="email"
-                autoComplete="off"
+                autoComplete="email"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
                 placeholder="name@email.com"

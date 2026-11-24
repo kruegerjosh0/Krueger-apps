@@ -305,8 +305,9 @@ export const FolderViewModal: React.FC<FolderViewModalProps> = ({
                 Name
               </label>
               <input
+                name="name"
                 type="text"
-                autoComplete="off"
+                autoComplete="name"
                 value={name}
                 onChange={(e) => saveProfileChanges('name', e.target.value)}
                 className="w-full bg-[var(--bg)] border border-[var(--border)] focus:border-[var(--accent)] text-[var(--text)] rounded-lg px-3 py-2 text-xs outline-none"
@@ -317,8 +318,9 @@ export const FolderViewModal: React.FC<FolderViewModalProps> = ({
                 Address
               </label>
               <input
+                name="street-address"
                 type="text"
-                autoComplete="off"
+                autoComplete="street-address"
                 value={address}
                 onChange={(e) => saveProfileChanges('address', e.target.value)}
                 className="w-full bg-[var(--bg)] border border-[var(--border)] focus:border-[var(--accent)] text-[var(--text)] rounded-lg px-3 py-2 text-xs outline-none"
@@ -332,8 +334,9 @@ export const FolderViewModal: React.FC<FolderViewModalProps> = ({
                 Phone
               </label>
               <input
+                name="tel"
                 type="tel"
-                autoComplete="off"
+                autoComplete="tel"
                 value={phone}
                 onChange={(e) => saveProfileChanges('phone', e.target.value)}
                 className="w-full bg-[var(--bg)] border border-[var(--border)] focus:border-[var(--accent)] text-[var(--text)] rounded-lg px-3 py-2 text-xs outline-none"
@@ -344,8 +347,9 @@ export const FolderViewModal: React.FC<FolderViewModalProps> = ({
                 Email
               </label>
               <input
+                name="email"
                 type="email"
-                autoComplete="off"
+                autoComplete="email"
                 value={email}
                 onChange={(e) => saveProfileChanges('email', e.target.value)}
                 className="w-full bg-[var(--bg)] border border-[var(--border)] focus:border-[var(--accent)] text-[var(--text)] rounded-lg px-3 py-2 text-xs outline-none"

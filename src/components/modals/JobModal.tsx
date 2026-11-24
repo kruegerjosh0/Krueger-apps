@@ -1,20 +1,35 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Customer, JobProject, RoomArea, RepairItem, PaymentEntry, SystemConstants } from '../../types';
 import {
+  PAINT_PRODUCT_OPTIONS,
   PAINT_SHEEN_OPTIONS,
   PREP_CHECKLIST_CATEGORIES,
+  SURFACE_REPAIR_PRESETS,
   normalizePipelineStage,
   isPrepLineChecked,
   togglePrepScopeLine,
   hasAnyCheckedPrepLine,
   clearChecklistPrepLines,
+  cleanOptionalSpec,
+  computeRoomSqft,
+  computeRoomGallons,
+  parseAddressParts,
+  formatAddressParts,
 } from '../../utils/projectHelpers';
+import {
+  HOME_BASE,
+  haversineMiles,
+  resolveApproxWisconsinCoords,
+} from '../../utils/mapHelpers';
 
 interface JobModalProps {
   customer: Customer;
+  customers?: Customer[];
   job?: JobProject | null;
   constants: SystemConstants;
   onClose: () => void;
+  onSelectCustomer?: (customer: Customer) => void;
+  onUpdateCustomer?: (updatedCustomer: Customer) => void;
   onSaveJob: (savedJob: JobProject) => void;
   onShareBusinessCard?: () => void;
   onToast: (msg: string) => void;
@@ -23,6 +38,10 @@ interface JobModalProps {
 const createBlankRoom = (): RoomArea => ({
   n: '',
   r: 0,
+  len: undefined,
+  wid: undefined,
+  hgt: undefined,
+  manualPrice: false,
   og: '',
   sp: true,
   prod: '',
@@ -31,15 +50,52 @@ const createBlankRoom = (): RoomArea => ({
   prep: [],
 });
 
+const sanitizeRoom = (r: RoomArea): RoomArea => ({
+  ...r,
+  prod: cleanOptionalSpec(r.prod),
+  sheen: cleanOptionalSpec(r.sheen),
+  color: cleanOptionalSpec(r.color),
+  prep: Array.isArray(r.prep) ? [...r.prep] : [],
+});
+
+const estimateRoundTripMilesFromHomeBase = (
+  address: string,
+  lat?: number,
+  lng?: number
+): number => {
+  if (typeof lat === 'number' && typeof lng === 'number' && !Number.isNaN(lat) && !Number.isNaN(lng)) {
+    const oneWay = haversineMiles(HOME_BASE.lat, HOME_BASE.lng, lat, lng) * 1.24;
+    return Math.max(0, Math.round(oneWay * 2 * 10) / 10);
+  }
+  const trimmed = (address || '').trim();
+  if (!trimmed) return 0;
+  const approx = resolveApproxWisconsinCoords(trimmed, trimmed);
+  if (!approx) return 0;
+  const oneWay = haversineMiles(HOME_BASE.lat, HOME_BASE.lng, approx.lat, approx.lng) * 1.24;
+  return Math.max(0, Math.round(oneWay * 2 * 10) / 10);
+};
+
 export const JobModal: React.FC<JobModalProps> = ({
   customer,
+  customers = [],
   job,
   constants,
   onClose,
+  onSelectCustomer,
+  onUpdateCustomer,
   onSaveJob,
   onShareBusinessCard,
   onToast,
 }) => {
+  // Auto-populated customer / lead contact state
+  const initialAddr = parseAddressParts(customer.address);
+  const [clientName, setClientName] = useState(customer.name || '');
+  const [clientPhone, setClientPhone] = useState(customer.phone || '');
+  const [clientEmail, setClientEmail] = useState(customer.email || '');
+  const [clientStreet, setClientStreet] = useState(initialAddr.street);
+  const [clientCity, setClientCity] = useState(initialAddr.city);
+  const [clientZip, setClientZip] = useState(initialAddr.zip);
+
   const [title, setTitle] = useState(job?.title || '');
   const [status, setStatus] = useState<JobProject['status']>(
     job?.status ? normalizePipelineStage(job.status) : 'PENDING'
@@ -57,9 +113,10 @@ export const JobModal: React.FC<JobModalProps> = ({
 
   const [rooms, setRooms] = useState<RoomArea[]>(
     job?.rooms && job.rooms.length > 0
-      ? job.rooms.map((r) => ({ ...r, prep: Array.isArray(r.prep) ? [...r.prep] : [] }))
+      ? job.rooms.map(sanitizeRoom)
       : [createBlankRoom()]
   );
+  const [customProductMode, setCustomProductMode] = useState<Record<number, boolean>>({});
 
   const [repairs, setRepairs] = useState<RepairItem[]>(
     job?.repairs ? job.repairs.map((rep) => ({ ...rep })) : []
@@ -77,7 +134,12 @@ export const JobModal: React.FC<JobModalProps> = ({
   const [paintPricePerGal, setPaintPricePerGal] = useState<number>(constants.paintCostPerGal || 65);
   const [autoCalcCoatings, setAutoCalcCoatings] = useState<boolean>(true);
 
-  const [rtMiles, setRtMiles] = useState<number>(job?.rtMiles || 0);
+  const initialAutoMiles =
+    job?.rtMiles && job.rtMiles > 0
+      ? job.rtMiles
+      : estimateRoundTripMilesFromHomeBase(customer.address, customer.lat, customer.lng);
+  const [rtMiles, setRtMiles] = useState<number>(initialAutoMiles);
+  const [manualMiles, setManualMiles] = useState<boolean>(Boolean(job?.rtMiles && job.rtMiles > 0));
   const [workDays, setWorkDays] = useState<number>(job?.workDays || 1);
 
   const [payments, setPayments] = useState<PaymentEntry[]>(
@@ -94,8 +156,16 @@ export const JobModal: React.FC<JobModalProps> = ({
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const [isDrawing, setIsDrawing] = useState(false);
 
-  // Strictly reset all form state whenever switching customer or opening a new/different project
+  // Populate client contact fields and reset project state when switching customer or opening a different project
   useEffect(() => {
+    const parsedAddr = parseAddressParts(customer.address);
+    setClientName(customer.name || '');
+    setClientPhone(customer.phone || '');
+    setClientEmail(customer.email || '');
+    setClientStreet(parsedAddr.street);
+    setClientCity(parsedAddr.city);
+    setClientZip(parsedAddr.zip);
+
     setTitle(job?.title || '');
     setStatus(job?.status ? normalizePipelineStage(job.status) : 'PENDING');
     setSchedDate(job?.schedDate || '');
@@ -108,9 +178,10 @@ export const JobModal: React.FC<JobModalProps> = ({
     setScope(job?.scope || '');
     setRooms(
       job?.rooms && job.rooms.length > 0
-        ? job.rooms.map((r) => ({ ...r, prep: Array.isArray(r.prep) ? [...r.prep] : [] }))
+        ? job.rooms.map(sanitizeRoom)
         : [createBlankRoom()]
     );
+    setCustomProductMode({});
     setRepairs(job?.repairs ? job.repairs.map((rep) => ({ ...rep })) : []);
     setPaintRate(job?.paintRate || '1.00');
     setRepairRate(job?.repairRate || constants.repairRate || 75);
@@ -121,7 +192,12 @@ export const JobModal: React.FC<JobModalProps> = ({
     setSunVal(job?.sunVal || 0);
     setPaintPricePerGal(constants.paintCostPerGal || 65);
     setAutoCalcCoatings(true);
-    setRtMiles(job?.rtMiles || 0);
+    const autoRt =
+      job?.rtMiles && job.rtMiles > 0
+        ? job.rtMiles
+        : estimateRoundTripMilesFromHomeBase(customer.address, customer.lat, customer.lng);
+    setRtMiles(autoRt);
+    setManualMiles(Boolean(job?.rtMiles && job.rtMiles > 0));
     setWorkDays(job?.workDays || 1);
     setPayments(job?.payments ? job.payments.map((p) => ({ ...p })) : []);
     setClientSig(job?.clientSig || '');
@@ -129,6 +205,44 @@ export const JobModal: React.FC<JobModalProps> = ({
     setWeatherAlert(null);
     initSignatureCanvas();
   }, [customer.id, job?.id]);
+
+  // Auto-update round-trip mileage from 2119 Barton Ave whenever address changes (unless manually overridden)
+  useEffect(() => {
+    if (manualMiles) return;
+    const combinedAddr = formatAddressParts({
+      street: clientStreet,
+      city: clientCity,
+      state: clientStreet || clientCity || clientZip ? 'WI' : '',
+      zip: clientZip,
+    });
+    const useCoords = combinedAddr === (customer.address || '').trim();
+    const nextMiles = estimateRoundTripMilesFromHomeBase(
+      combinedAddr,
+      useCoords ? customer.lat : undefined,
+      useCoords ? customer.lng : undefined
+    );
+    setRtMiles(nextMiles);
+  }, [clientStreet, clientCity, clientZip, manualMiles, customer.address, customer.lat, customer.lng]);
+
+  const handleSelectExistingCustomer = (selectedIdStr: string) => {
+    const selectedId = Number(selectedIdStr);
+    const picked = customers.find((c) => c.id === selectedId);
+    if (!picked) return;
+
+    const parsed = parseAddressParts(picked.address);
+    setClientName(picked.name || '');
+    setClientPhone(picked.phone || '');
+    setClientEmail(picked.email || '');
+    setClientStreet(parsed.street);
+    setClientCity(parsed.city);
+    setClientZip(parsed.zip);
+    setManualMiles(false);
+    setRtMiles(estimateRoundTripMilesFromHomeBase(picked.address, picked.lat, picked.lng));
+    if (onSelectCustomer && picked.id !== customer.id) {
+      onSelectCustomer(picked);
+    }
+    onToast(`✔ Autofilled contact & mileage for ${picked.name}`);
+  };
 
   const initSignatureCanvas = () => {
     const canvas = canvasRef.current;
@@ -214,7 +328,7 @@ export const JobModal: React.FC<JobModalProps> = ({
 
     ctx.fillStyle = '#bf5af2';
     ctx.font = 'bold 20px monospace';
-    ctx.fillText(customer.name.toUpperCase(), 12, 60);
+    ctx.fillText((clientName || customer.name).toUpperCase(), 12, 60);
 
     ctx.fillStyle = '#64748b';
     ctx.font = '11px sans-serif';
@@ -226,18 +340,8 @@ export const JobModal: React.FC<JobModalProps> = ({
     onToast('✔ Remote Approval Stamp Generated');
   };
 
-  // Helper to get paint gallons for an individual room
-  const getRoomPaintGals = (r: RoomArea) => {
-    if (r.og && parseFloat(r.og) > 0) {
-      return parseFloat(r.og);
-    }
-    const dimMatch = (r.n || '').toLowerCase().match(/(\d+)\s*[x*]\s*(\d+)/);
-    if (dimMatch) {
-      const sqft = parseFloat(dimMatch[1]) * parseFloat(dimMatch[2]);
-      return Math.ceil((sqft * 2) / (constants.spreadRate || 350));
-    }
-    return 0;
-  };
+  // Helper to get paint gallons for an individual room (supports LxWxH, LxW, and name dimensions)
+  const getRoomPaintGals = (r: RoomArea) => computeRoomGallons(r, constants.spreadRate || 350);
 
   // Calculations
   let laborSubtotal = 0;
@@ -246,11 +350,7 @@ export const JobModal: React.FC<JobModalProps> = ({
   rooms.forEach((r) => {
     const rPrice = Math.round(Number(r.r) || 0);
     laborSubtotal += rPrice;
-
-    const dimMatch = (r.n || '').toLowerCase().match(/(\d+)\s*[x*]\s*(\d+)/);
-    if (dimMatch) {
-      totalSqft += parseFloat(dimMatch[1]) * parseFloat(dimMatch[2]);
-    }
+    totalSqft += computeRoomSqft(r);
   });
 
   const totalPaintGals = rooms.reduce((sum, r) => sum + getRoomPaintGals(r), 0);
@@ -275,6 +375,9 @@ export const JobModal: React.FC<JobModalProps> = ({
   const grossTotal = Math.round(
     laborSubtotal - discountAmount + repairLaborSubtotal + effectiveMatCost + effectiveSunCost
   );
+  const fiftyPercentDeposit = Math.round(grossTotal * 0.5);
+  const totalTripMiles = Math.round(rtMiles * Math.max(1, workDays) * 10) / 10;
+  const estMileageDeduction = (totalTripMiles * (constants.irsRate || 0.67)).toFixed(2);
 
   let totalPaid = 0;
   payments.forEach((p) => {
@@ -286,19 +389,69 @@ export const JobModal: React.FC<JobModalProps> = ({
     setRooms([...rooms, createBlankRoom()]);
   };
 
+  const handlePaintRateChange = (nextRateStr: string) => {
+    setPaintRate(nextRateStr);
+    const rate = parseFloat(nextRateStr);
+    if (!Number.isFinite(rate) || rate <= 0) return;
+
+    // Auto-recalculate labor on all non-manually-overridden rooms that have dimensions
+    setRooms((prev) =>
+      prev.map((room) => {
+        if (room.manualPrice) return room;
+        const sqft = computeRoomSqft(room);
+        if (sqft > 0) {
+          return { ...room, r: Math.round(sqft * rate) };
+        }
+        return room;
+      })
+    );
+  };
+
   const updateRoom = (index: number, field: keyof RoomArea, val: any) => {
     const updated = [...rooms];
-    updated[index] = { ...updated[index], [field]: val };
+    const currentRoom = { ...updated[index], [field]: val };
+    const rate = parseFloat(paintRate) || 1.0;
 
-    // Auto-calculate labor if dimensions match and labor is 0
-    if (field === 'n') {
-      const dimMatch = (val as string).toLowerCase().match(/(\d+)\s*[x*]\s*(\d+)/);
-      if (dimMatch && (!updated[index].r || updated[index].r === 0)) {
-        const sqft = parseFloat(dimMatch[1]) * parseFloat(dimMatch[2]);
-        const rate = parseFloat(paintRate) || 1.0;
-        updated[index].r = Math.round(sqft * rate);
+    if (field === 'r') {
+      const numericVal = typeof val === 'number' ? val : parseFloat(val) || 0;
+      if (numericVal > 0) {
+        currentRoom.r = numericVal;
+        currentRoom.manualPrice = true;
+      } else {
+        // Clearing manual labor price restores automatic dimension × rate calculation
+        currentRoom.manualPrice = false;
+        const sqft = computeRoomSqft(currentRoom);
+        currentRoom.r = sqft > 0 ? Math.round(sqft * rate) : 0;
+      }
+    } else if (field === 'len' || field === 'wid' || field === 'hgt') {
+      const parsed = val === '' || val === undefined ? undefined : parseFloat(String(val));
+      currentRoom[field] = parsed && parsed > 0 ? parsed : undefined;
+      if (!currentRoom.manualPrice) {
+        const sqft = computeRoomSqft(currentRoom);
+        currentRoom.r = sqft > 0 ? Math.round(sqft * rate) : 0;
+      }
+    } else if (field === 'n') {
+      // Sync dimensions typed inline (e.g. "14x16" or "14x16x9") and recalculate unless manually overridden
+      const str = String(val || '').toLowerCase();
+      const dim3 = str.match(/(\d+(?:\.\d+)?)\s*[x*]\s*(\d+(?:\.\d+)?)\s*[x*]\s*(\d+(?:\.\d+)?)/);
+      const dim2 = str.match(/(\d+(?:\.\d+)?)\s*[x*]\s*(\d+(?:\.\d+)?)/);
+      if (dim3) {
+        currentRoom.len = parseFloat(dim3[1]);
+        currentRoom.wid = parseFloat(dim3[2]);
+        currentRoom.hgt = parseFloat(dim3[3]);
+      } else if (dim2) {
+        currentRoom.len = parseFloat(dim2[1]);
+        currentRoom.wid = parseFloat(dim2[2]);
+      }
+      if (!currentRoom.manualPrice) {
+        const sqft = computeRoomSqft(currentRoom);
+        if (sqft > 0) {
+          currentRoom.r = Math.round(sqft * rate);
+        }
       }
     }
+
+    updated[index] = currentRoom;
     setRooms(updated);
   };
 
@@ -324,7 +477,18 @@ export const JobModal: React.FC<JobModalProps> = ({
   };
 
   const handleAddRepair = () => {
-    setRepairs([...repairs, { d: '', h: 0 }]);
+    if (!repairRate || repairRate <= 0) {
+      setRepairRate(constants.repairRate || 75);
+    }
+    setRepairs([...repairs, { d: '', h: 1 }]);
+  };
+
+  const handleAddPresetRepair = (preset: { desc: string; defaultHours: number }) => {
+    if (!repairRate || repairRate <= 0) {
+      setRepairRate(constants.repairRate || 75);
+    }
+    setRepairs([...repairs, { d: preset.desc, h: preset.defaultHours }]);
+    onToast(`✔ Added ${preset.desc} (${preset.defaultHours} hrs @ $${repairRate || constants.repairRate || 75}/hr)`);
   };
 
   const updateRepair = (index: number, field: keyof RepairItem, val: any) => {
@@ -416,21 +580,58 @@ export const JobModal: React.FC<JobModalProps> = ({
     eDateObj.setDate(eDateObj.getDate() + 1);
     const eFormatted = eDateObj.toISOString().split('T')[0].replace(/-/g, '');
 
-    const details = `Krueger Painting Project: ${title || 'Interior/Exterior'}\nCustomer: ${customer.name}\nPhone: ${customer.phone || 'N/A'}\nScope:\n${scope || 'Painting'}`;
+    const combinedAddress = formatAddressParts({
+      street: clientStreet,
+      city: clientCity,
+      state: clientStreet || clientCity || clientZip ? 'WI' : '',
+      zip: clientZip,
+    });
+    const details = `Krueger Painting Project: ${title || 'Interior/Exterior'}\nCustomer: ${clientName || customer.name}\nPhone: ${clientPhone || customer.phone || 'N/A'}\nScope:\n${scope || 'Painting'}`;
     const url = `https://calendar.google.com/calendar/render?action=TEMPLATE&text=${encodeURIComponent(
-      `Krueger Painting: ${customer.name} (${status})`
+      `Krueger Painting: ${clientName || customer.name} (${status})`
     )}&dates=${sFormatted}/${eFormatted}&details=${encodeURIComponent(details)}&location=${encodeURIComponent(
-      customer.address || ''
+      combinedAddress || customer.address || ''
     )}`;
     window.open(url, '_blank');
   };
 
   const handleSave = () => {
+    // Persist any updated client contact fields back to the customer record
+    const combinedAddress = formatAddressParts({
+      street: clientStreet,
+      city: clientCity,
+      state: clientStreet || clientCity || clientZip ? 'WI' : '',
+      zip: clientZip,
+    });
+    if (
+      onUpdateCustomer &&
+      (clientName.trim() !== (customer.name || '') ||
+        clientPhone.trim() !== (customer.phone || '') ||
+        clientEmail.trim() !== (customer.email || '') ||
+        combinedAddress !== (customer.address || ''))
+    ) {
+      onUpdateCustomer({
+        ...customer,
+        name: clientName.trim() || customer.name,
+        phone: clientPhone.trim(),
+        email: clientEmail.trim(),
+        address: combinedAddress,
+        lastActive: Date.now(),
+      });
+    }
+
     const savedMatVal = matsIncluded
       ? 0
       : autoCalcCoatings
       ? autoCoatingsCost
       : Math.round(matVal);
+
+    const cleanedRooms = rooms.map((r) => ({
+      ...r,
+      prod: cleanOptionalSpec(r.prod),
+      sheen: cleanOptionalSpec(r.sheen),
+      color: cleanOptionalSpec(r.color),
+    }));
 
     const saved: JobProject = {
       id: job?.id || Date.now(),
@@ -452,7 +653,7 @@ export const JobModal: React.FC<JobModalProps> = ({
       internalNotes,
       prepScope,
       scope,
-      rooms,
+      rooms: cleanedRooms,
       repairs,
       rtMiles,
       workDays,
@@ -470,7 +671,7 @@ export const JobModal: React.FC<JobModalProps> = ({
   return (
     <div className="fixed inset-0 z-[60] bg-black/85 backdrop-blur-sm flex flex-col p-2 sm:p-5 overflow-y-auto animate-in fade-in">
       <form
-        autoComplete="off"
+        autoComplete="on"
         onSubmit={(e) => e.preventDefault()}
         className="max-w-2xl w-full mx-auto bg-[var(--surface)] border border-[var(--border)] rounded-2xl p-3 sm:p-5 shadow-2xl space-y-3.5 my-auto"
       >
@@ -481,7 +682,7 @@ export const JobModal: React.FC<JobModalProps> = ({
               {job ? 'Edit Project & Estimate' : 'New Project & Estimate'}
             </span>
             <h2 className="text-sm sm:text-base font-black text-[var(--text)]">
-              {customer.name}
+              {clientName || customer.name}
             </h2>
           </div>
           <div className="flex items-center gap-1.5">
@@ -505,6 +706,145 @@ export const JobModal: React.FC<JobModalProps> = ({
             </button>
           </div>
         </div>
+
+        {/* Client / Lead Selection & Contact Autofill */}
+        <details open={!job} className="bg-[var(--surface-subtle)] border border-[var(--border)] rounded-xl overflow-hidden">
+          <summary className="px-3.5 py-2.5 font-bold text-xs text-[var(--text)] cursor-pointer flex justify-between items-center">
+            <span className="flex items-center gap-1.5 truncate">
+              <span>👤</span>
+              <span className="truncate">
+                Client &amp; Job Site Contact
+                {clientCity ? ` • ${clientCity}` : ''}
+              </span>
+            </span>
+            <span className="text-[10px] shrink-0">▼</span>
+          </summary>
+          <div className="p-3 space-y-2 border-t border-[var(--border)]">
+            {customers.length > 0 && (
+              <div>
+                <label
+                  htmlFor="estimate-customer-select"
+                  className="text-[8.5px] uppercase font-bold text-[#f1c40f] tracking-wider block mb-0.5"
+                >
+                  Select Existing Customer / Lead (Autofills Contact &amp; Mileage)
+                </label>
+                <select
+                  id="estimate-customer-select"
+                  value={customer.id}
+                  onChange={(e) => handleSelectExistingCustomer(e.target.value)}
+                  className="w-full bg-[var(--bg)] border border-[var(--border)] focus:border-[#f1c40f] text-[var(--text)] rounded-lg px-2.5 py-2 text-xs font-semibold outline-none cursor-pointer"
+                >
+                  {customers.map((c) => (
+                    <option key={c.id} value={c.id}>
+                      {c.name}
+                      {c.address ? ` — ${c.address}` : ''}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
+
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+              <div>
+                <label className="text-[8px] uppercase font-bold text-[var(--text-muted)] block mb-0.5">
+                  Client Name
+                </label>
+                <input
+                  name="name"
+                  type="text"
+                  autoComplete="name"
+                  value={clientName}
+                  onChange={(e) => setClientName(e.target.value)}
+                  placeholder="Client full name"
+                  className="w-full bg-[var(--bg)] border border-[var(--border)] focus:border-[var(--accent)] text-[var(--text)] rounded-md px-2.5 py-1.5 text-xs outline-none"
+                />
+              </div>
+              <div>
+                <label className="text-[8px] uppercase font-bold text-[var(--text-muted)] block mb-0.5">
+                  Phone
+                </label>
+                <input
+                  name="tel"
+                  type="tel"
+                  autoComplete="tel"
+                  value={clientPhone}
+                  onChange={(e) => setClientPhone(e.target.value)}
+                  placeholder="(262) 000-0000"
+                  className="w-full bg-[var(--bg)] border border-[var(--border)] focus:border-[var(--accent)] text-[var(--text)] rounded-md px-2.5 py-1.5 text-xs outline-none"
+                />
+              </div>
+              <div>
+                <label className="text-[8px] uppercase font-bold text-[var(--text-muted)] block mb-0.5">
+                  Email
+                </label>
+                <input
+                  name="email"
+                  type="email"
+                  autoComplete="email"
+                  value={clientEmail}
+                  onChange={(e) => setClientEmail(e.target.value)}
+                  placeholder="name@email.com"
+                  className="w-full bg-[var(--bg)] border border-[var(--border)] focus:border-[var(--accent)] text-[var(--text)] rounded-md px-2.5 py-1.5 text-xs outline-none"
+                />
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-[1.5fr_1fr_0.65fr] gap-2">
+              <div>
+                <label className="text-[8px] uppercase font-bold text-[var(--text-muted)] block mb-0.5">
+                  Street Address
+                </label>
+                <input
+                  name="street-address"
+                  type="text"
+                  autoComplete="street-address"
+                  value={clientStreet}
+                  onChange={(e) => {
+                    setClientStreet(e.target.value);
+                    setManualMiles(false);
+                  }}
+                  placeholder="1425 Main St"
+                  className="w-full bg-[var(--bg)] border border-[var(--border)] focus:border-[var(--accent)] text-[var(--text)] rounded-md px-2.5 py-1.5 text-xs outline-none"
+                />
+              </div>
+              <div>
+                <label className="text-[8px] uppercase font-bold text-[var(--text-muted)] block mb-0.5">
+                  City / Town
+                </label>
+                <input
+                  name="city"
+                  type="text"
+                  autoComplete="address-level2"
+                  value={clientCity}
+                  onChange={(e) => {
+                    setClientCity(e.target.value);
+                    setManualMiles(false);
+                  }}
+                  placeholder="West Bend"
+                  className="w-full bg-[var(--bg)] border border-[var(--border)] focus:border-[var(--accent)] text-[var(--text)] rounded-md px-2.5 py-1.5 text-xs outline-none"
+                />
+              </div>
+              <div>
+                <label className="text-[8px] uppercase font-bold text-[var(--text-muted)] block mb-0.5">
+                  Zip Code
+                </label>
+                <input
+                  name="postal-code"
+                  type="text"
+                  inputMode="numeric"
+                  autoComplete="postal-code"
+                  value={clientZip}
+                  onChange={(e) => {
+                    setClientZip(e.target.value);
+                    setManualMiles(false);
+                  }}
+                  placeholder="53095"
+                  className="w-full bg-[var(--bg)] border border-[var(--border)] focus:border-[var(--accent)] text-[var(--text)] rounded-md px-2.5 py-1.5 text-xs outline-none"
+                />
+              </div>
+            </div>
+          </div>
+        </details>
 
         {/* Project Title & Status */}
         <div className="space-y-2">
@@ -739,19 +1079,33 @@ export const JobModal: React.FC<JobModalProps> = ({
             {rooms.map((room, idx) => {
               const selectedRoomPrep = Array.isArray(room.prep) ? room.prep : [];
               const isRoomPrepOpen = !!expandedRoomPrep[idx];
+              const roomSqft = computeRoomSqft(room);
+              const cleanProd = cleanOptionalSpec(room.prod);
+              const cleanSheen = cleanOptionalSpec(room.sheen);
+              const hasCustomLegacyProd =
+                Boolean(cleanProd) &&
+                !(PAINT_PRODUCT_OPTIONS as readonly string[]).includes(cleanProd);
+              const isCustomProdActive = Boolean(customProductMode[idx]);
               const hasCustomLegacySheen =
-                Boolean(room.sheen) &&
-                !(PAINT_SHEEN_OPTIONS as readonly string[]).includes(room.sheen || '');
+                Boolean(cleanSheen) &&
+                !(PAINT_SHEEN_OPTIONS as readonly string[]).includes(cleanSheen);
 
               return (
                 <div
                   key={idx}
                   className="bg-[var(--bg)] border border-[var(--border)] rounded-lg p-3 space-y-2.5 relative"
                 >
-                  <div className="flex justify-between items-center">
-                    <span className="text-[10px] font-bold text-[var(--accent)] uppercase">
-                      Area #{idx + 1}
-                    </span>
+                  <div className="flex justify-between items-center gap-2">
+                    <div className="flex items-center gap-2">
+                      <span className="text-[10px] font-bold text-[var(--accent)] uppercase">
+                        Area #{idx + 1}
+                      </span>
+                      {roomSqft > 0 && (
+                        <span className="text-[9.5px] font-extrabold px-1.5 py-0.5 rounded bg-[var(--surface-subtle)] text-[#f1c40f] border border-[#f1c40f]/30 tabular-nums">
+                          {roomSqft} sq ft
+                        </span>
+                      )}
+                    </div>
                     <button
                       type="button"
                       onClick={() => removeRoom(idx)}
@@ -776,34 +1130,131 @@ export const JobModal: React.FC<JobModalProps> = ({
                       />
                     </div>
                     <div>
-                      <label className="text-[8px] uppercase font-bold text-[var(--text-muted)] block mb-0.5">
-                        Labor Price ($)
+                      <label className="text-[8px] uppercase font-bold text-[var(--text-muted)] flex items-center justify-between mb-0.5">
+                        <span>Labor Price ($)</span>
+                        <span className="text-[8px] font-semibold text-[var(--accent)]">
+                          {room.manualPrice ? 'Manual' : roomSqft > 0 ? `Auto @ $${paintRate}/sf` : 'Auto'}
+                        </span>
                       </label>
                       <input
                         type="number"
                         autoComplete="off"
                         value={room.r || ''}
-                        onChange={(e) => updateRoom(idx, 'r', parseFloat(e.target.value) || 0)}
+                        onChange={(e) =>
+                          updateRoom(
+                            idx,
+                            'r',
+                            e.target.value === '' ? 0 : parseFloat(e.target.value) || 0
+                          )
+                        }
                         placeholder="Auto"
                         className="w-full bg-[var(--surface)] border border-[var(--border)] focus:border-[var(--accent)] text-[var(--text)] rounded-md px-2.5 py-1.5 text-xs outline-none font-bold"
                       />
                     </div>
                   </div>
 
-                  {/* Paint Spec (Product, Color, Sheen Dropdown) */}
+                  {/* Structured Room Dimensions (Length x Width x Height) -> Auto Sq Ft, Labor & Gallons */}
+                  <div className="grid grid-cols-3 gap-1.5 bg-[var(--surface)] p-2 rounded-md border border-[var(--border)]">
+                    <div>
+                      <label className="text-[7.5px] uppercase font-bold text-[var(--text-muted)] block mb-0.5">
+                        Length (ft)
+                      </label>
+                      <input
+                        type="number"
+                        step="0.5"
+                        min="0"
+                        autoComplete="off"
+                        value={room.len ?? ''}
+                        onChange={(e) => updateRoom(idx, 'len', e.target.value)}
+                        placeholder="e.g. 14"
+                        className="w-full bg-[var(--bg)] border border-[var(--border)] focus:border-[var(--accent)] text-[var(--text)] rounded px-2 py-1 text-[11px] outline-none font-bold"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-[7.5px] uppercase font-bold text-[var(--text-muted)] block mb-0.5">
+                        Width (ft)
+                      </label>
+                      <input
+                        type="number"
+                        step="0.5"
+                        min="0"
+                        autoComplete="off"
+                        value={room.wid ?? ''}
+                        onChange={(e) => updateRoom(idx, 'wid', e.target.value)}
+                        placeholder="e.g. 16"
+                        className="w-full bg-[var(--bg)] border border-[var(--border)] focus:border-[var(--accent)] text-[var(--text)] rounded px-2 py-1 text-[11px] outline-none font-bold"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-[7.5px] uppercase font-bold text-[var(--text-muted)] block mb-0.5">
+                        Height (ft, opt.)
+                      </label>
+                      <input
+                        type="number"
+                        step="0.5"
+                        min="0"
+                        autoComplete="off"
+                        value={room.hgt ?? ''}
+                        onChange={(e) => updateRoom(idx, 'hgt', e.target.value)}
+                        placeholder="e.g. 9"
+                        className="w-full bg-[var(--bg)] border border-[var(--border)] focus:border-[var(--accent)] text-[var(--text)] rounded px-2 py-1 text-[11px] outline-none font-bold"
+                      />
+                    </div>
+                  </div>
+
+                  {/* Paint Spec (Blank-by-Default Product Dropdown, Color, Blank-by-Default Sheen Dropdown) */}
                   <div className="grid grid-cols-1 sm:grid-cols-3 gap-1.5 bg-[var(--surface)] p-2 rounded-md border border-[var(--border)]">
                     <div>
                       <label className="text-[7.5px] uppercase font-bold text-[var(--text-muted)] block mb-0.5">
                         Product
                       </label>
-                      <input
-                        type="text"
-                        autoComplete="off"
-                        value={room.prod || ''}
-                        onChange={(e) => updateRoom(idx, 'prod', e.target.value)}
-                        placeholder="e.g. Emerald"
-                        className="w-full bg-[var(--bg)] border border-[var(--border)] text-[var(--text)] rounded px-2 py-1.5 text-[11px] outline-none"
-                      />
+                      {!isCustomProdActive ? (
+                        <select
+                          autoComplete="off"
+                          value={cleanProd}
+                          onChange={(e) => {
+                            if (e.target.value === '__CUSTOM__') {
+                              setCustomProductMode((prev) => ({ ...prev, [idx]: true }));
+                              updateRoom(idx, 'prod', '');
+                            } else {
+                              updateRoom(idx, 'prod', e.target.value);
+                            }
+                          }}
+                          className="w-full bg-[var(--bg)] border border-[var(--border)] focus:border-[#f1c40f] text-[var(--text)] rounded px-2 py-1.5 text-[11px] outline-none font-semibold cursor-pointer"
+                        >
+                          <option value="">Select Product...</option>
+                          {PAINT_PRODUCT_OPTIONS.map((prodOpt) => (
+                            <option key={prodOpt} value={prodOpt}>
+                              {prodOpt}
+                            </option>
+                          ))}
+                          {hasCustomLegacyProd && cleanProd && (
+                            <option value={cleanProd}>{cleanProd}</option>
+                          )}
+                          <option value="__CUSTOM__">Other / Custom...</option>
+                        </select>
+                      ) : (
+                        <div className="flex gap-1">
+                          <input
+                            type="text"
+                            autoComplete="off"
+                            value={cleanProd}
+                            onChange={(e) => updateRoom(idx, 'prod', e.target.value)}
+                            placeholder="Type product..."
+                            className="flex-1 min-w-0 bg-[var(--bg)] border border-[var(--border)] focus:border-[#f1c40f] text-[var(--text)] rounded px-2 py-1.5 text-[11px] outline-none"
+                          />
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setCustomProductMode((prev) => ({ ...prev, [idx]: false }))
+                            }
+                            className="px-1.5 bg-[var(--surface-subtle)] border border-[var(--border)] rounded text-[10px] font-bold text-[var(--text-muted)] cursor-pointer"
+                            title="Back to product dropdown"
+                          >
+                            ↩
+                          </button>
+                        </div>
+                      )}
                     </div>
                     <div>
                       <label className="text-[7.5px] uppercase font-bold text-[var(--text-muted)] block mb-0.5">
@@ -824,7 +1275,7 @@ export const JobModal: React.FC<JobModalProps> = ({
                       </label>
                       <select
                         autoComplete="off"
-                        value={room.sheen || ''}
+                        value={cleanSheen}
                         onChange={(e) => updateRoom(idx, 'sheen', e.target.value)}
                         className="w-full bg-[var(--bg)] border border-[var(--border)] focus:border-[#f1c40f] text-[var(--text)] rounded px-2 py-1.5 text-[11px] outline-none font-semibold cursor-pointer"
                       >
@@ -834,8 +1285,8 @@ export const JobModal: React.FC<JobModalProps> = ({
                             {sheenOpt}
                           </option>
                         ))}
-                        {hasCustomLegacySheen && room.sheen && (
-                          <option value={room.sheen}>{room.sheen}</option>
+                        {hasCustomLegacySheen && cleanSheen && (
+                          <option value={cleanSheen}>{cleanSheen}</option>
                         )}
                       </select>
                     </div>
@@ -1059,10 +1510,29 @@ export const JobModal: React.FC<JobModalProps> = ({
         {/* Repairs Accordion */}
         <details className="bg-[var(--surface-subtle)] border border-[var(--border)] rounded-xl overflow-hidden">
           <summary className="px-3.5 py-2.5 font-bold text-xs text-[var(--text)] cursor-pointer flex justify-between">
-            <span>🔧 Surface Repairs & Carpentry ({repairs.length})</span>
+            <span>🔧 Surface Repairs &amp; Carpentry ({repairs.length})</span>
             <span className="text-[10px]">▼</span>
           </summary>
-          <div className="p-3 space-y-2 border-t border-[var(--border)]">
+          <div className="p-3 space-y-2.5 border-t border-[var(--border)]">
+            {/* Quick Surface / Prep Task Presets (Autofills description, default hours & repair rate) */}
+            <div className="space-y-1">
+              <span className="text-[8.5px] uppercase font-bold text-[var(--text-muted)] tracking-wider block">
+                Quick-Add Surface / Prep Task (@ ${repairRate}/hr)
+              </span>
+              <div className="flex flex-wrap gap-1.5">
+                {SURFACE_REPAIR_PRESETS.map((preset) => (
+                  <button
+                    key={preset.label}
+                    type="button"
+                    onClick={() => handleAddPresetRepair(preset)}
+                    className="text-[10px] px-2 py-1 rounded-md border bg-[var(--bg)] text-[var(--text)] border-[var(--border)] hover:border-[#f1c40f] font-semibold cursor-pointer active:scale-95 transition-all"
+                  >
+                    + {preset.label} ({preset.defaultHours}h)
+                  </button>
+                ))}
+              </div>
+            </div>
+
             {repairs.map((rep, idx) => (
               <div key={idx} className="flex gap-2 items-center bg-[var(--bg)] p-2 rounded-lg border border-[var(--border)]">
                 <input
@@ -1076,6 +1546,7 @@ export const JobModal: React.FC<JobModalProps> = ({
                 <div className="w-20">
                   <input
                     type="number"
+                    step="0.5"
                     autoComplete="off"
                     value={rep.h || ''}
                     onChange={(e) => updateRepair(idx, 'h', parseFloat(e.target.value) || 0)}
@@ -1086,7 +1557,7 @@ export const JobModal: React.FC<JobModalProps> = ({
                 <button
                   type="button"
                   onClick={() => removeRepair(idx)}
-                  className="text-red-500 font-bold px-1"
+                  className="text-red-500 font-bold px-1 cursor-pointer"
                 >
                   ✕
                 </button>
@@ -1100,7 +1571,7 @@ export const JobModal: React.FC<JobModalProps> = ({
                 className="w-full py-2 bg-[var(--surface)] hover:bg-[var(--border)] border border-dashed border-[var(--border)] rounded-lg text-xs font-bold text-[var(--accent)] cursor-pointer flex items-center justify-center gap-1 transition-transform active:scale-95"
               >
                 <span>➕</span>
-                <span>Add Prep or Repair Item</span>
+                <span>Add Custom Prep or Repair Item</span>
               </button>
             </div>
           </div>
@@ -1109,7 +1580,7 @@ export const JobModal: React.FC<JobModalProps> = ({
         {/* Rates & Discounts */}
         <details open className="bg-[var(--surface-subtle)] border border-[var(--border)] rounded-xl overflow-hidden">
           <summary className="px-3.5 py-2.5 font-bold text-xs text-[var(--text)] cursor-pointer flex justify-between">
-            <span>💰 Rates, Coatings &amp; Discounts</span>
+            <span>💰 Rates, Coatings, Mileage &amp; Discounts</span>
             <span className="text-[10px]">▼</span>
           </summary>
           <div className="p-3 space-y-3 border-t border-[var(--border)]">
@@ -1123,7 +1594,7 @@ export const JobModal: React.FC<JobModalProps> = ({
                   step="0.05"
                   autoComplete="off"
                   value={paintRate}
-                  onChange={(e) => setPaintRate(e.target.value)}
+                  onChange={(e) => handlePaintRateChange(e.target.value)}
                   className="w-full bg-[var(--bg)] border border-[var(--border)] text-[var(--text)] rounded-md px-2.5 py-1.5 text-xs outline-none"
                 />
               </div>
@@ -1138,6 +1609,79 @@ export const JobModal: React.FC<JobModalProps> = ({
                   onChange={(e) => setRepairRate(parseFloat(e.target.value) || 0)}
                   className="w-full bg-[var(--bg)] border border-[var(--border)] text-[var(--text)] rounded-md px-2.5 py-1.5 text-xs outline-none"
                 />
+              </div>
+            </div>
+
+            {/* Auto Round-Trip Mileage from 2119 Barton Ave, West Bend, WI 53090 */}
+            <div className="bg-[var(--bg)] p-2.5 rounded-lg border border-[var(--border)] space-y-2">
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-[9px] font-bold text-[var(--accent-secondary)] uppercase tracking-wider">
+                  🚗 Mileage from {HOME_BASE.address}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const combinedAddr = formatAddressParts({
+                      street: clientStreet,
+                      city: clientCity,
+                      state: clientStreet || clientCity || clientZip ? 'WI' : '',
+                      zip: clientZip,
+                    });
+                    const recalced = estimateRoundTripMilesFromHomeBase(
+                      combinedAddr,
+                      combinedAddr === (customer.address || '').trim() ? customer.lat : undefined,
+                      combinedAddr === (customer.address || '').trim() ? customer.lng : undefined
+                    );
+                    setManualMiles(false);
+                    setRtMiles(recalced);
+                    onToast(`✔ Round-trip mileage updated: ${recalced} mi`);
+                  }}
+                  className="text-[9.5px] font-bold text-[#f1c40f] hover:underline cursor-pointer shrink-0"
+                >
+                  ↻ Recalc
+                </button>
+              </div>
+              <div className="grid grid-cols-3 gap-2 items-end">
+                <div>
+                  <label className="text-[7.5px] uppercase font-bold text-[var(--text-muted)] block">
+                    Round-Trip (mi)
+                  </label>
+                  <input
+                    type="number"
+                    step="0.5"
+                    min="0"
+                    autoComplete="off"
+                    value={rtMiles || ''}
+                    onChange={(e) => {
+                      const val = parseFloat(e.target.value) || 0;
+                      setRtMiles(val);
+                      setManualMiles(val > 0);
+                    }}
+                    placeholder="Auto"
+                    className="w-full bg-[var(--surface)] border border-[var(--border)] text-[var(--text)] rounded px-2 py-1 text-xs outline-none font-bold"
+                  />
+                </div>
+                <div>
+                  <label className="text-[7.5px] uppercase font-bold text-[var(--text-muted)] block">
+                    Est. Work Days
+                  </label>
+                  <input
+                    type="number"
+                    min="1"
+                    autoComplete="off"
+                    value={workDays || 1}
+                    onChange={(e) => setWorkDays(Math.max(1, parseInt(e.target.value, 10) || 1))}
+                    className="w-full bg-[var(--surface)] border border-[var(--border)] text-[var(--text)] rounded px-2 py-1 text-xs outline-none font-bold"
+                  />
+                </div>
+                <div className="bg-[var(--surface)] border border-[var(--border)] rounded px-2 py-1 text-center">
+                  <span className="text-[7.5px] uppercase font-bold text-[var(--text-muted)] block">
+                    IRS Est. ({totalTripMiles} mi)
+                  </span>
+                  <span className="text-xs font-black text-[var(--accent-tertiary)]">
+                    ${estMileageDeduction}
+                  </span>
+                </div>
               </div>
             </div>
 
@@ -1300,7 +1844,7 @@ export const JobModal: React.FC<JobModalProps> = ({
                 onClick={logFiftyPercentDeposit}
                 className="flex-1 py-1.5 bg-[var(--accent-secondary)] text-white text-[11px] font-bold rounded-lg cursor-pointer"
               >
-                ⚡ Log 50% Deposit
+                ⚡ Log 50% Deposit (${fiftyPercentDeposit})
               </button>
               <button
                 type="button"
@@ -1430,8 +1974,22 @@ export const JobModal: React.FC<JobModalProps> = ({
               Paint: {totalPaintGals} Gal ({matsIncluded ? 'INCLUDED' : `$${effectiveMatCost}`})
             </span>
             <span className="text-gray-500 hidden min-[360px]:inline">•</span>
+            <span className="text-[#f1c40f]">
+              50% First-Day Deposit: ${fiftyPercentDeposit}
+            </span>
+            <span className="text-gray-500 hidden min-[360px]:inline">•</span>
             <span className="text-red-400">Balance Due: ${balanceDue}</span>
           </div>
+          {(totalSqft > 0 || rtMiles > 0) && (
+            <div className="flex flex-wrap justify-center items-center gap-x-3 gap-y-0.5 text-[10px] font-semibold text-gray-400">
+              {totalSqft > 0 && <span>Total Area: {totalSqft} sq ft</span>}
+              {rtMiles > 0 && (
+                <span>
+                  Mileage: {rtMiles} mi RT ({totalTripMiles} mi total)
+                </span>
+              )}
+            </div>
+          )}
         </div>
 
         {/* Save Button */}

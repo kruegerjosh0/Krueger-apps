@@ -1,6 +1,11 @@
 import { jsPDF } from 'jspdf';
 import { Customer, JobProject, PrintSettings, SystemConstants } from '../types';
-import { resolvePrepOptionScopeText } from './projectHelpers';
+import {
+  resolvePrepOptionScopeText,
+  cleanOptionalSpec,
+  computeRoomGallons,
+  computeRoomSqft,
+} from './projectHelpers';
 import { KRUEGER_BUSINESS_CARD, getQrMatrix } from './businessCard';
 
 export interface GeneratedPdfResult {
@@ -295,9 +300,8 @@ export async function generateEstimateOrBillPdf(
     if (r.og && parseFloat(r.og) > 0) {
       computedPaintGals += parseFloat(r.og);
     } else {
-      const dimMatch = (r.n || '').toLowerCase().match(/(\d+)\s*[x*]\s*(\d+)/);
-      if (dimMatch) {
-        const sqft = parseFloat(dimMatch[1]) * parseFloat(dimMatch[2]);
+      const sqft = computeRoomSqft(r);
+      if (sqft > 0) {
         totalSqft += sqft;
       }
     }
@@ -471,32 +475,23 @@ export async function generateEstimateOrBillPdf(
       const roomPrice = Math.round(Number(r.r) || 0);
       const showLinePaint = r.sp !== false;
 
-      let currentRoomGals = 0;
-      if (r.og && parseFloat(r.og) > 0) {
-        currentRoomGals = parseFloat(r.og);
-      } else {
-        const dimMatch = roomName.toLowerCase().match(/(\d+)\s*[x*]\s*(\d+)/);
-        if (dimMatch) {
-          const sqft = parseFloat(dimMatch[1]) * parseFloat(dimMatch[2]);
-          currentRoomGals = Math.ceil((sqft * 2) / (constants.spreadRate || 350));
-        }
-      }
+      const currentRoomGals = computeRoomGallons(r, constants.spreadRate || 350);
+      const safeProd = cleanOptionalSpec(r.prod);
+      const safeSheen = cleanOptionalSpec(r.sheen);
+      const safeColor = cleanOptionalSpec(r.color);
 
-      // Build clean paint details: "Amount of paint: 2 Gallons - Emerald - (Satin) - Color: Repose Gray"
+      // Build clean paint details, strictly omitting blank/unselected product, sheen, or color
       let paintDetail = '';
-      if (
-        showLinePaint &&
-        (currentRoomGals > 0 || r.prod?.trim() || r.sheen?.trim() || r.color?.trim())
-      ) {
+      if (showLinePaint && (currentRoomGals > 0 || safeProd || safeSheen || safeColor)) {
         const paintParts: string[] = [];
         if (currentRoomGals > 0) {
           paintParts.push(
             `Amount of paint: ${currentRoomGals} ${currentRoomGals === 1 ? 'Gallon' : 'Gallons'}`
           );
         }
-        if (r.prod && r.prod.trim()) paintParts.push(r.prod.trim());
-        if (r.sheen && r.sheen.trim()) paintParts.push(`(${r.sheen.trim()})`);
-        if (r.color && r.color.trim()) paintParts.push(`Color: ${r.color.trim()}`);
+        if (safeProd) paintParts.push(safeProd);
+        if (safeSheen) paintParts.push(`(${safeSheen})`);
+        if (safeColor) paintParts.push(`Color: ${safeColor}`);
         paintDetail = paintParts.join(' - ');
       }
 

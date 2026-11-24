@@ -201,8 +201,8 @@ If Josh is simply asking a question or chatting without creating or moving anyth
         n: `${roomLabel} ${w}x${l}`,
         r: labor,
         og: String(gals),
-        prod: lower.includes('duration') ? 'Duration' : lower.includes('superpaint') ? 'SuperPaint' : 'Emerald',
-        sheen: lower.includes('eggshell') ? 'Eggshell' : lower.includes('semi') ? 'Semi-Gloss' : 'Satin',
+        prod: lower.includes('duration') ? 'Duration' : lower.includes('superpaint') ? 'SuperPaint' : lower.includes('emerald') ? 'Emerald' : '',
+        sheen: lower.includes('eggshell') ? 'Eggshell' : lower.includes('semi') ? 'Semi-Gloss' : lower.includes('satin') ? 'Satin' : lower.includes('flat') ? 'Flat / Matte' : '',
         sp: true,
       });
     }
@@ -374,8 +374,8 @@ app.post('/api/ai/format-note', async (req, res) => {
         n: `${roomLabel} ${w}x${l}`,
         r: labor,
         og: String(gals),
-        prod: 'Emerald',
-        sheen: 'Satin',
+        prod: '',
+        sheen: '',
         sp: true,
       });
     }

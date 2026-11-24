@@ -1,4 +1,20 @@
-import { Customer, JobProject } from '../types';
+import { Customer, JobProject, RoomArea } from '../types';
+
+export const PAINT_PRODUCT_OPTIONS = [
+  'Sherwin-Williams Emerald',
+  'Sherwin-Williams Duration',
+  'Sherwin-Williams SuperPaint',
+  'Sherwin-Williams Cashmere',
+  'Sherwin-Williams ProClassic',
+  'Sherwin-Williams ProMar 200',
+  'Hallman Lindsay Earthcoat',
+  'Hallman Lindsay PureHide',
+  'Hallman Lindsay Weatherguard',
+  'Benjamin Moore Regal Select',
+  'Benjamin Moore Aura',
+  'Zinsser B-I-N Primer',
+  'Kilz 2 / Stain-Blocking Primer',
+] as const;
 
 export const PAINT_SHEEN_OPTIONS = [
   'Flat / Matte',
@@ -8,6 +24,126 @@ export const PAINT_SHEEN_OPTIONS = [
   'High-Gloss',
   'Primer / Sealer',
 ] as const;
+
+export const SURFACE_REPAIR_PRESETS: readonly { label: string; desc: string; defaultHours: number }[] = [
+  { label: 'Drywall Patching', desc: 'Drywall patching, taping, skim & sand smooth', defaultHours: 2 },
+  { label: 'Scrape & Sand Exterior', desc: 'Scrape loose/peeling paint & feather-sand edges', defaultHours: 3 },
+  { label: 'Trim & Gap Caulking', desc: 'Caulk trim seams, nail holes & open gaps', defaultHours: 1.5 },
+  { label: 'Stain / Spot Priming', desc: 'Spot-prime water stains & bare wood/drywall', defaultHours: 1.5 },
+  { label: 'Pressure Wash Prep', desc: 'Exterior pressure wash & mildew removal', defaultHours: 2.5 },
+  { label: 'Wood Rot / Carpentry', desc: 'Rotted wood trim / sill repair & replacement', defaultHours: 3 },
+] as const;
+
+export function cleanOptionalSpec(val?: string | null): string {
+  if (val === null || val === undefined) return '';
+  const trimmed = String(val).trim();
+  if (!trimmed) return '';
+  const lower = trimmed.toLowerCase();
+  if (lower === 'undefined' || lower === 'null') return '';
+  return trimmed;
+}
+
+export function computeRoomSqft(room: Pick<RoomArea, 'n' | 'len' | 'wid' | 'hgt'>): number {
+  const len = Number(room.len) || 0;
+  const wid = Number(room.wid) || 0;
+  const hgt = Number(room.hgt) || 0;
+
+  if (len > 0 && wid > 0) {
+    if (hgt > 0) {
+      return Math.round(2 * (len + wid) * hgt);
+    }
+    return Math.round(len * wid);
+  }
+
+  const nameStr = (room.n || '').toLowerCase();
+  const dim3 = nameStr.match(/(\d+(?:\.\d+)?)\s*[x*]\s*(\d+(?:\.\d+)?)\s*[x*]\s*(\d+(?:\.\d+)?)/);
+  if (dim3) {
+    const l = parseFloat(dim3[1]);
+    const w = parseFloat(dim3[2]);
+    const h = parseFloat(dim3[3]);
+    if (l > 0 && w > 0 && h > 0) return Math.round(2 * (l + w) * h);
+  }
+
+  const dim2 = nameStr.match(/(\d+(?:\.\d+)?)\s*[x*]\s*(\d+(?:\.\d+)?)/);
+  if (dim2) {
+    const l = parseFloat(dim2[1]);
+    const w = parseFloat(dim2[2]);
+    if (l > 0 && w > 0) return Math.round(l * w);
+  }
+
+  return 0;
+}
+
+export function computeRoomGallons(room: RoomArea, spreadRate = 350): number {
+  if (room.og && parseFloat(room.og) > 0) {
+    return parseFloat(room.og);
+  }
+  const sqft = computeRoomSqft(room);
+  if (sqft > 0) {
+    return Math.max(1, Math.ceil((sqft * 2) / (spreadRate || 350)));
+  }
+  return 0;
+}
+
+export interface ParsedAddressParts {
+  street: string;
+  city: string;
+  state: string;
+  zip: string;
+}
+
+export function parseAddressParts(rawAddress?: string | null): ParsedAddressParts {
+  const raw = (rawAddress || '').trim();
+  if (!raw) return { street: '', city: '', state: 'WI', zip: '' };
+
+  let zip = '';
+  let state = 'WI';
+  let remaining = raw;
+
+  const zipMatch = remaining.match(/\b(\d{5})(?:-\d{4})?\b/);
+  if (zipMatch) {
+    zip = zipMatch[1];
+    remaining = remaining.replace(zipMatch[0], '').trim();
+  }
+
+  const stateMatch = remaining.match(/(?:,\s*|\s+)(WI|Wisconsin|IL|MN|MI|IA)\s*$/i);
+  if (stateMatch) {
+    const st = stateMatch[1].toUpperCase();
+    state = st === 'WISCONSIN' ? 'WI' : st;
+    remaining = remaining.slice(0, stateMatch.index).trim().replace(/,+$/, '').trim();
+  }
+
+  const commaParts = remaining
+    .split(',')
+    .map((p) => p.trim())
+    .filter(Boolean);
+
+  if (commaParts.length >= 2) {
+    return {
+      street: commaParts.slice(0, -1).join(', '),
+      city: commaParts[commaParts.length - 1],
+      state,
+      zip,
+    };
+  }
+
+  return {
+    street: commaParts[0] || '',
+    city: '',
+    state,
+    zip,
+  };
+}
+
+export function formatAddressParts(parts: ParsedAddressParts): string {
+  const street = (parts.street || '').trim();
+  const city = (parts.city || '').trim();
+  const state = (parts.state || '').trim();
+  const zip = (parts.zip || '').trim();
+
+  const stateZip = [state && (city || zip || street) ? state : '', zip].filter(Boolean).join(' ');
+  return [street, city, stateZip].filter(Boolean).join(', ');
+}
 
 export interface PrepChecklistOption {
   label: string;

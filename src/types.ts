@@ -159,11 +159,23 @@ export type PrecipMode = 'DRY' | 'RAIN' | 'SNOW' | 'WINTRY_MIX';
 
 export type WorkabilityStatus = 'GO' | 'CAUTION' | 'SNOW_ICE_RISK';
 
+export interface NextTwoHoursSlot {
+  isoTime: string;
+  minuteOffset: number;
+  timeStr: string;
+  rainIn: number;
+  snowfallIn: number;
+  precipIn: number;
+  precipProb: number;
+  mode: PrecipMode;
+}
+
 export interface WeatherCondition {
   temp: number;
   feelsLike: number;
   humidity: number;
   dewPoint: number;
+  cloudCover: number;
   windSpeed: number;
   windGusts: number;
   precipitation: number;
@@ -194,6 +206,7 @@ export interface HourlyForecast {
   feelsLike: number;
   humidity: number;
   dewPoint: number;
+  cloudCover?: number;
   rainProb: number;
   windSpeed: number;
   windGusts: number;
@@ -211,6 +224,7 @@ export interface HourlyForecast {
 export interface DailyForecast {
   dateStr: string;
   dayName: string;
+  shortDateLabel: string;
   tempMax: number;
   tempMin: number;
   feelsLikeMax: number;
@@ -227,6 +241,12 @@ export interface DailyForecast {
   windGustsMax: number;
   weatherCode: number;
   wmoDescription: string;
+  dayCondition: string;
+  nightCondition: string;
+  nightIcon: string;
+  nightPrecipProb: number;
+  nightWindSpeed: number;
+  nightWindGusts: number;
   precipMode: PrecipMode;
   precipType: PrecipType;
   precipTypeLabel: string;

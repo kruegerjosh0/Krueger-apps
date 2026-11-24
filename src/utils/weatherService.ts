@@ -3,6 +3,7 @@ import {
   WeatherCondition,
   HourlyForecast,
   DailyForecast,
+  NextTwoHoursSlot,
   PrecipMode,
   PrecipType,
   WorkabilityStatus,
@@ -29,6 +30,7 @@ export interface FullWeatherResponse {
   current: WeatherCondition;
   hourly: HourlyForecast[];
   daily: DailyForecast[];
+  nextTwoHours: NextTwoHoursSlot[];
   exteriorGuard: ExteriorGuardSummary;
   winterOutlook: WinterOutlookSummary;
   fetchedAt: string;
@@ -786,11 +788,31 @@ function formatSunTime(iso?: string): string {
   return d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', hour12: true });
 }
 
+function formatShortDateBadge(dateStr: string): string {
+  const dObj = new Date(dateStr + 'T00:00:00');
+  if (Number.isNaN(dObj.getTime())) return dateStr;
+  const wk = dObj.toLocaleDateString('en-US', { weekday: 'short' }).toUpperCase();
+  const m = dObj.getMonth() + 1;
+  const day = dObj.getDate();
+  return `${wk} ${m}/${day}`;
+}
+
+function nightIconForCode(code: number, precipMode: PrecipMode): string {
+  if (precipMode === 'WINTRY_MIX') return '🌨️';
+  if (precipMode === 'SNOW') return '❄️';
+  if (precipMode === 'RAIN') return code >= 95 ? '⛈️' : '🌧️';
+  if (code === 0 || code === 1) return '🌙';
+  if (code === 2) return '☁️';
+  if (code === 45 || code === 48) return '🌫️';
+  return '☁️';
+}
+
 export async function fetchFullWeather(lat: number, lng: number): Promise<FullWeatherResponse> {
   const url =
     `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lng}` +
-    `&current=temperature_2m,apparent_temperature,relative_humidity_2m,dew_point_2m,wind_speed_10m,wind_gusts_10m,precipitation,rain,snowfall,weather_code` +
-    `&hourly=weather_code,temperature_2m,apparent_temperature,precipitation_probability,rain,snowfall,relative_humidity_2m,dew_point_2m,wind_speed_10m,wind_gusts_10m` +
+    `&current=temperature_2m,apparent_temperature,relative_humidity_2m,dew_point_2m,cloud_cover,wind_speed_10m,wind_gusts_10m,precipitation,rain,snowfall,weather_code` +
+    `&minutely_15=precipitation,rain,snowfall,weather_code` +
+    `&hourly=weather_code,temperature_2m,apparent_temperature,precipitation_probability,rain,snowfall,relative_humidity_2m,dew_point_2m,cloud_cover,wind_speed_10m,wind_gusts_10m` +
     `&daily=weather_code,sunrise,sunset,precipitation_probability_max,rain_sum,snowfall_sum,temperature_2m_max,temperature_2m_min,apparent_temperature_max,apparent_temperature_min,wind_speed_10m_max,wind_gusts_10m_max` +
     `&temperature_unit=fahrenheit&wind_speed_unit=mph&precipitation_unit=inch&timezone=auto&forecast_days=10`;
 
@@ -800,26 +822,76 @@ export async function fetchFullWeather(lat: number, lng: number): Promise<FullWe
 
   const curSnowUnit = data.current_units?.snowfall;
   const curRainUnit = data.current_units?.rain;
+  const minutelySnowUnit = data.minutely_15_units?.snowfall;
+  const minutelyRainUnit = data.minutely_15_units?.rain;
   const hourlySnowUnit = data.hourly_units?.snowfall;
   const hourlyRainUnit = data.hourly_units?.rain;
   const dailySnowUnit = data.daily_units?.snowfall_sum;
   const dailyRainUnit = data.daily_units?.rain_sum;
 
-  // Aggregate per-day humidity and dew point averages from full 10-day hourly series
-  const dailyHumDewMap = new Map<string, { humSum: number; dewSum: number; count: number }>();
+  // Aggregate per-day humidity, dew point, and Day/Night breakdowns from full 10-day hourly series
+  interface DayHourlyBucket {
+    humSum: number;
+    dewSum: number;
+    count: number;
+    dayCode: number | null;
+    nightCode: number | null;
+    nightProbMax: number;
+    nightWindMax: number;
+    nightGustMax: number;
+    nightRainSum: number;
+    nightSnowSum: number;
+    hasNight: boolean;
+  }
+  const dailyBuckets = new Map<string, DayHourlyBucket>();
   if (Array.isArray(data.hourly?.time)) {
     for (let i = 0; i < data.hourly.time.length; i++) {
       const iso = data.hourly.time[i];
       if (!iso) continue;
       const dateKey = iso.slice(0, 10);
+      const hourNum = Number(iso.slice(11, 13));
       const hum = Number(data.hourly.relative_humidity_2m?.[i]);
       const dew = Number(data.hourly.dew_point_2m?.[i]);
-      if (!Number.isFinite(hum) && !Number.isFinite(dew)) continue;
-      const bucket = dailyHumDewMap.get(dateKey) || { humSum: 0, dewSum: 0, count: 0 };
-      bucket.humSum += Number.isFinite(hum) ? hum : 0;
-      bucket.dewSum += Number.isFinite(dew) ? dew : 0;
-      bucket.count += 1;
-      dailyHumDewMap.set(dateKey, bucket);
+      const code = Number(data.hourly.weather_code?.[i] ?? 0);
+      const prob = Number(data.hourly.precipitation_probability?.[i] ?? 0);
+      const wind = Number(data.hourly.wind_speed_10m?.[i] ?? 0);
+      const gust = Number(data.hourly.wind_gusts_10m?.[i] ?? wind);
+      const hRain = normalizeToInches(data.hourly.rain?.[i], hourlyRainUnit);
+      const hSnow = normalizeToInches(data.hourly.snowfall?.[i], hourlySnowUnit);
+
+      const bucket: DayHourlyBucket = dailyBuckets.get(dateKey) || {
+        humSum: 0,
+        dewSum: 0,
+        count: 0,
+        dayCode: null,
+        nightCode: null,
+        nightProbMax: 0,
+        nightWindMax: 0,
+        nightGustMax: 0,
+        nightRainSum: 0,
+        nightSnowSum: 0,
+        hasNight: false,
+      };
+      if (Number.isFinite(hum) || Number.isFinite(dew)) {
+        bucket.humSum += Number.isFinite(hum) ? hum : 0;
+        bucket.dewSum += Number.isFinite(dew) ? dew : 0;
+        bucket.count += 1;
+      }
+      if (hourNum >= 10 && hourNum <= 16 && (bucket.dayCode === null || code > bucket.dayCode)) {
+        bucket.dayCode = code;
+      }
+      if (hourNum >= 18 || hourNum <= 5) {
+        bucket.hasNight = true;
+        if (bucket.nightCode === null || code > bucket.nightCode) {
+          bucket.nightCode = code;
+        }
+        if (prob > bucket.nightProbMax) bucket.nightProbMax = prob;
+        if (wind > bucket.nightWindMax) bucket.nightWindMax = wind;
+        if (gust > bucket.nightGustMax) bucket.nightGustMax = gust;
+        bucket.nightRainSum += hRain;
+        bucket.nightSnowSum += hSnow;
+      }
+      dailyBuckets.set(dateKey, bucket);
     }
   }
 
@@ -846,15 +918,16 @@ export async function fetchFullWeather(lat: number, lng: number): Promise<FullWe
           : d.toLocaleDateString('en-US', { weekday: 'short' });
       const dayDividerLabel =
         datePart === todayDateStr
-          ? 'Today'
+          ? 'TODAY'
           : datePart === tomorrowDateStr
-          ? 'Tomorrow'
-          : d.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
+          ? 'TOMORROW'
+          : formatShortDateBadge(datePart);
 
       const hTemp = Math.round(data.hourly.temperature_2m?.[i] ?? 0);
       const hFeels = Math.round(data.hourly.apparent_temperature?.[i] ?? hTemp);
       const hHum = Math.round(data.hourly.relative_humidity_2m?.[i] ?? 0);
       const hDew = Math.round(data.hourly.dew_point_2m?.[i] ?? hTemp - 10);
+      const hCloud = Math.round(data.hourly.cloud_cover?.[i] ?? 0);
       const hProb = Math.round(data.hourly.precipitation_probability?.[i] ?? 0);
       const hWind = Math.round(data.hourly.wind_speed_10m?.[i] ?? 0);
       const hGust = Math.round(data.hourly.wind_gusts_10m?.[i] ?? hWind);
@@ -880,6 +953,7 @@ export async function fetchFullWeather(lat: number, lng: number): Promise<FullWe
         feelsLike: hFeels,
         humidity: hHum,
         dewPoint: hDew,
+        cloudCover: hCloud,
         rainProb: hProb,
         windSpeed: hWind,
         windGusts: hGust,
@@ -892,6 +966,77 @@ export async function fetchFullWeather(lat: number, lng: number): Promise<FullWe
         precipLabel: hClass.label,
         precipType: hClass.type,
         precipIcon: hClass.icon,
+      });
+    }
+  }
+
+  // Build Next-2-Hours (8 x 15-minute slots) from minutely_15 with automatic fallback to hourly
+  const nextTwoHours: NextTwoHoursSlot[] = [];
+  if (Array.isArray(data.minutely_15?.time) && data.minutely_15.time.length >= 8) {
+    const curIso: string = data.current?.time || '';
+    let mStart = 0;
+    if (curIso) {
+      const idx = data.minutely_15.time.findIndex((t: string) => t >= curIso);
+      if (idx !== -1) mStart = idx;
+    }
+    for (let s = 0; s < 8; s++) {
+      const mIdx = mStart + s;
+      const isoTime = data.minutely_15.time[mIdx];
+      if (!isoTime) break;
+      const mRain = roundInches2(normalizeToInches(data.minutely_15.rain?.[mIdx], minutelyRainUnit));
+      const mSnow = roundInches2(normalizeToInches(data.minutely_15.snowfall?.[mIdx], minutelySnowUnit));
+      const mCode = Number(data.minutely_15.weather_code?.[mIdx] ?? 0);
+      const refHour = hourlyList[Math.min(Math.floor(s / 4), Math.max(0, hourlyList.length - 1))];
+      const mProb = refHour ? refHour.rainProb : 0;
+      const mode: PrecipMode =
+        mSnow > 0 && mRain > 0
+          ? 'WINTRY_MIX'
+          : mSnow > 0
+          ? 'SNOW'
+          : mRain > 0 || isRainWmoCode(mCode)
+          ? 'RAIN'
+          : 'DRY';
+      const dObj = new Date(isoTime);
+      const timeStr =
+        s === 0
+          ? 'Now'
+          : Number.isNaN(dObj.getTime())
+          ? `+${s * 15}m`
+          : dObj.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', hour12: true });
+      nextTwoHours.push({
+        isoTime,
+        minuteOffset: s * 15,
+        timeStr,
+        rainIn: mRain,
+        snowfallIn: mSnow,
+        precipIn: roundInches2(mRain + mSnow),
+        precipProb: mProb,
+        mode,
+      });
+    }
+  } else {
+    for (let s = 0; s < 8; s++) {
+      const h = hourlyList[Math.min(Math.floor(s / 4), Math.max(0, hourlyList.length - 1))];
+      const mRain = h ? roundInches2(h.rainIn / 4) : 0;
+      const mSnow = h ? roundInches2(h.snowfallIn / 4) : 0;
+      const mProb = h ? h.rainProb : 0;
+      const mode: PrecipMode =
+        mSnow > 0 && mRain > 0
+          ? 'WINTRY_MIX'
+          : mSnow > 0
+          ? 'SNOW'
+          : mRain > 0 || (h && h.precipMode === 'RAIN' && h.rainProb >= 40)
+          ? 'RAIN'
+          : 'DRY';
+      nextTwoHours.push({
+        isoTime: h?.isoTime || '',
+        minuteOffset: s * 15,
+        timeStr: s === 0 ? 'Now' : `+${s * 15}m`,
+        rainIn: mRain,
+        snowfallIn: mSnow,
+        precipIn: roundInches2(mRain + mSnow),
+        precipProb: mProb,
+        mode,
       });
     }
   }
@@ -909,17 +1054,18 @@ export async function fetchFullWeather(lat: number, lng: number): Promise<FullWe
           : d === 1
           ? `Tomorrow (${dObj.toLocaleDateString('en-US', { weekday: 'short' })})`
           : dObj.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
+      const shortDateLabel = formatShortDateBadge(dateStr);
 
       const tempMax = Math.round(data.daily.temperature_2m_max?.[d] ?? 0);
       const tempMin = Math.round(data.daily.temperature_2m_min?.[d] ?? 0);
       const feelsLikeMax = Math.round(data.daily.apparent_temperature_max?.[d] ?? tempMax);
       const feelsLikeMin = Math.round(data.daily.apparent_temperature_min?.[d] ?? tempMin);
-      const humDewBucket = dailyHumDewMap.get(dateStr.slice(0, 10));
-      const humidityMean = humDewBucket && humDewBucket.count > 0
-        ? Math.round(humDewBucket.humSum / humDewBucket.count)
+      const bucket = dailyBuckets.get(dateStr.slice(0, 10));
+      const humidityMean = bucket && bucket.count > 0
+        ? Math.round(bucket.humSum / bucket.count)
         : Math.round(data.current?.relative_humidity_2m ?? 55);
-      const dewPointMean = humDewBucket && humDewBucket.count > 0
-        ? Math.round(humDewBucket.dewSum / humDewBucket.count)
+      const dewPointMean = bucket && bucket.count > 0
+        ? Math.round(bucket.dewSum / bucket.count)
         : Math.round(tempMin - 5);
       const sunrise = formatSunTime(data.daily.sunrise?.[d]);
       const sunset = formatSunTime(data.daily.sunset?.[d]);
@@ -938,6 +1084,28 @@ export async function fetchFullWeather(lat: number, lng: number): Promise<FullWe
         weatherCode: dCode,
       });
 
+      const dayCondition =
+        bucket && bucket.dayCode !== null ? describeWmoCode(bucket.dayCode) : dDesc;
+      const nightCode = bucket && bucket.nightCode !== null ? bucket.nightCode : dCode;
+      const nightPrecipProb = bucket && bucket.hasNight ? Math.round(bucket.nightProbMax) : Math.max(0, Math.round(rainProb * 0.7));
+      const nightMode: PrecipMode =
+        bucket && bucket.hasNight
+          ? bucket.nightSnowSum > 0 && bucket.nightRainSum > 0
+            ? 'WINTRY_MIX'
+            : bucket.nightSnowSum > 0
+            ? 'SNOW'
+            : bucket.nightRainSum > 0 || nightPrecipProb >= 30
+            ? 'RAIN'
+            : 'DRY'
+          : dClass.mode;
+      const nightCondition =
+        nightMode === 'DRY' && (nightCode === 0 || nightCode === 1)
+          ? 'Clear Night'
+          : describeWmoCode(nightCode);
+      const nightIcon = nightIconForCode(nightCode, nightMode);
+      const nightWindSpeed = bucket && bucket.hasNight ? Math.round(bucket.nightWindMax) : Math.max(4, Math.round(windSpeedMax * 0.75));
+      const nightWindGusts = bucket && bucket.hasNight ? Math.round(bucket.nightGustMax) : Math.max(nightWindSpeed, Math.round(windGustsMax * 0.75));
+
       const workabilityEval = evaluateDayWorkability({
         tempMax,
         tempMin,
@@ -954,6 +1122,7 @@ export async function fetchFullWeather(lat: number, lng: number): Promise<FullWe
       dailyList.push({
         dateStr,
         dayName,
+        shortDateLabel,
         tempMax,
         tempMin,
         feelsLikeMax,
@@ -970,6 +1139,12 @@ export async function fetchFullWeather(lat: number, lng: number): Promise<FullWe
         windGustsMax,
         weatherCode: dCode,
         wmoDescription: dDesc,
+        dayCondition,
+        nightCondition,
+        nightIcon,
+        nightPrecipProb,
+        nightWindSpeed,
+        nightWindGusts,
         precipMode: dClass.mode,
         precipType: dClass.type,
         precipTypeLabel: dClass.label,
@@ -987,6 +1162,9 @@ export async function fetchFullWeather(lat: number, lng: number): Promise<FullWe
   const curHum = Math.round(data.current?.relative_humidity_2m ?? 0);
   const curDewPoint = Math.round(
     data.current?.dew_point_2m ?? hourlyList[0]?.dewPoint ?? curTemp - 10
+  );
+  const curCloudCover = Math.round(
+    data.current?.cloud_cover ?? hourlyList[0]?.cloudCover ?? 0
   );
   const curWind = Math.round(data.current?.wind_speed_10m ?? 0);
   const curGusts = Math.round(data.current?.wind_gusts_10m ?? curWind);
@@ -1071,6 +1249,7 @@ export async function fetchFullWeather(lat: number, lng: number): Promise<FullWe
     feelsLike: curFeelsLike,
     humidity: curHum,
     dewPoint: curDewPoint,
+    cloudCover: curCloudCover,
     windSpeed: curWind,
     windGusts: curGusts,
     precipitation: curPrecip,
@@ -1098,6 +1277,7 @@ export async function fetchFullWeather(lat: number, lng: number): Promise<FullWe
     current,
     hourly: hourlyList,
     daily: dailyList,
+    nextTwoHours,
     exteriorGuard,
     winterOutlook,
     fetchedAt: new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }),

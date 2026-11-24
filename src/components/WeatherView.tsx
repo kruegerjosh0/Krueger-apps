@@ -182,9 +182,9 @@ export const WeatherView: React.FC<WeatherViewProps> = ({
   const todayWorkBadge = guard ? getWorkBadgeMeta(guard.paintingStatus) : null;
 
   return (
-    <div className="space-y-2.5 max-w-2xl mx-auto pb-20">
+    <div className="flex flex-col gap-3 max-w-2xl mx-auto pb-20">
       {/* Slim Header Bar + 3 Full-Width Segmented Buttons */}
-      <div className="sticky top-[52px] sm:top-[60px] z-30 bg-[var(--surface)]/95 backdrop-blur-md border border-[var(--border)] rounded-2xl p-2.5 shadow-md space-y-2">
+      <div className="bg-[var(--surface)] border border-[var(--border)] rounded-2xl p-3 shadow-md flex flex-col gap-2.5">
         {/* Slim Header: West Bend, WI + Change City + Refresh */}
         <div className="flex items-center justify-between gap-2">
           <div className="min-w-0 flex items-center gap-1.5">
@@ -339,57 +339,57 @@ export const WeatherView: React.FC<WeatherViewProps> = ({
           VIEW 1: NOW (DEFAULT — FITS ON 1 SCREEN, ZERO REPETITION)
          ============================================================ */}
       {weather && current && guard && activeTab === 'NOW' && (
-        <section role="tabpanel" aria-label="Now weather" className="space-y-2.5">
+        <section role="tabpanel" aria-label="Now weather" className="flex flex-col gap-3">
           {/* 1 Main Current Card */}
-          <div className="bg-[var(--surface)] border border-[var(--border)] rounded-2xl p-4 shadow-md space-y-4">
-            {/* Big Temp + Condition */}
-            <div className="flex items-start justify-between gap-3">
-              <div className="flex items-center gap-3">
-                <span className="text-4xl leading-none">{current.precipIcon}</span>
-                <div>
-                  <div className="text-4xl font-black tracking-tight text-[var(--text)] leading-none">
-                    {current.temp}°F
-                  </div>
-                  <div className="text-xs font-bold text-[var(--text-muted)] mt-1">
-                    {todayConditionLine}
-                  </div>
+          <div className="bg-[var(--surface)] border border-[var(--border)] rounded-2xl p-4 shadow-md flex flex-col gap-4">
+            {/* Big Current Temp + Weather Icon (Left) | Condition + High/Low (Right) */}
+            <div className="flex items-center justify-between gap-3">
+              <div className="flex items-center gap-3 shrink-0">
+                <span className="text-4xl sm:text-5xl leading-none select-none" aria-hidden="true">
+                  {current.precipIcon}
+                </span>
+                <div className="text-4xl sm:text-5xl font-black tracking-tight text-[var(--text)] leading-none tabular-nums">
+                  {current.temp}°F
                 </div>
               </div>
 
-              {todayDaily && (
-                <div className="text-right shrink-0">
-                  <div className="text-xs font-black text-[var(--text)]">
+              <div className="min-w-0 text-right flex flex-col items-end gap-1">
+                <div className="text-xs sm:text-sm font-extrabold text-[var(--text)] leading-snug">
+                  {todayConditionLine}
+                </div>
+                {todayDaily && (
+                  <div className="text-xs font-bold text-[var(--text-muted)] tabular-nums">
                     H {todayDaily.tempMax}° / L {todayDaily.tempMin}°
                   </div>
-                  {current.precipMode !== 'DRY' && (
-                    <span
-                      className={`inline-block mt-1 text-[10px] font-extrabold px-2 py-0.5 rounded-full ${getPrecipPillStyle(
-                        current.precipMode
-                      )}`}
-                    >
-                      {current.precipTypeLabel} {current.rainProb}%
-                    </span>
-                  )}
-                </div>
-              )}
+                )}
+                {current.precipMode !== 'DRY' && (
+                  <span
+                    className={`inline-block text-[10px] font-extrabold px-2 py-0.5 rounded-full ${getPrecipPillStyle(
+                      current.precipMode
+                    )}`}
+                  >
+                    {current.precipTypeLabel} {current.rainProb}%
+                  </span>
+                )}
+              </div>
             </div>
 
             {/* Single Compact Row: Feels Like | Wind / Gusts | Humidity */}
             <div className="grid grid-cols-3 gap-2">
               <div className="bg-[var(--bg)] border border-[var(--border)] rounded-xl p-2.5 text-center">
-                <div className="text-[9px] uppercase font-bold text-[var(--text-muted)]">
+                <div className="text-[9px] uppercase font-bold text-[var(--text-muted)] tracking-wide">
                   Feels Like
                 </div>
-                <div className="text-sm font-black text-[var(--text)] mt-0.5">
+                <div className="text-sm font-black text-[var(--text)] mt-0.5 tabular-nums">
                   {current.feelsLike}°F
                 </div>
               </div>
 
               <div className="bg-[var(--bg)] border border-[var(--border)] rounded-xl p-2.5 text-center">
-                <div className="text-[9px] uppercase font-bold text-[var(--text-muted)]">
+                <div className="text-[9px] uppercase font-bold text-[var(--text-muted)] tracking-wide">
                   Wind / Gusts
                 </div>
-                <div className="text-sm font-black text-[var(--text)] mt-0.5">
+                <div className="text-sm font-black text-[var(--text)] mt-0.5 tabular-nums whitespace-nowrap">
                   {current.windSpeed}{' '}
                   <span className="text-[10.5px] font-bold text-[var(--text-muted)]">
                     / G{current.windGusts}
@@ -398,10 +398,10 @@ export const WeatherView: React.FC<WeatherViewProps> = ({
               </div>
 
               <div className="bg-[var(--bg)] border border-[var(--border)] rounded-xl p-2.5 text-center">
-                <div className="text-[9px] uppercase font-bold text-[var(--text-muted)]">
+                <div className="text-[9px] uppercase font-bold text-[var(--text-muted)] tracking-wide">
                   Humidity
                 </div>
-                <div className="text-sm font-black text-[var(--text)] mt-0.5">
+                <div className="text-sm font-black text-[var(--text)] mt-0.5 tabular-nums">
                   {current.humidity}%
                 </div>
               </div>

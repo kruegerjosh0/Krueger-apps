@@ -22,7 +22,7 @@ interface WeatherViewProps {
   onLocationChange: (loc: LocationInfo) => void;
 }
 
-type WeatherTabId = 'TODAY' | 'HOURLY' | 'TEN_DAY';
+type WeatherTabId = 'NOW' | 'HOURLY' | 'TEN_DAY';
 
 function getPrecipPillStyle(mode: PrecipMode): string {
   switch (mode) {
@@ -83,8 +83,8 @@ export const WeatherView: React.FC<WeatherViewProps> = ({
   const [loading, setLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
 
-  // Strict single-view tab state: Today (default) | Hourly | 10-Day
-  const [activeTab, setActiveTab] = useState<WeatherTabId>('TODAY');
+  // Strict single-view tab state: Now (default) | Hourly | 10-Day
+  const [activeTab, setActiveTab] = useState<WeatherTabId>('NOW');
   const [expandedDayDate, setExpandedDayDate] = useState<string | null>(null);
 
   // Collapsible Change City drawer
@@ -162,7 +162,7 @@ export const WeatherView: React.FC<WeatherViewProps> = ({
   const daily10 = weather?.daily.slice(0, 10) || [];
   const todayDaily = daily10[0];
 
-  // Today conditional Snow/Freeze banner check:
+  // Now conditional Snow/Freeze banner check:
   // ONLY show if snowfall_sum > 0 in next 48h (today + tomorrow) OR temps drop below 32°F today
   const snowNext48h =
     (daily10[0]?.snowfallIn || 0) + (daily10[1]?.snowfallIn || 0);
@@ -172,7 +172,7 @@ export const WeatherView: React.FC<WeatherViewProps> = ({
     Boolean(todayDaily && todayDaily.tempMin < 32);
   const showSnowOrFreezeBanner = hasSnow48h || hasFreezeToday;
 
-  // Format Today condition string cleanly (e.g. "Light Drizzle · Rain" or "Mostly Clear · Dry")
+  // Format Now condition string cleanly (e.g. "Light Drizzle · Rain" or "Mostly Clear · Dry")
   const todayConditionLine = current
     ? current.precipMode === 'DRY'
       ? `${current.wmoDescription} · Dry`
@@ -284,7 +284,7 @@ export const WeatherView: React.FC<WeatherViewProps> = ({
           </div>
         )}
 
-        {/* 3 Full-Width Segmented Buttons: Today | Hourly | 10-Day */}
+        {/* 3 Full-Width Segmented Buttons: Now | Hourly | 10-Day */}
         <div
           role="tablist"
           aria-label="Weather view switcher"
@@ -292,7 +292,7 @@ export const WeatherView: React.FC<WeatherViewProps> = ({
         >
           {(
             [
-              { id: 'TODAY', label: 'Today' },
+              { id: 'NOW', label: 'Now' },
               { id: 'HOURLY', label: 'Hourly' },
               { id: 'TEN_DAY', label: '10-Day' },
             ] as const
@@ -336,10 +336,10 @@ export const WeatherView: React.FC<WeatherViewProps> = ({
       )}
 
       {/* ============================================================
-          VIEW 1: TODAY (DEFAULT — FITS ON 1 SCREEN, ZERO REPETITION)
+          VIEW 1: NOW (DEFAULT — FITS ON 1 SCREEN, ZERO REPETITION)
          ============================================================ */}
-      {weather && current && guard && activeTab === 'TODAY' && (
-        <section role="tabpanel" aria-label="Today weather" className="space-y-2.5">
+      {weather && current && guard && activeTab === 'NOW' && (
+        <section role="tabpanel" aria-label="Now weather" className="space-y-2.5">
           {/* 1 Main Current Card */}
           <div className="bg-[var(--surface)] border border-[var(--border)] rounded-2xl p-4 shadow-md space-y-4">
             {/* Big Temp + Condition */}
@@ -567,9 +567,13 @@ export const WeatherView: React.FC<WeatherViewProps> = ({
 
                     <span className="flex justify-end items-center">
                       <span
-                        className={`w-2.5 h-2.5 rounded-full inline-block ${badge.dot}`}
-                        title={badge.label}
-                      />
+                        className={`text-[10px] text-[var(--text-muted)] inline-block transition-transform ${
+                          isExpanded ? 'rotate-180 text-[var(--accent)]' : ''
+                        }`}
+                        aria-hidden="true"
+                      >
+                        ▼
+                      </span>
                     </span>
                   </button>
 

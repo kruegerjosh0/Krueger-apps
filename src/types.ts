@@ -186,7 +186,9 @@ export interface WeatherCondition {
 
 export interface HourlyForecast {
   isoTime: string;
+  dateStr: string;
   dayLabel: string;
+  dayDividerLabel: string;
   timeStr: string;
   temp: number;
   feelsLike: number;
@@ -199,6 +201,7 @@ export interface HourlyForecast {
   snowfallIn: number;
   precipIn: number;
   weatherCode: number;
+  wmoDescription: string;
   precipMode: PrecipMode;
   precipLabel: string;
   precipType: PrecipType;
@@ -212,6 +215,10 @@ export interface DailyForecast {
   tempMin: number;
   feelsLikeMax: number;
   feelsLikeMin: number;
+  humidityMean: number;
+  dewPointMean: number;
+  sunrise?: string;
+  sunset?: string;
   rainProb: number;
   rainSumIn: number;
   snowfallIn: number;

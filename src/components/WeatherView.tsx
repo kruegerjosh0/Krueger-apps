@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import {
   DailyForecast,
+  HourlyForecast,
   LocationInfo,
   PrecipMode,
   WorkabilityStatus,
@@ -62,6 +63,69 @@ function getWorkBadgeMeta(status: 'GO' | 'CAUTION' | 'HOLD' | WorkabilityStatus)
     pill: 'bg-emerald-500 text-slate-950',
     dot: 'bg-emerald-500',
   };
+}
+
+function getShortConditionLabel(
+  code: number,
+  options?: { snowfallIn?: number; allowSnowLabel?: boolean }
+): string {
+  if (options?.snowfallIn && options.snowfallIn > 0) {
+    if (code === 75 || code === 86) return 'Heavy Snow';
+    if (code === 71) return 'Light Snow';
+    return 'Snow';
+  }
+  switch (code) {
+    case 0:
+      return 'Clear';
+    case 1:
+      return 'Mostly Clear';
+    case 2:
+      return 'Partly Cloudy';
+    case 3:
+      return 'Overcast';
+    case 45:
+      return 'Fog';
+    case 48:
+      return 'Freezing Fog';
+    case 51:
+      return 'Light Drizzle';
+    case 53:
+    case 55:
+      return 'Drizzle';
+    case 56:
+    case 57:
+      return 'Frz Drizzle';
+    case 61:
+      return 'Light Rain';
+    case 63:
+      return 'Rain';
+    case 65:
+      return 'Heavy Rain';
+    case 66:
+    case 67:
+      return 'Freezing Rain';
+    case 71:
+      return options?.allowSnowLabel === false ? 'Cloudy' : 'Light Snow';
+    case 73:
+    case 77:
+      return options?.allowSnowLabel === false ? 'Overcast' : 'Snow';
+    case 75:
+      return options?.allowSnowLabel === false ? 'Overcast' : 'Heavy Snow';
+    case 80:
+      return 'Showers';
+    case 81:
+    case 82:
+      return 'Heavy Rain';
+    case 85:
+    case 86:
+      return options?.allowSnowLabel === false ? 'Cloudy' : 'Snow Showers';
+    case 95:
+    case 96:
+    case 99:
+      return 'Storms';
+    default:
+      return 'Cloudy';
+  }
 }
 
 function formatLocationLabel(loc: LocationInfo): string {
@@ -159,6 +223,7 @@ export const WeatherView: React.FC<WeatherViewProps> = ({
   const current = weather?.current;
   const guard = weather?.exteriorGuard;
   const hourly24 = weather?.hourly.slice(0, 24) || [];
+  const hourly36 = weather?.hourly.slice(0, 36) || [];
   const daily10 = weather?.daily.slice(0, 10) || [];
   const todayDaily = daily10[0];
 
@@ -171,6 +236,77 @@ export const WeatherView: React.FC<WeatherViewProps> = ({
     Boolean(current && current.temp < 32) ||
     Boolean(todayDaily && todayDaily.tempMin < 32);
   const showSnowOrFreezeBanner = hasSnow48h || hasFreezeToday;
+
+  // Contractor & Precip Summary metrics for Now tab
+  const dewSpread = current ? current.temp - current.dewPoint : 10;
+  const dewPointNote =
+    dewSpread <= 4
+      ? { text: `Condensation risk (${dewSpread}° spread)`, tone: 'text-red-300' }
+      : dewSpread <= 7
+      ? { text: `Watch shade (${dewSpread}° spread)`, tone: 'text-amber-300' }
+      : { text: `Safe spread (+${dewSpread}° above DP)`, tone: 'text-emerald-300' };
+
+  const snow24h = hourly24.reduce((sum, h) => sum + (h.snowfallIn || 0), 0);
+  const rain24h = hourly24.reduce((sum, h) => sum + (h.rainIn || 0), 0);
+  const maxProb24h = hourly24.reduce((max, h) => Math.max(max, h.rainProb || 0), 0);
+
+  const next24hPrecip =
+    snow24h > 0 && rain24h > 0
+      ? {
+          value: `🌨️ ${formatSnowInches(snow24h)} Snow`,
+          sub: `+ ${formatRainInches(rain24h)} rain · ${maxProb24h}%`,
+          tone: 'text-purple-200',
+        }
+      : snow24h > 0
+      ? {
+          value: `❄️ ${formatSnowInches(snow24h)} Snow`,
+          sub: `Peak chance ${maxProb24h}%`,
+          tone: 'text-sky-200',
+        }
+      : rain24h > 0
+      ? {
+          value: `🌧️ ${formatRainInches(rain24h)} Rain`,
+          sub: `Peak chance ${maxProb24h}%`,
+          tone: 'text-blue-200',
+        }
+      : maxProb24h >= 20
+      ? {
+          value: `🌧️ Spotty (${maxProb24h}%)`,
+          sub: 'Trace rain possible',
+          tone: 'text-blue-200',
+        }
+      : {
+          value: maxProb24h === 0 ? 'Dry (0%)' : `Dry (${maxProb24h}%)`,
+          sub: 'Clear 24h exterior window',
+          tone: 'text-emerald-300',
+        };
+
+  const todayHourlyGusts = hourly24
+    .filter((h) => h.dayLabel === 'Today')
+    .map((h) => h.windGusts || 0);
+  const peakWindGustToday = Math.max(
+    todayDaily?.windGustsMax || 0,
+    current?.windGusts || 0,
+    ...todayHourlyGusts
+  );
+  const peakGustNote =
+    peakWindGustToday > 25
+      ? { text: 'High gusts — skip spraying', tone: 'text-red-300' }
+      : peakWindGustToday > 20
+      ? { text: 'Gusts > 20 — brush/roll', tone: 'text-amber-300' }
+      : { text: 'Calm for spray & ladders', tone: 'text-emerald-300' };
+
+  // Group 36-hour forecast by day divider (Today, Tomorrow, etc.)
+  const hourlyGroups: Array<{ label: string; items: Array<{ hour: HourlyForecast; isFirst: boolean }> }> = [];
+  hourly36.forEach((h, idx) => {
+    const label = h.dayDividerLabel || h.dayLabel;
+    const lastGroup = hourlyGroups[hourlyGroups.length - 1];
+    if (!lastGroup || lastGroup.label !== label) {
+      hourlyGroups.push({ label, items: [{ hour: h, isFirst: idx === 0 }] });
+    } else {
+      lastGroup.items.push({ hour: h, isFirst: idx === 0 });
+    }
+  });
 
   // Format Now condition string cleanly (e.g. "Light Drizzle · Rain" or "Mostly Clear · Dry")
   const todayConditionLine = current
@@ -336,7 +472,7 @@ export const WeatherView: React.FC<WeatherViewProps> = ({
       )}
 
       {/* ============================================================
-          VIEW 1: NOW (DEFAULT — FITS ON 1 SCREEN, ZERO REPETITION)
+          VIEW 1: NOW (DETAILED CURRENT OVERVIEW + CONTRACTOR SUMMARY)
          ============================================================ */}
       {weather && current && guard && activeTab === 'NOW' && (
         <section role="tabpanel" aria-label="Now weather" className="flex flex-col gap-3">
@@ -422,6 +558,73 @@ export const WeatherView: React.FC<WeatherViewProps> = ({
             )}
           </div>
 
+          {/* 2x2 Contractor & Precip Summary Card */}
+          <div className="bg-[var(--surface)] border border-[var(--border)] rounded-2xl p-3.5 shadow-sm flex flex-col gap-2.5">
+            <h3 className="text-[10.5px] font-black uppercase tracking-wider text-[var(--text-muted)]">
+              Contractor &amp; Precip Summary
+            </h3>
+
+            <div className="grid grid-cols-2 gap-2">
+              {/* 1. Dew Point + Condensation Check */}
+              <div className="bg-[var(--bg)] border border-[var(--border)] rounded-xl p-2.5 flex flex-col gap-0.5">
+                <div className="text-[9.5px] uppercase font-bold text-[var(--text-muted)] tracking-wide">
+                  Dew Point
+                </div>
+                <div className="text-sm font-black text-[var(--text)] tabular-nums">
+                  {current.dewPoint}°F
+                </div>
+                <div className={`text-[10px] font-semibold leading-tight ${dewPointNote.tone}`}>
+                  {dewPointNote.text}
+                </div>
+              </div>
+
+              {/* 2. Next 24h Precip (Dynamic Snow / Rain / Dry) */}
+              <div className="bg-[var(--bg)] border border-[var(--border)] rounded-xl p-2.5 flex flex-col gap-0.5">
+                <div className="text-[9.5px] uppercase font-bold text-[var(--text-muted)] tracking-wide">
+                  Next 24h Precip
+                </div>
+                <div className={`text-sm font-black tabular-nums ${next24hPrecip.tone}`}>
+                  {next24hPrecip.value}
+                </div>
+                <div className="text-[10px] font-semibold text-[var(--text-muted)] leading-tight">
+                  {next24hPrecip.sub}
+                </div>
+              </div>
+
+              {/* 3. Peak Wind Gusts Today */}
+              <div className="bg-[var(--bg)] border border-[var(--border)] rounded-xl p-2.5 flex flex-col gap-0.5">
+                <div className="text-[9.5px] uppercase font-bold text-[var(--text-muted)] tracking-wide">
+                  Peak Wind Gusts
+                </div>
+                <div
+                  className={`text-sm font-black tabular-nums ${
+                    peakWindGustToday > 20 ? 'text-amber-300' : 'text-[var(--text)]'
+                  }`}
+                >
+                  {peakWindGustToday} mph
+                </div>
+                <div className={`text-[10px] font-semibold leading-tight ${peakGustNote.tone}`}>
+                  {peakGustNote.text}
+                </div>
+              </div>
+
+              {/* 4. Sunrise & Sunset */}
+              <div className="bg-[var(--bg)] border border-[var(--border)] rounded-xl p-2.5 flex flex-col gap-0.5">
+                <div className="text-[9.5px] uppercase font-bold text-[var(--text-muted)] tracking-wide">
+                  Sunrise &amp; Sunset
+                </div>
+                <div className="text-xs sm:text-sm font-black text-[var(--text)] tabular-nums leading-snug">
+                  <span className="whitespace-nowrap">🌅 {todayDaily?.sunrise || '—'}</span>
+                  <span className="mx-1 text-[var(--text-muted)] font-semibold">·</span>
+                  <span className="whitespace-nowrap">🌇 {todayDaily?.sunset || '—'}</span>
+                </div>
+                <div className="text-[10px] font-semibold text-[var(--text-muted)] leading-tight">
+                  Daylight drying window
+                </div>
+              </div>
+            </div>
+          </div>
+
           {/* Conditional Snow/Freeze Banner — ONLY rendered when snowfall > 0 in 48h OR temp < 32°F today */}
           {showSnowOrFreezeBanner && (
             <div className="rounded-2xl border border-sky-400/50 bg-sky-950/35 px-3.5 py-3 flex items-start gap-2.5 shadow-sm">
@@ -446,7 +649,7 @@ export const WeatherView: React.FC<WeatherViewProps> = ({
       )}
 
       {/* ============================================================
-          VIEW 2: HOURLY (CLEAN 24-HOUR VERTICAL LIST — 1 ROW PER HOUR)
+          VIEW 2: HOURLY (DETAILED 36-HOUR BREAKDOWN WITH DAY DIVIDERS)
          ============================================================ */}
       {weather && activeTab === 'HOURLY' && (
         <section
@@ -454,64 +657,141 @@ export const WeatherView: React.FC<WeatherViewProps> = ({
           aria-label="Hourly forecast"
           className="bg-[var(--surface)] border border-[var(--border)] rounded-2xl overflow-hidden shadow-sm"
         >
-          <div className="grid grid-cols-[1.2fr_0.65fr_0.8fr_1.35fr] px-3.5 py-2 bg-[var(--bg)]/85 border-b border-[var(--border)] text-[9.5px] font-black uppercase tracking-wider text-[var(--text-muted)]">
-            <span>Time</span>
-            <span className="text-center">Sky</span>
+          <div className="grid grid-cols-[minmax(0,1.4fr)_minmax(0,0.75fr)_minmax(0,0.95fr)_minmax(0,0.95fr)] gap-1.5 px-3 py-2 bg-[var(--bg)] border-b border-[var(--border)] text-[9.5px] font-black uppercase tracking-wider text-[var(--text-muted)]">
+            <span>Hour / Sky</span>
             <span className="text-center">Temp</span>
+            <span className="text-center">Wind / Gusts</span>
             <span className="text-right">Precip</span>
           </div>
 
-          <div className="divide-y divide-[var(--border)]/60">
-            {hourly24.map((h, idx) => {
-              const isNow = idx === 0;
-              const isSnow = h.snowfallIn > 0;
-              const isRain = !isSnow && (h.rainIn > 0 || h.rainProb >= 15 || h.precipMode === 'RAIN');
-              const rowIcon = isSnow ? '❄️' : isRain ? h.precipIcon : h.precipIcon;
-
-              return (
-                <div
-                  key={h.isoTime}
-                  className={`grid grid-cols-[1.2fr_0.65fr_0.8fr_1.35fr] items-center px-3.5 py-2 text-xs ${
-                    isNow ? 'bg-[var(--accent)]/12' : ''
-                  }`}
-                >
-                  <span className={isNow ? 'text-[var(--accent)] font-black' : 'font-bold text-[var(--text)]'}>
-                    {h.timeStr}
-                    {h.dayLabel !== 'Today' && (
-                      <span className="ml-1 text-[9.5px] font-semibold text-[var(--text-muted)]">
-                        {h.dayLabel}
-                      </span>
-                    )}
+          <div>
+            {hourlyGroups.map((group) => (
+              <div key={group.label}>
+                {/* Day Divider */}
+                <div className="px-3 py-1.5 bg-[var(--surface-subtle)]/90 border-y border-[var(--border)] flex items-center justify-between">
+                  <span className="text-[10.5px] font-black uppercase tracking-wider text-[var(--accent)]">
+                    {group.label}
                   </span>
-
-                  <span className="text-base text-center leading-none">{rowIcon}</span>
-
-                  <span className="text-center font-black text-[var(--text)]">{h.temp}°</span>
-
-                  <span className="text-right">
-                    {isSnow ? (
-                      <span className="text-[11px] font-extrabold text-sky-300">
-                        ❄️ {h.rainProb}%
-                      </span>
-                    ) : isRain ? (
-                      <span className="text-[11px] font-extrabold text-blue-300">
-                        🌧️ {h.rainProb}%
-                      </span>
-                    ) : (
-                      <span className="text-[10.5px] font-bold text-emerald-400/80">
-                        Clear
-                      </span>
-                    )}
+                  <span className="text-[9.5px] font-bold text-[var(--text-muted)]">
+                    {group.items.length} {group.items.length === 1 ? 'hr' : 'hrs'}
                   </span>
                 </div>
-              );
-            })}
+
+                <div className="divide-y divide-[var(--border)]/60">
+                  {group.items.map(({ hour: h, isFirst }) => {
+                    const isSnow = h.snowfallIn > 0;
+                    const isRain =
+                      !isSnow && (h.rainIn > 0 || h.rainProb >= 15 || h.precipMode === 'RAIN');
+                    const rowIcon = isSnow ? '❄️' : h.precipIcon;
+                    const shortLabel = getShortConditionLabel(h.weatherCode, {
+                      snowfallIn: h.snowfallIn,
+                      allowSnowLabel: false,
+                    });
+                    const isGusty = h.windGusts > 20;
+
+                    return (
+                      <div
+                        key={h.isoTime}
+                        className={`grid grid-cols-[minmax(0,1.4fr)_minmax(0,0.75fr)_minmax(0,0.95fr)_minmax(0,0.95fr)] items-center gap-1.5 px-3 py-2 text-xs ${
+                          isFirst ? 'bg-[var(--accent)]/12' : ''
+                        }`}
+                      >
+                        {/* Hour + Condition Icon & Short Label */}
+                        <div className="min-w-0 flex flex-col">
+                          <span
+                            className={`text-xs leading-tight ${
+                              isFirst
+                                ? 'text-[var(--accent)] font-black'
+                                : 'font-extrabold text-[var(--text)]'
+                            }`}
+                          >
+                            {h.timeStr}
+                          </span>
+                          <span className="text-[10px] font-semibold text-[var(--text-muted)] truncate flex items-center gap-1 mt-0.5">
+                            <span className="leading-none shrink-0" aria-hidden="true">
+                              {rowIcon}
+                            </span>
+                            <span className="truncate">{shortLabel}</span>
+                          </span>
+                        </div>
+
+                        {/* Temp + Feels Like */}
+                        <div className="text-center flex flex-col items-center">
+                          <span className="text-xs font-black text-[var(--text)] tabular-nums leading-tight">
+                            {h.temp}°
+                          </span>
+                          <span className="text-[9.5px] font-semibold text-[var(--text-muted)] tabular-nums whitespace-nowrap mt-0.5">
+                            Feels {h.feelsLike}°
+                          </span>
+                        </div>
+
+                        {/* Wind / Gusts */}
+                        <div className="text-center flex flex-col items-center">
+                          <span
+                            className={`text-[11px] font-extrabold tabular-nums whitespace-nowrap leading-tight ${
+                              isGusty ? 'text-amber-300' : 'text-[var(--text)]'
+                            }`}
+                          >
+                            {h.windSpeed}{' '}
+                            <span
+                              className={
+                                isGusty
+                                  ? 'text-amber-300 font-black'
+                                  : 'text-[var(--text-muted)] font-bold'
+                              }
+                            >
+                              / G{h.windGusts}
+                            </span>
+                          </span>
+                          <span className="text-[9px] font-semibold text-[var(--text-muted)] mt-0.5">
+                            mph
+                          </span>
+                        </div>
+
+                        {/* Dynamic Precip Badge: Snow ONLY if snowfall > 0; otherwise Rain or muted 0% */}
+                        <div className="flex justify-end">
+                          {isSnow ? (
+                            <span className="inline-flex flex-col items-end px-1.5 py-0.5 rounded-lg bg-sky-500/20 border border-sky-400/45 text-sky-200 leading-tight">
+                              <span className="text-[10.5px] font-extrabold whitespace-nowrap tabular-nums">
+                                ❄️ {h.rainProb}%
+                              </span>
+                              <span className="text-[9.5px] font-bold text-sky-100 whitespace-nowrap tabular-nums">
+                                {formatSnowInches(h.snowfallIn)}
+                              </span>
+                            </span>
+                          ) : isRain ? (
+                            <span className="inline-flex flex-col items-end px-1.5 py-0.5 rounded-lg bg-blue-500/20 border border-blue-400/45 text-blue-200 leading-tight">
+                              <span className="text-[10.5px] font-extrabold whitespace-nowrap tabular-nums">
+                                🌧️ {h.rainProb}%
+                              </span>
+                              {h.rainIn > 0 && (
+                                <span className="text-[9.5px] font-bold text-blue-100 whitespace-nowrap tabular-nums">
+                                  {formatRainInches(h.rainIn)}
+                                </span>
+                              )}
+                            </span>
+                          ) : h.rainProb > 0 ? (
+                            <span className="text-[10.5px] font-bold text-[var(--text-muted)]/85 whitespace-nowrap tabular-nums">
+                              🌧️ {h.rainProb}%
+                            </span>
+                          ) : (
+                            <span className="text-[10.5px] font-bold text-[var(--text-muted)]/55 tabular-nums">
+                              0%
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            ))}
           </div>
         </section>
       )}
 
       {/* ============================================================
-          VIEW 3: 10-DAY (10 COMPACT SINGLE-LINE ROWS + TAP TO EXPAND 1 DAY)
+          VIEW 3: 10-DAY (SINGLE-BAR COLLAPSIBLE ACCORDION ROWS)
          ============================================================ */}
       {weather && activeTab === 'TEN_DAY' && (
         <section
@@ -523,6 +803,13 @@ export const WeatherView: React.FC<WeatherViewProps> = ({
             {daily10.map((day: DailyForecast) => {
               const isExpanded = expandedDayDate === day.dateStr;
               const badge = getWorkBadgeMeta(day.workability);
+              const compactDayLabel = day.dayName.startsWith('Tomorrow')
+                ? 'Tomorrow'
+                : day.dayName;
+              const shortCondition = getShortConditionLabel(day.weatherCode, {
+                snowfallIn: day.snowfallIn,
+                allowSnowLabel: day.precipMode === 'SNOW' || day.precipMode === 'WINTRY_MIX',
+              });
 
               const precipText =
                 day.precipMode === 'WINTRY_MIX'
@@ -533,25 +820,75 @@ export const WeatherView: React.FC<WeatherViewProps> = ({
                   ? `🌧️ ${day.rainProb}%`
                   : 'Dry';
 
+              const precipAccum =
+                day.snowfallIn > 0 && day.rainSumIn > 0
+                  ? {
+                      text: `🌨️ ${formatSnowInches(day.snowfallIn)} Snow`,
+                      sub: `+ ${formatRainInches(day.rainSumIn)} Rain`,
+                      tone: 'text-purple-200',
+                    }
+                  : day.snowfallIn > 0
+                  ? {
+                      text: `❄️ ${formatSnowInches(day.snowfallIn)} Snow`,
+                      sub: `${day.rainProb}% snow chance`,
+                      tone: 'text-sky-200',
+                    }
+                  : day.rainSumIn > 0
+                  ? {
+                      text: `🌧️ ${formatRainInches(day.rainSumIn)} Rain`,
+                      sub: `${day.rainProb}% rain chance`,
+                      tone: 'text-blue-200',
+                    }
+                  : day.precipMode === 'SNOW'
+                  ? {
+                      text: '❄️ Light Flurries',
+                      sub: `${day.rainProb}% chance`,
+                      tone: 'text-sky-200',
+                    }
+                  : day.precipMode === 'RAIN'
+                  ? {
+                      text: `🌧️ Spotty (${day.rainProb}%)`,
+                      sub: 'Trace / light shower',
+                      tone: 'text-blue-200',
+                    }
+                  : {
+                      text: 'Dry',
+                      sub: `${day.rainProb}% chance`,
+                      tone: 'text-emerald-300',
+                    };
+
               return (
                 <div key={day.dateStr}>
+                  {/* Single Horizontal Accordion Bar */}
                   <button
                     type="button"
                     onClick={() =>
                       setExpandedDayDate((prev) => (prev === day.dateStr ? null : day.dateStr))
                     }
                     aria-expanded={isExpanded}
-                    className="w-full px-3 py-2.5 grid grid-cols-[1.35fr_0.4fr_0.85fr_0.95fr_0.25fr] items-center gap-1 hover:bg-[var(--surface-subtle)]/60 text-left cursor-pointer"
+                    className={`w-full px-2.5 sm:px-3.5 py-2.5 grid grid-cols-[minmax(0,0.95fr)_minmax(0,1.15fr)_50px_48px_52px_10px] sm:grid-cols-[minmax(0,1fr)_minmax(0,1.25fr)_58px_56px_60px_14px] items-center gap-1 sm:gap-2 hover:bg-[var(--surface-subtle)]/60 text-left cursor-pointer transition-colors ${
+                      isExpanded ? 'bg-[var(--surface-subtle)]/40' : ''
+                    }`}
                   >
-                    <span className="text-xs font-extrabold text-[var(--text)] truncate">
-                      {day.dayName}
+                    {/* Day */}
+                    <span className="text-[11px] sm:text-xs font-extrabold text-[var(--text)] truncate">
+                      {compactDayLabel}
                     </span>
 
-                    <span className="text-base text-center leading-none">{day.precipIcon}</span>
+                    {/* Icon + Short Condition */}
+                    <span className="min-w-0 flex items-center gap-1">
+                      <span className="text-sm leading-none shrink-0" aria-hidden="true">
+                        {day.precipIcon}
+                      </span>
+                      <span className="text-[10px] sm:text-[11px] font-semibold text-[var(--text-muted)] truncate">
+                        {shortCondition}
+                      </span>
+                    </span>
 
-                    <span className="text-center">
+                    {/* Dynamic Rain or Snow % */}
+                    <span className="flex justify-center">
                       <span
-                        className={`inline-block text-[10px] font-extrabold px-2 py-0.5 rounded-full whitespace-nowrap ${getPrecipPillStyle(
+                        className={`inline-block text-[9.5px] sm:text-[10px] font-extrabold px-1.5 sm:px-2 py-0.5 rounded-full whitespace-nowrap tabular-nums ${getPrecipPillStyle(
                           day.precipMode
                         )}`}
                       >
@@ -559,15 +896,26 @@ export const WeatherView: React.FC<WeatherViewProps> = ({
                       </span>
                     </span>
 
-                    <span className="text-right text-xs font-black text-[var(--text)] whitespace-nowrap">
+                    {/* Low° / High° */}
+                    <span className="text-right text-[11px] sm:text-xs font-black text-[var(--text)] whitespace-nowrap tabular-nums">
                       <span className="text-[var(--text-muted)] font-semibold">{day.tempMin}°</span>
                       <span className="mx-0.5 text-[var(--text-muted)]">/</span>
                       <span>{day.tempMax}°</span>
                     </span>
 
+                    {/* GO / CAUTION / NO-GO Pill */}
+                    <span className="flex justify-center">
+                      <span
+                        className={`inline-block text-center w-full text-[8.5px] sm:text-[9.5px] font-black uppercase px-1 py-0.5 rounded-full whitespace-nowrap tracking-wide ${badge.pill}`}
+                      >
+                        {badge.label}
+                      </span>
+                    </span>
+
+                    {/* Chevron */}
                     <span className="flex justify-end items-center">
                       <span
-                        className={`text-[10px] text-[var(--text-muted)] inline-block transition-transform ${
+                        className={`text-[9px] text-[var(--text-muted)] inline-block transition-transform duration-200 ${
                           isExpanded ? 'rotate-180 text-[var(--accent)]' : ''
                         }`}
                         aria-hidden="true"
@@ -577,37 +925,77 @@ export const WeatherView: React.FC<WeatherViewProps> = ({
                     </span>
                   </button>
 
-                  {/* Single-Day Inline Details (Snow hidden completely whenever snowfallIn === 0) */}
-                  {isExpanded && (
-                    <div className="px-3.5 pb-3 pt-2 bg-[var(--bg)]/80 border-t border-[var(--border)]/60 space-y-2">
-                      <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px]">
-                        <span className="font-bold text-[var(--text)]">
-                          💨 Wind {day.windSpeedMax} mph (Gusts {day.windGustsMax} mph)
-                        </span>
-                        {day.rainSumIn > 0 && (
-                          <span className="font-extrabold text-blue-300">
-                            🌧️ Rain: {formatRainInches(day.rainSumIn)}
-                          </span>
-                        )}
-                        {day.snowfallIn > 0 && (
-                          <span className="font-extrabold text-sky-300">
-                            ❄️ Snow: {formatSnowInches(day.snowfallIn)}
-                          </span>
-                        )}
-                      </div>
+                  {/* Smooth Tap-to-Expand Inline Detail Drawer */}
+                  <div
+                    className={`grid transition-[grid-template-rows,opacity] duration-200 ease-out ${
+                      isExpanded ? 'grid-rows-[1fr] opacity-100' : 'grid-rows-[0fr] opacity-0'
+                    }`}
+                  >
+                    <div className="overflow-hidden">
+                      <div className="px-3 pb-3 pt-2.5 bg-[var(--bg)]/85 border-t border-[var(--border)]/70 flex flex-col gap-2.5">
+                        {/* 2x2 Contractor Metric Grid */}
+                        <div className="grid grid-cols-2 gap-2">
+                          {/* 1. Feels Like (High / Low) */}
+                          <div className="bg-[var(--surface)] border border-[var(--border)] rounded-xl p-2 flex flex-col gap-0.5">
+                            <span className="text-[9px] uppercase font-bold text-[var(--text-muted)] tracking-wide">
+                              Feels Like (Hi / Lo)
+                            </span>
+                            <span className="text-xs font-black text-[var(--text)] tabular-nums">
+                              {day.feelsLikeMax}° / {day.feelsLikeMin}°F
+                            </span>
+                          </div>
 
-                      <div className="flex items-start justify-between gap-2">
-                        <p className="text-[11px] text-[var(--text-muted)] leading-snug">
-                          {day.workabilityHint}
-                        </p>
-                        <span
-                          className={`text-[9.5px] font-black uppercase px-2 py-0.5 rounded-full shrink-0 ${badge.pill}`}
-                        >
-                          {badge.label}
-                        </span>
+                          {/* 2. Wind & Peak Gusts */}
+                          <div className="bg-[var(--surface)] border border-[var(--border)] rounded-xl p-2 flex flex-col gap-0.5">
+                            <span className="text-[9px] uppercase font-bold text-[var(--text-muted)] tracking-wide">
+                              Wind &amp; Peak Gusts
+                            </span>
+                            <span
+                              className={`text-xs font-black tabular-nums ${
+                                day.windGustsMax > 20 ? 'text-amber-300' : 'text-[var(--text)]'
+                              }`}
+                            >
+                              {day.windSpeedMax} mph · G{day.windGustsMax}
+                            </span>
+                          </div>
+
+                          {/* 3. Precip Accumulation */}
+                          <div className="bg-[var(--surface)] border border-[var(--border)] rounded-xl p-2 flex flex-col gap-0.5">
+                            <span className="text-[9px] uppercase font-bold text-[var(--text-muted)] tracking-wide">
+                              Precip Accumulation
+                            </span>
+                            <span className={`text-xs font-black tabular-nums ${precipAccum.tone}`}>
+                              {precipAccum.text}
+                            </span>
+                            <span className="text-[9.5px] font-semibold text-[var(--text-muted)] leading-tight">
+                              {precipAccum.sub}
+                            </span>
+                          </div>
+
+                          {/* 4. Humidity & Dew Point */}
+                          <div className="bg-[var(--surface)] border border-[var(--border)] rounded-xl p-2 flex flex-col gap-0.5">
+                            <span className="text-[9px] uppercase font-bold text-[var(--text-muted)] tracking-wide">
+                              Humidity &amp; Dew Pt
+                            </span>
+                            <span className="text-xs font-black text-[var(--text)] tabular-nums">
+                              {day.humidityMean}% · DP {day.dewPointMean}°F
+                            </span>
+                          </div>
+                        </div>
+
+                        {/* 1-Line Contractor Workability Note */}
+                        <div className="bg-[var(--surface)]/80 border border-[var(--border)] rounded-xl px-2.5 py-2 flex items-start gap-2">
+                          <span
+                            className={`mt-1 w-2 h-2 rounded-full shrink-0 ${badge.dot}`}
+                            aria-hidden="true"
+                          />
+                          <p className="text-[11px] font-medium text-[var(--text)] leading-snug">
+                            {day.workabilityHint}
+                          </p>
+                        </div>
                       </div>
                     </div>
-                  )}
+                  </div>
                 </div>
               );
             })}

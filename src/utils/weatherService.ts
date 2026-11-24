@@ -324,7 +324,7 @@ export function evaluateDayWorkability(params: {
   return {
     status: 'GO',
     label: 'Good Exterior',
-    hint: `Dry conditions with highs near ${tempMax}°F and gusts under ${Math.max(windGustsMax, 1)} mph — solid window for exterior painting & washing.`,
+    hint: `Ideal exterior spray & stain window — highs near ${tempMax}°F, dry skies, and gusts under ${Math.max(windGustsMax, 1)} mph.`,
   };
 }
 
@@ -779,12 +779,19 @@ function buildLegacyWinterOutlook(
   };
 }
 
+function formatSunTime(iso?: string): string {
+  if (!iso) return '—';
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return '—';
+  return d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', hour12: true });
+}
+
 export async function fetchFullWeather(lat: number, lng: number): Promise<FullWeatherResponse> {
   const url =
     `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lng}` +
     `&current=temperature_2m,apparent_temperature,relative_humidity_2m,dew_point_2m,wind_speed_10m,wind_gusts_10m,precipitation,rain,snowfall,weather_code` +
     `&hourly=weather_code,temperature_2m,apparent_temperature,precipitation_probability,rain,snowfall,relative_humidity_2m,dew_point_2m,wind_speed_10m,wind_gusts_10m` +
-    `&daily=weather_code,precipitation_probability_max,rain_sum,snowfall_sum,temperature_2m_max,temperature_2m_min,apparent_temperature_max,apparent_temperature_min,wind_speed_10m_max,wind_gusts_10m_max` +
+    `&daily=weather_code,sunrise,sunset,precipitation_probability_max,rain_sum,snowfall_sum,temperature_2m_max,temperature_2m_min,apparent_temperature_max,apparent_temperature_min,wind_speed_10m_max,wind_gusts_10m_max` +
     `&temperature_unit=fahrenheit&wind_speed_unit=mph&precipitation_unit=inch&timezone=auto&forecast_days=10`;
 
   const res = await fetch(url);
@@ -798,13 +805,32 @@ export async function fetchFullWeather(lat: number, lng: number): Promise<FullWe
   const dailySnowUnit = data.daily_units?.snowfall_sum;
   const dailyRainUnit = data.daily_units?.rain_sum;
 
-  // Build 24-hour forecast starting from current local hour
+  // Aggregate per-day humidity and dew point averages from full 10-day hourly series
+  const dailyHumDewMap = new Map<string, { humSum: number; dewSum: number; count: number }>();
+  if (Array.isArray(data.hourly?.time)) {
+    for (let i = 0; i < data.hourly.time.length; i++) {
+      const iso = data.hourly.time[i];
+      if (!iso) continue;
+      const dateKey = iso.slice(0, 10);
+      const hum = Number(data.hourly.relative_humidity_2m?.[i]);
+      const dew = Number(data.hourly.dew_point_2m?.[i]);
+      if (!Number.isFinite(hum) && !Number.isFinite(dew)) continue;
+      const bucket = dailyHumDewMap.get(dateKey) || { humSum: 0, dewSum: 0, count: 0 };
+      bucket.humSum += Number.isFinite(hum) ? hum : 0;
+      bucket.dewSum += Number.isFinite(dew) ? dew : 0;
+      bucket.count += 1;
+      dailyHumDewMap.set(dateKey, bucket);
+    }
+  }
+
+  // Build 36-hour forecast starting from current local hour
   const hourlyList: HourlyForecast[] = [];
   const startIdx = findCurrentHourIndex(data.hourly?.time || [], data.current?.time);
   const todayDateStr = (data.daily?.time?.[0] || '').slice(0, 10);
+  const tomorrowDateStr = (data.daily?.time?.[1] || '').slice(0, 10);
 
   if (data.hourly?.time) {
-    for (let i = startIdx; i < startIdx + 24; i++) {
+    for (let i = startIdx; i < startIdx + 36; i++) {
       const isoTime = data.hourly.time[i];
       if (!isoTime) break;
 
@@ -818,6 +844,12 @@ export async function fetchFullWeather(lat: number, lng: number): Promise<FullWe
         datePart === todayDateStr
           ? 'Today'
           : d.toLocaleDateString('en-US', { weekday: 'short' });
+      const dayDividerLabel =
+        datePart === todayDateStr
+          ? 'Today'
+          : datePart === tomorrowDateStr
+          ? 'Tomorrow'
+          : d.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
 
       const hTemp = Math.round(data.hourly.temperature_2m?.[i] ?? 0);
       const hFeels = Math.round(data.hourly.apparent_temperature?.[i] ?? hTemp);
@@ -829,6 +861,7 @@ export async function fetchFullWeather(lat: number, lng: number): Promise<FullWe
       const hSnow = roundInches2(normalizeToInches(data.hourly.snowfall?.[i], hourlySnowUnit));
       const hRain = roundInches2(normalizeToInches(data.hourly.rain?.[i], hourlyRainUnit));
       const hCode = Number(data.hourly.weather_code?.[i] ?? 0);
+      const hDesc = describeWmoCode(hCode);
 
       const hClass = classifyHourlyPrecipMode({
         snowfallIn: hSnow,
@@ -839,7 +872,9 @@ export async function fetchFullWeather(lat: number, lng: number): Promise<FullWe
 
       hourlyList.push({
         isoTime,
+        dateStr: datePart,
         dayLabel,
+        dayDividerLabel,
         timeStr,
         temp: hTemp,
         feelsLike: hFeels,
@@ -852,6 +887,7 @@ export async function fetchFullWeather(lat: number, lng: number): Promise<FullWe
         snowfallIn: hSnow,
         precipIn: roundInches2(hRain + hSnow),
         weatherCode: hCode,
+        wmoDescription: hDesc,
         precipMode: hClass.mode,
         precipLabel: hClass.label,
         precipType: hClass.type,
@@ -878,6 +914,15 @@ export async function fetchFullWeather(lat: number, lng: number): Promise<FullWe
       const tempMin = Math.round(data.daily.temperature_2m_min?.[d] ?? 0);
       const feelsLikeMax = Math.round(data.daily.apparent_temperature_max?.[d] ?? tempMax);
       const feelsLikeMin = Math.round(data.daily.apparent_temperature_min?.[d] ?? tempMin);
+      const humDewBucket = dailyHumDewMap.get(dateStr.slice(0, 10));
+      const humidityMean = humDewBucket && humDewBucket.count > 0
+        ? Math.round(humDewBucket.humSum / humDewBucket.count)
+        : Math.round(data.current?.relative_humidity_2m ?? 55);
+      const dewPointMean = humDewBucket && humDewBucket.count > 0
+        ? Math.round(humDewBucket.dewSum / humDewBucket.count)
+        : Math.round(tempMin - 5);
+      const sunrise = formatSunTime(data.daily.sunrise?.[d]);
+      const sunset = formatSunTime(data.daily.sunset?.[d]);
       const rainProb = Math.round(data.daily.precipitation_probability_max?.[d] ?? 0);
       const snowfallIn = roundInches2(normalizeToInches(data.daily.snowfall_sum?.[d], dailySnowUnit));
       const rainSumIn = roundInches2(normalizeToInches(data.daily.rain_sum?.[d], dailyRainUnit));
@@ -913,6 +958,10 @@ export async function fetchFullWeather(lat: number, lng: number): Promise<FullWe
         tempMin,
         feelsLikeMax,
         feelsLikeMin,
+        humidityMean,
+        dewPointMean,
+        sunrise,
+        sunset,
         rainProb,
         rainSumIn,
         snowfallIn,
@@ -1042,7 +1091,7 @@ export async function fetchFullWeather(lat: number, lng: number): Promise<FullWe
     advice,
   };
 
-  const exteriorGuard = buildExteriorGuardSummary(current, hourlyList, dailyList);
+  const exteriorGuard = buildExteriorGuardSummary(current, hourlyList.slice(0, 24), dailyList);
   const winterOutlook = buildLegacyWinterOutlook(hourlyList, dailyList);
 
   return {

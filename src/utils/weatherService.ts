@@ -895,14 +895,14 @@ export async function fetchFullWeather(lat: number, lng: number): Promise<FullWe
     }
   }
 
-  // Build 36-hour forecast starting from current local hour
+  // Build 48-hour forecast starting from current local hour
   const hourlyList: HourlyForecast[] = [];
   const startIdx = findCurrentHourIndex(data.hourly?.time || [], data.current?.time);
   const todayDateStr = (data.daily?.time?.[0] || '').slice(0, 10);
   const tomorrowDateStr = (data.daily?.time?.[1] || '').slice(0, 10);
 
   if (data.hourly?.time) {
-    for (let i = startIdx; i < startIdx + 36; i++) {
+    for (let i = startIdx; i < startIdx + 48; i++) {
       const isoTime = data.hourly.time[i];
       if (!isoTime) break;
 

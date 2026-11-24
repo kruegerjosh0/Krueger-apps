@@ -16,6 +16,7 @@ import {
   formatSnowInches,
   FullWeatherResponse,
 } from '../utils/weatherService';
+import { WeatherRadar } from './WeatherRadar';
 
 interface WeatherViewProps {
   currentLocation: LocationInfo;
@@ -24,7 +25,7 @@ interface WeatherViewProps {
   onLocationChange: (loc: LocationInfo) => void;
 }
 
-type WeatherTabId = 'NOW' | 'HOURLY' | 'DAILY';
+type WeatherTabId = 'NOW' | 'HOURLY' | 'DAILY' | 'RADAR';
 
 function getWorkBadgeMeta(status: 'GO' | 'CAUTION' | 'HOLD' | WorkabilityStatus): {
   label: 'GO' | 'CAUTION' | 'NO-GO';
@@ -315,9 +316,16 @@ export const WeatherView: React.FC<WeatherViewProps> = ({
   const current = weather?.current;
   const guard = weather?.exteriorGuard;
   const hourly36 = weather?.hourly.slice(0, 36) || [];
+  const hourly48 = weather?.hourly.slice(0, 48) || [];
   const daily10 = weather?.daily.slice(0, 10) || [];
   const todayDaily = daily10[0];
   const nextTwoHours = weather?.nextTwoHours || [];
+  const [selectedRadarHourIdx, setSelectedRadarHourIdx] = useState<number>(0);
+
+  const nextWetHour48 = hourly48.find(
+    (h) => h.snowfallIn > 0 || h.rainIn > 0 || h.rainProb >= 20 || h.precipMode === 'RAIN'
+  );
+  const selectedRadarHour = hourly48[selectedRadarHourIdx] || hourly48[0] || null;
 
   // Conditional Snow/Freeze banner check: ONLY show when snow > 0 in next 48h OR temp < 32°F today
   const snowNext48h = (daily10[0]?.snowfallIn || 0) + (daily10[1]?.snowfallIn || 0);
@@ -457,17 +465,18 @@ export const WeatherView: React.FC<WeatherViewProps> = ({
           </div>
         )}
 
-        {/* AccuWeather Top Tab Strip: NOW | HOURLY | DAILY with #F05514 Bottom Indicator */}
+        {/* AccuWeather Top Tab Strip: Now | Hourly | 10-Day | Radar with #F05514 Bottom Indicator */}
         <div
           role="tablist"
           aria-label="Weather view switcher"
-          className="grid grid-cols-3 border-t border-[#22262e] bg-[#0e1014]"
+          className="grid grid-cols-4 border-t border-[#22262e] bg-[#0e1014]"
         >
           {(
             [
-              { id: 'NOW', label: 'NOW' },
-              { id: 'HOURLY', label: 'HOURLY' },
-              { id: 'DAILY', label: 'DAILY' },
+              { id: 'NOW', label: 'Now' },
+              { id: 'HOURLY', label: 'Hourly' },
+              { id: 'DAILY', label: '10-Day' },
+              { id: 'RADAR', label: 'Radar' },
             ] as const
           ).map((tab) => {
             const isActive = activeTab === tab.id;
@@ -478,13 +487,13 @@ export const WeatherView: React.FC<WeatherViewProps> = ({
                 role="tab"
                 aria-selected={isActive}
                 onClick={() => setActiveTab(tab.id)}
-                className={`relative py-2.5 text-[11px] font-black tracking-widest uppercase transition-colors cursor-pointer ${
+                className={`relative py-2.5 text-[10.5px] sm:text-[11px] font-black tracking-wider uppercase transition-colors cursor-pointer ${
                   isActive ? 'text-white' : 'text-[#8b949e] hover:text-[#cbd5e1]'
                 }`}
               >
                 {tab.label}
                 <span
-                  className={`absolute bottom-0 left-3 right-3 h-[3px] rounded-t-full transition-opacity ${
+                  className={`absolute bottom-0 left-2.5 right-2.5 h-[3px] rounded-t-full transition-opacity ${
                     isActive ? 'bg-[#F05514] opacity-100' : 'opacity-0'
                   }`}
                   aria-hidden="true"
@@ -1226,6 +1235,168 @@ export const WeatherView: React.FC<WeatherViewProps> = ({
                 </div>
               );
             })}
+          </div>
+        </section>
+      )}
+
+      {/* ============================================================
+          TAB 4: RADAR — PAST + FUTURE DOPPLER MAP + 48-HOUR PRECIP OUTLOOK
+         ============================================================ */}
+      {activeTab === 'RADAR' && (
+        <section
+          role="tabpanel"
+          aria-label="Future Radar and 48-Hour Precipitation Outlook"
+          className="flex flex-col gap-3"
+        >
+          {/* 1. Interactive Past + Future RainViewer Radar Map */}
+          <WeatherRadar currentLocation={currentLocation} />
+
+          {/* 2. Extended 48-Hour Future Precipitation Scrubber (Open-Meteo Hourly) */}
+          <div className="bg-[#121418] border border-[#22262e] rounded-2xl p-3.5 shadow-md flex flex-col gap-2.5">
+            <div className="flex items-center justify-between gap-2 flex-wrap">
+              <div className="flex items-center gap-2">
+                <span className="w-1.5 h-3.5 rounded-full bg-[#F05514]" aria-hidden="true" />
+                <h3 className="text-[10.5px] font-black uppercase tracking-widest text-white">
+                  Extended 48-Hour Precip Outlook
+                </h3>
+              </div>
+
+              {nextWetHour48 ? (
+                <span
+                  className={`text-[9.5px] font-black px-2 py-0.5 rounded-full ${
+                    nextWetHour48.snowfallIn > 0
+                      ? 'bg-sky-500/20 text-sky-300 border border-sky-400/40'
+                      : 'bg-blue-500/20 text-blue-300 border border-blue-400/40'
+                  }`}
+                >
+                  {nextWetHour48.snowfallIn > 0
+                    ? `❄️ Snow ${nextWetHour48.dayLabel} ${nextWetHour48.timeStr} (${nextWetHour48.rainProb}%)`
+                    : `💧 Rain ${nextWetHour48.dayLabel} ${nextWetHour48.timeStr} (${nextWetHour48.rainProb}%)`}
+                </span>
+              ) : (
+                <span className="text-[9.5px] font-black px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-400 border border-emerald-500/40">
+                  DRY NEXT 48 HRS
+                </span>
+              )}
+            </div>
+
+            {/* Selected Hour Detail Readout */}
+            {selectedRadarHour && (
+              <div className="bg-[#0a0c10] border border-[#22262e] rounded-xl px-3 py-2 flex items-center justify-between gap-2 text-[11px]">
+                <div className="flex items-center gap-1.5 min-w-0">
+                  <span className="font-black text-[#F05514] whitespace-nowrap">
+                    {selectedRadarHour.dayLabel} {selectedRadarHour.timeStr}
+                  </span>
+                  <span className="text-[#475569]">·</span>
+                  <span className="font-bold text-white tabular-nums whitespace-nowrap">
+                    {selectedRadarHour.temp}°
+                  </span>
+                  <span className="text-[#9ca3af] truncate">
+                    Wind {selectedRadarHour.windSpeed}/G{selectedRadarHour.windGusts}
+                  </span>
+                </div>
+                <span
+                  className={`font-black whitespace-nowrap tabular-nums ${
+                    selectedRadarHour.snowfallIn > 0
+                      ? 'text-sky-300'
+                      : selectedRadarHour.rainIn > 0 || selectedRadarHour.rainProb >= 15
+                      ? 'text-blue-300'
+                      : 'text-emerald-400'
+                  }`}
+                >
+                  {selectedRadarHour.snowfallIn > 0
+                    ? `❄️ ${selectedRadarHour.rainProb}% (${formatSnowInches(selectedRadarHour.snowfallIn)})`
+                    : selectedRadarHour.rainIn > 0
+                    ? `💧 ${selectedRadarHour.rainProb}% (${formatRainInches(selectedRadarHour.rainIn)})`
+                    : selectedRadarHour.rainProb >= 15
+                    ? `💧 ${selectedRadarHour.rainProb}%`
+                    : `Dry (${selectedRadarHour.rainProb}%)`}
+                </span>
+              </div>
+            )}
+
+            {/* Horizontal Scrollable 48-Hour Bar Chart / Timeline */}
+            {hourly48.length > 0 ? (
+              <div className="overflow-x-auto pb-1.5 -mx-1 px-1">
+                <div className="flex items-end gap-1.5 min-w-max">
+                  {hourly48.map((h, idx) => {
+                    const isSnow = h.snowfallIn > 0;
+                    const isRain =
+                      !isSnow && (h.rainIn > 0 || h.rainProb >= 15 || h.precipMode === 'RAIN');
+                    const isSelected = idx === selectedRadarHourIdx;
+                    const showDayTag =
+                      idx === 0 || (idx > 0 && hourly48[idx - 1].dateStr !== h.dateStr);
+                    const barHeightPx = Math.max(
+                      6,
+                      Math.round((Math.min(100, Math.max(0, h.rainProb)) / 100) * 56)
+                    );
+                    const compactHour =
+                      h.timeStr === 'Now'
+                        ? 'Now'
+                        : h.timeStr.replace(':00 ', '').replace(' AM', 'a').replace(' PM', 'p');
+
+                    return (
+                      <button
+                        key={h.isoTime}
+                        type="button"
+                        onClick={() => setSelectedRadarHourIdx(idx)}
+                        className={`w-11 shrink-0 rounded-xl p-1.5 flex flex-col items-center gap-1 border transition-colors cursor-pointer ${
+                          isSelected
+                            ? 'bg-[#1a1d24] border-[#F05514]'
+                            : 'bg-[#0a0c10] border-[#1f242e] hover:border-[#323948]'
+                        }`}
+                      >
+                        <span className="text-[8px] font-black uppercase tracking-wider h-2.5 leading-none text-[#F05514]">
+                          {showDayTag ? h.dayLabel : ''}
+                        </span>
+
+                        <span className="text-[11px] leading-none h-3.5 flex items-center justify-center">
+                          {isSnow ? '❄️' : isRain ? '💧' : '·'}
+                        </span>
+
+                        {/* Precip Probability Bar */}
+                        <div className="w-4 h-14 bg-[#181b22] rounded-md flex items-end overflow-hidden p-0.5">
+                          <div
+                            className={`w-full rounded-sm transition-all ${
+                              isSnow
+                                ? 'bg-sky-400'
+                                : isRain
+                                ? 'bg-blue-500'
+                                : 'bg-[#2e3440]'
+                            }`}
+                            style={{ height: `${barHeightPx}px` }}
+                          />
+                        </div>
+
+                        <span
+                          className={`text-[9px] font-extrabold tabular-nums leading-none ${
+                            isSnow
+                              ? 'text-sky-300'
+                              : isRain
+                              ? 'text-blue-300'
+                              : 'text-[#64748b]'
+                          }`}
+                        >
+                          {h.rainProb}%
+                        </span>
+
+                        <span
+                          className={`text-[9px] font-bold whitespace-nowrap leading-none ${
+                            idx === 0 ? 'text-[#F05514] font-black' : 'text-[#9ca3af]'
+                          }`}
+                        >
+                          {compactHour}
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            ) : (
+              <div className="text-center py-4 text-xs font-semibold text-[#8b949e]">
+                Loading 48-hour precipitation timeline…
+              </div>
+            )}
           </div>
         </section>
       )}

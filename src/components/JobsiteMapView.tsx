@@ -259,7 +259,7 @@ export const JobsiteMapView: React.FC<JobsiteMapViewProps> = ({
     };
   }, []);
 
-  // Switch between Dark OSM (CartoDB Dark Matter) and Street OSM tiles
+  // Switch between Dark OSM (CSS-filtered OSM) and Street OSM tiles (zero API keys)
   useEffect(() => {
     const map = mapInstanceRef.current;
     if (!map) return;
@@ -268,19 +268,10 @@ export const JobsiteMapView: React.FC<JobsiteMapViewProps> = ({
       map.removeLayer(tileLayerRef.current);
     }
 
-    const tileUrl =
-      mapStyle === 'dark'
-        ? 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png'
-        : 'https://tile.openstreetmap.org/{z}/{x}/{y}.png';
-
-    const tileAttr =
-      mapStyle === 'dark'
-        ? '&copy; OpenStreetMap &copy; CARTO'
-        : '&copy; OpenStreetMap contributors';
-
-    tileLayerRef.current = L.tileLayer(tileUrl, {
+    tileLayerRef.current = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
       maxZoom: 18,
-      attribution: tileAttr,
+      className: mapStyle === 'dark' ? 'dark-osm-tiles' : '',
+      attribution: '&copy; OpenStreetMap contributors',
     }).addTo(map);
   }, [mapStyle]);
 

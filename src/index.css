@@ -59,6 +59,9 @@ body {
 }
 
 /* Dark-mode Leaflet Jobsite Map & Route Board polish */
+.dark-osm-tiles {
+  filter: invert(100%) hue-rotate(180deg) brightness(95%) contrast(90%);
+}
 .krueger-map-divicon {
   background: transparent !important;
   border: none !important;

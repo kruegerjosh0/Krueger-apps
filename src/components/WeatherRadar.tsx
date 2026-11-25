@@ -71,11 +71,11 @@ export const WeatherRadar: React.FC<WeatherRadarProps> = ({ currentLocation }) =
       attributionControl: true,
     });
 
-    L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
-      subdomains: 'abcd',
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
       minZoom: 4,
       maxZoom: 19,
-      attribution: '&copy; OpenStreetMap &copy; CARTO &middot; Radar: RainViewer',
+      className: 'dark-osm-tiles',
+      attribution: '&copy; OpenStreetMap contributors &middot; Radar: RainViewer',
     }).addTo(map);
 
     // Subtle AccuWeather-orange home/site marker dot

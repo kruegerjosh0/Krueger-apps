@@ -1,5 +1,5 @@
 // Krueger Painting OS Service Worker
-const CACHE_NAME = 'krueger-os-cache-v11';
+const CACHE_NAME = 'krueger-os-cache-v12';
 const PRECACHE_ASSETS = [
   '/',
   '/index.html',
@@ -43,7 +43,7 @@ self.addEventListener('fetch', (event) => {
     url.pathname.startsWith('/api/') ||
     url.hostname.includes('open-meteo.com') ||
     url.hostname.includes('rainviewer.com') ||
-    url.hostname.includes('cartocdn.com') ||
+    url.hostname.includes('tile.openstreetmap.org') ||
     url.hostname.includes('nominatim.openstreetmap.org') ||
     url.hostname.includes('project-osrm.org') ||
     url.hostname.includes('googleapis.com') ||

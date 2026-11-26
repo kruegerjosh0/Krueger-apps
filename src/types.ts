@@ -101,6 +101,7 @@ export interface MileageEntry {
   vehicle: string;
   miles: number;
   purpose: string;
+  autoLogKey?: string;
 }
 
 export interface ExpenseEntry {

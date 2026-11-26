@@ -56,7 +56,6 @@ import { FolderViewModal } from './components/modals/FolderViewModal';
 import { JobModal } from './components/modals/JobModal';
 import { TaxReportModal } from './components/modals/TaxReportModal';
 import { PaintCalcModal } from './components/modals/PaintCalcModal';
-import { MileageModal } from './components/modals/MileageModal';
 import { ExpenseModal } from './components/modals/ExpenseModal';
 import { ShoppingListModal } from './components/modals/ShoppingListModal';
 import { PriceBookModal } from './components/modals/PriceBookModal';
@@ -78,6 +77,12 @@ import {
   hasCalendarRelevantChanges,
   buildGoogleCalendarTemplateUrl,
 } from './utils/calendarIcs';
+import {
+  estimateDriveFromBase,
+  fetchDriveFromBase,
+  resolveApproxWisconsinCoords,
+} from './utils/mapHelpers';
+import { getLocalTodayIso, isJobCompletedOrPaid } from './utils/projectHelpers';
 
 export default function App() {
   const [activeTab, setActiveTab] = useState<TabType>('dash');
@@ -118,7 +123,6 @@ export default function App() {
 
   const [taxReportOpen, setTaxReportOpen] = useState(false);
   const [calcOpen, setCalcOpen] = useState(false);
-  const [mileageOpen, setMileageOpen] = useState(false);
   const [expenseOpen, setExpenseOpen] = useState(false);
   const [shoppingListOpen, setShoppingListOpen] = useState(false);
   const [priceBookOpen, setPriceBookOpen] = useState(false);
@@ -485,6 +489,57 @@ export default function App() {
     showToast('✔ Customer Folder Created');
   };
 
+  // Silent Background Mileage Auto-Logger (zero popups / zero UI clutter)
+  const recordSilentMileage = (entry: MileageEntry) => {
+    setMileage((prev) => {
+      if (entry.autoLogKey && prev.some((m) => m.autoLogKey === entry.autoLogKey)) {
+        return prev;
+      }
+      const updated = [entry, ...prev];
+      saveRecord('KMaster_Mil', updated);
+      return updated;
+    });
+  };
+
+  const upsertSilentMileage = (entry: MileageEntry) => {
+    setMileage((prev) => {
+      if (entry.autoLogKey) {
+        const idx = prev.findIndex((m) => m.autoLogKey === entry.autoLogKey);
+        if (idx !== -1) {
+          const updated = prev.map((m, i) =>
+            i === idx ? { ...m, miles: entry.miles, purpose: entry.purpose } : m
+          );
+          saveRecord('KMaster_Mil', updated);
+          return updated;
+        }
+      }
+      const updated = [entry, ...prev];
+      saveRecord('KMaster_Mil', updated);
+      return updated;
+    });
+  };
+
+  // Quietly log round-trip miles once per day per destination when opening Google Maps
+  const handleSilentDispatchMileage = (payload: {
+    destKey: string;
+    destName: string;
+    roundTripMiles: number;
+  }) => {
+    const miles = Math.round((Number(payload.roundTripMiles) || 0) * 10) / 10;
+    if (miles <= 0) return;
+    const today = getLocalTodayIso();
+    const normDest = payload.destKey.trim().toLowerCase().replace(/\s+/g, ' ');
+    const autoLogKey = `dispatch:${today}:${normDest}`;
+    recordSilentMileage({
+      id: Date.now() + Math.floor(Math.random() * 1000),
+      date: today,
+      vehicle: 'Work Van / Truck',
+      miles,
+      purpose: `Dispatch RT (from 2119 Barton Ave): ${payload.destName}`,
+      autoLogKey,
+    });
+  };
+
   const handleUpdateCustomer = (updatedCust: Customer) => {
     const prevCust = customers.find((c) => c.id === updatedCust.id);
     let nextCust = updatedCust;
@@ -501,6 +556,84 @@ export default function App() {
     saveRecord('KMaster_C', updatedList);
     if (activeFolderCustomer?.id === nextCust.id) {
       setActiveFolderCustomer(nextCust);
+    }
+
+    // Silent background mileage calculation whenever a customer job (or folder stage) is marked Completed
+    const prevJobsById = new Map<number, JobProject>();
+    (prevCust?.jobs || []).forEach((j) => prevJobsById.set(j.id, j));
+
+    const newlyCompletedJobs = (nextCust.jobs || []).filter((job) => {
+      if (!isJobCompletedOrPaid(job.status)) return false;
+      const prevJob = prevJobsById.get(job.id);
+      return !prevJob || !isJobCompletedOrPaid(prevJob.status);
+    });
+
+    const folderJustCompleted =
+      (prevCust?.statusOverride || '').toUpperCase() !== 'COMPLETED' &&
+      (nextCust.statusOverride || '').toUpperCase() === 'COMPLETED';
+
+    const jobsToAutoLog: Array<{ id: number | 'folder'; title: string; workDays: number }> =
+      newlyCompletedJobs.map((j) => ({
+        id: j.id,
+        title: j.title || '',
+        workDays: Math.max(1, Number(j.workDays) || 1),
+      }));
+
+    if (jobsToAutoLog.length === 0 && folderJustCompleted) {
+      const targetJob =
+        (nextCust.jobs || []).find((j) => !isJobCompletedOrPaid(j.status)) ||
+        (nextCust.jobs || [])[0] ||
+        null;
+      jobsToAutoLog.push({
+        id: targetJob ? targetJob.id : 'folder',
+        title: targetJob?.title || '',
+        workDays: Math.max(1, Number(targetJob?.workDays) || 1),
+      });
+    }
+
+    if (jobsToAutoLog.length > 0) {
+      const hasCoords =
+        typeof nextCust.lat === 'number' &&
+        typeof nextCust.lng === 'number' &&
+        Number.isFinite(nextCust.lat) &&
+        Number.isFinite(nextCust.lng);
+      const coords = hasCoords
+        ? { lat: nextCust.lat as number, lng: nextCust.lng as number }
+        : resolveApproxWisconsinCoords(nextCust.address || '', nextCust.id);
+
+      const fallbackDrive = estimateDriveFromBase(coords.lat, coords.lng);
+      const today = getLocalTodayIso();
+
+      jobsToAutoLog.forEach((job, idx) => {
+        const autoLogKey = `job-complete:${nextCust.id}:${job.id}`;
+        const baseRtMiles = fallbackDrive.roundTripMiles;
+        const estTotalMiles = Math.round(baseRtMiles * job.workDays * 10) / 10;
+
+        // Log immediately with local road estimate, then silently refine with live OSRM road distance
+        recordSilentMileage({
+          id: Date.now() + idx,
+          projId: typeof job.id === 'number' ? job.id : undefined,
+          date: today,
+          vehicle: 'Work Van / Truck',
+          miles: estTotalMiles,
+          purpose: `Completed job (${job.workDays}d × ${baseRtMiles.toFixed(1)} mi RT): ${nextCust.name}${job.title ? ` — ${job.title}` : ''}`,
+          autoLogKey,
+        });
+
+        fetchDriveFromBase(coords.lat, coords.lng).then((roadDrive) => {
+          if (!roadDrive.isRoadData) return;
+          const roadTotal = Math.round(roadDrive.roundTripMiles * job.workDays * 10) / 10;
+          upsertSilentMileage({
+            id: Date.now() + idx,
+            projId: typeof job.id === 'number' ? job.id : undefined,
+            date: today,
+            vehicle: 'Work Van / Truck',
+            miles: roadTotal,
+            purpose: `Completed job (${job.workDays}d × ${roadDrive.roundTripMiles.toFixed(1)} mi RT): ${nextCust.name}${job.title ? ` — ${job.title}` : ''}`,
+            autoLogKey,
+          });
+        });
+      });
     }
   };
 
@@ -1096,11 +1229,7 @@ export default function App() {
               if (c) setActiveFolderCustomer(c);
             }}
             onUpdateCustomer={handleUpdateCustomer}
-            onSaveMileage={(entry) => {
-              const updated = [entry, ...mileage];
-              setMileage(updated);
-              saveRecord('KMaster_Mil', updated);
-            }}
+            onSilentLogDispatchMileage={handleSilentDispatchMileage}
             onToast={showToast}
           />
         )}
@@ -1141,7 +1270,6 @@ export default function App() {
             onOpenCalc={() => setCalcOpen(true)}
             onOpenPriceBook={() => setPriceBookOpen(true)}
             onOpenColorDb={() => setColorDbOpen(true)}
-            onOpenMileage={() => setMileageOpen(true)}
             onOpenExpenses={() => setExpenseOpen(true)}
             onOpenShoppingList={() => setShoppingListOpen(true)}
             onSyncCalendar={() => setCalendarSyncOpen(true)}
@@ -1321,26 +1449,6 @@ export default function App() {
 
       {/* Paint Calculator Modal */}
       {calcOpen && <PaintCalcModal constants={constants} onClose={() => setCalcOpen(false)} />}
-
-      {/* Mileage Modal */}
-      {mileageOpen && (
-        <MileageModal
-          mileage={mileage}
-          constants={constants}
-          onSaveMileage={(entry) => {
-            const updated = [entry, ...mileage];
-            setMileage(updated);
-            saveRecord('KMaster_Mil', updated);
-          }}
-          onDeleteMileage={(id) => {
-            const updated = mileage.filter((m) => m.id !== id);
-            setMileage(updated);
-            saveRecord('KMaster_Mil', updated);
-          }}
-          onClose={() => setMileageOpen(false)}
-          onToast={showToast}
-        />
-      )}
 
       {/* Expenses Modal */}
       {expenseOpen && (

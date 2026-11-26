@@ -63,15 +63,24 @@ export const TaxReportModal: React.FC<TaxReportModalProps> = ({
     }
   });
 
-  // Mileage for the month
+  const selectedYear = selectedMonth.slice(0, 4);
+  const irsRate = constants.irsRate || 0.67;
+
+  // Mileage for the month & full tax year (auto-tracked in background)
   let totalMiles = 0;
+  let yearTotalMiles = 0;
+  const yearMileageRows: MileageEntry[] = [];
   mileage.forEach((m) => {
     if (m.date && m.date.startsWith(selectedMonth)) {
-      totalMiles += m.miles;
+      totalMiles += Number(m.miles) || 0;
+    }
+    if (m.date && m.date.startsWith(selectedYear)) {
+      yearTotalMiles += Number(m.miles) || 0;
+      yearMileageRows.push(m);
     }
   });
 
-  const milesDeduction = Math.round(totalMiles * (constants.irsRate || 0.67));
+  const milesDeduction = Math.round(totalMiles * irsRate);
   const netOperatingProfit = grossRev - totalExpenses - milesDeduction;
 
   const exportCsv = () => {
@@ -86,7 +95,7 @@ export const TaxReportModal: React.FC<TaxReportModalProps> = ({
     });
 
     if (totalMiles > 0) {
-      csv += `"MILEAGE_DEDUCTION","${selectedMonth}-01","IRS Standard Mileage","${totalMiles.toFixed(1)} miles @ ${constants.irsRate}c/mi",-${milesDeduction}\n`;
+      csv += `"MILEAGE_DEDUCTION","${selectedMonth}-01","IRS Standard Mileage","${totalMiles.toFixed(1)} miles @ ${irsRate}/mi",-${milesDeduction}\n`;
     }
 
     const encodedUri = encodeURI(csv);
@@ -96,6 +105,36 @@ export const TaxReportModal: React.FC<TaxReportModalProps> = ({
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
+  };
+
+  const exportYearEndMileageCsv = () => {
+    const sorted = [...yearMileageRows].sort((a, b) => (a.date || '').localeCompare(b.date || ''));
+    const lines = [
+      `Krueger Painting Year-End Tax Mileage Log (${selectedYear})`,
+      `Origin Home Base,"2119 Barton Ave, West Bend, WI 53090"`,
+      '',
+      'Date,Vehicle,Purpose / Destination,Round-Trip Miles,IRS Rate ($/mi),Est. Deduction ($)',
+    ];
+    sorted.forEach((m) => {
+      const mi = Number(m.miles) || 0;
+      const ded = (mi * irsRate).toFixed(2);
+      const veh = (m.vehicle || 'Work Van / Truck').replace(/"/g, '""');
+      const purp = (m.purpose || 'Jobsite / Supply Run').replace(/"/g, '""');
+      lines.push(`"${m.date}","${veh}","${purp}",${mi.toFixed(1)},${irsRate.toFixed(2)},${ded}`);
+    });
+    lines.push(
+      `"TOTAL (${selectedYear})","","${sorted.length} auto-tracked trips",${yearTotalMiles.toFixed(1)},${irsRate.toFixed(2)},${(yearTotalMiles * irsRate).toFixed(2)}`
+    );
+
+    const blob = new Blob([lines.join('\n')], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `Krueger_Tax_Mileage_${selectedYear}.csv`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
   };
 
   const handlePrint = () => {
@@ -155,21 +194,38 @@ export const TaxReportModal: React.FC<TaxReportModalProps> = ({
         </div>
 
         {/* Action Buttons */}
-        <div className="grid grid-cols-2 gap-2">
-          <button
-            type="button"
-            onClick={exportCsv}
-            className="py-2.5 bg-[var(--accent-secondary)] text-white font-extrabold text-xs rounded-xl shadow cursor-pointer transition-transform active:scale-95"
-          >
-            💾 Export CSV
-          </button>
-          <button
-            type="button"
-            onClick={handlePrint}
-            className="py-2.5 bg-[var(--accent)] text-white font-extrabold text-xs rounded-xl shadow cursor-pointer transition-transform active:scale-95"
-          >
-            🖨️ Printable Summary
-          </button>
+        <div className="space-y-2">
+          <div className="grid grid-cols-2 gap-2">
+            <button
+              type="button"
+              onClick={exportCsv}
+              className="py-2.5 bg-[var(--accent-secondary)] text-white font-extrabold text-xs rounded-xl shadow cursor-pointer transition-transform active:scale-95"
+            >
+              💾 Export CSV
+            </button>
+            <button
+              type="button"
+              onClick={handlePrint}
+              className="py-2.5 bg-[var(--accent)] text-white font-extrabold text-xs rounded-xl shadow cursor-pointer transition-transform active:scale-95"
+            >
+              🖨️ Printable Summary
+            </button>
+          </div>
+
+          <div className="flex flex-wrap items-center justify-between gap-2 px-1 pt-0.5 text-[11px] text-[var(--text-muted)]">
+            <span>
+              Auto-tracked {selectedYear}:{' '}
+              <strong className="text-[var(--text)]">{yearTotalMiles.toFixed(1)} mi</strong> (
+              {yearMileageRows.length} trip{yearMileageRows.length === 1 ? '' : 's'})
+            </span>
+            <button
+              type="button"
+              onClick={exportYearEndMileageCsv}
+              className="text-[11px] font-bold text-sky-400 hover:text-sky-300 underline underline-offset-2 cursor-pointer"
+            >
+              Export Year-End Tax Mileage (CSV)
+            </button>
+          </div>
         </div>
 
         {/* Detailed Tables */}

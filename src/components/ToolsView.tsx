@@ -7,7 +7,6 @@ interface ToolsViewProps {
   onOpenCalc: () => void;
   onOpenPriceBook: () => void;
   onOpenColorDb: () => void;
-  onOpenMileage: () => void;
   onOpenExpenses: () => void;
   onOpenShoppingList: () => void;
   onSyncCalendar: () => void;
@@ -22,7 +21,6 @@ export const ToolsView: React.FC<ToolsViewProps> = ({
   onOpenCalc,
   onOpenPriceBook,
   onOpenColorDb,
-  onOpenMileage,
   onOpenExpenses,
   onOpenShoppingList,
   onSyncCalendar,
@@ -38,7 +36,6 @@ export const ToolsView: React.FC<ToolsViewProps> = ({
     { title: 'Calculator', icon: '📐', desc: 'Net sqft & 2-coat paint gals', action: onOpenCalc },
     { title: 'Price Book', icon: '🏷️', desc: 'Sherwin & Menards prices', action: onOpenPriceBook },
     { title: 'Color DB', icon: '🎨', desc: 'Logged formulas & sheens', action: onOpenColorDb },
-    { title: 'Mileage Log', icon: '🚗', desc: 'IRS 67¢/mi auto deduction', action: onOpenMileage },
     { title: 'Expenses & OCR', icon: '🧾', desc: 'Receipt scanner & ledger', action: onOpenExpenses },
     { title: 'Shopping List', icon: '🛒', desc: 'Tape, plastic & paint checklist', action: onOpenShoppingList },
     { title: 'Settings', icon: '⚙️', desc: 'Themes, rates & print terms', action: onOpenSettings },

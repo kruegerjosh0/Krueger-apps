@@ -31,6 +31,17 @@ export const MAP_DEFAULT_ZOOM = 10;
 
 export const PRESET_SUPPLY_STOPS: SupplyStopPin[] = [
   {
+    id: 'preset-sw-wb',
+    name: 'Sherwin-Williams — West Bend',
+    category: 'PAINT_STORE',
+    address: '851 S Main St, West Bend, WI 53095',
+    lat: 43.4180,
+    lng: -88.1818,
+    phone: '(262) 338-8088',
+    notes: 'Sherwin-Williams paint store on S Main St, West Bend',
+    isPreset: true,
+  },
+  {
     id: 'preset-hallman-wb',
     name: 'Hallman Lindsay — West Bend',
     category: 'PAINT_STORE',
@@ -53,14 +64,25 @@ export const PRESET_SUPPLY_STOPS: SupplyStopPin[] = [
     isPreset: true,
   },
   {
-    id: 'preset-sw-wb',
-    name: 'Sherwin-Williams — West Bend',
-    category: 'PAINT_STORE',
-    address: '851 S Main St, West Bend, WI 53095',
-    lat: 43.4180,
-    lng: -88.1818,
-    phone: '(262) 338-8088',
-    notes: 'Sherwin-Williams paint store on S Main St, West Bend',
+    id: 'preset-menards-wb',
+    name: 'Menards — West Bend',
+    category: 'HARDWARE',
+    address: '575 W Paradise Dr, West Bend, WI 53095',
+    lat: 43.3976,
+    lng: -88.1912,
+    phone: '(262) 335-2320',
+    notes: 'Hardware, sundries, caulk, tape & lumber on W Paradise Dr',
+    isPreset: true,
+  },
+  {
+    id: 'preset-fleetfarm-wb',
+    name: 'Fleet Farm — West Bend',
+    category: 'HARDWARE',
+    address: '1637 W Washington St, West Bend, WI 53095',
+    lat: 43.4264,
+    lng: -88.2036,
+    phone: '(262) 334-1993',
+    notes: 'Hardware, drop cloths, ladders & supplies on W Washington St',
     isPreset: true,
   },
   {
@@ -74,6 +96,20 @@ export const PRESET_SUPPLY_STOPS: SupplyStopPin[] = [
     notes: 'Sherwin-Williams paint store on E Sumner St / Hwy 60',
     isPreset: true,
   },
+];
+
+export interface FrequentStopChip {
+  pinId: string;
+  label: string;
+  icon: string;
+}
+
+export const FREQUENT_SUPPLY_STOP_CHIPS: FrequentStopChip[] = [
+  { pinId: 'preset-sw-wb', label: 'Sherwin-Williams WB', icon: '🎨' },
+  { pinId: 'preset-hallman-wb', label: 'Hallman Lindsay WB', icon: '🎨' },
+  { pinId: 'preset-hallman-richfield', label: 'Hallman Lindsay Richfield', icon: '🎨' },
+  { pinId: 'preset-menards-wb', label: 'Menards WB', icon: '🔨' },
+  { pinId: 'preset-fleetfarm-wb', label: 'Fleet Farm WB', icon: '🔨' },
 ];
 
 export const SUPPLY_CATEGORY_META: Record<
@@ -520,6 +556,92 @@ export async function geocodeAddressWithNominatim(
   return null;
 }
 
+// Viewbox biasing Nominatim toward Washington, Fond du Lac, Ozaukee, and Waukesha counties, WI
+// Format: left (west), top (north), right (east), bottom (south)
+export const WI_SERVICE_VIEWBOX = '-88.68,43.90,-87.78,42.90';
+
+export interface PlaceSearchResult {
+  id: string;
+  name: string;
+  address: string;
+  lat: number;
+  lng: number;
+  source: 'NOMINATIM' | 'CUSTOMER' | 'SUPPLY';
+  refId?: string | number;
+  subtitle?: string;
+}
+
+function formatNominatimResult(item: any): PlaceSearchResult | null {
+  const lat = parseFloat(item?.lat);
+  const lng = parseFloat(item?.lon);
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
+
+  const addr = item?.address || {};
+  const houseRoad = [addr.house_number, addr.road].filter(Boolean).join(' ').trim();
+  const city =
+    addr.city || addr.town || addr.village || addr.hamlet || addr.suburb || addr.municipality || '';
+  const state = addr.state === 'Wisconsin' ? 'WI' : addr.state || '';
+  const postcode = addr.postcode || '';
+
+  const cityStateZip = [city, [state, postcode].filter(Boolean).join(' ')].filter(Boolean).join(', ');
+  const primaryName =
+    (typeof item?.name === 'string' && item.name.trim()) ||
+    houseRoad ||
+    (typeof item?.display_name === 'string' ? item.display_name.split(',')[0].trim() : 'Location');
+
+  const compactAddress =
+    [houseRoad, cityStateZip].filter(Boolean).join(', ') ||
+    (typeof item?.display_name === 'string'
+      ? item.display_name
+          .split(',')
+          .slice(0, 4)
+          .map((s: string) => s.trim())
+          .join(', ')
+      : `${lat.toFixed(4)}, ${lng.toFixed(4)}`);
+
+  return {
+    id: `nom-${item.place_id || `${lat.toFixed(4)},${lng.toFixed(4)}`}`,
+    name: primaryName,
+    address: compactAddress,
+    lat,
+    lng,
+    source: 'NOMINATIM',
+    subtitle: item?.type ? String(item.type).replace(/_/g, ' ') : undefined,
+  };
+}
+
+export async function searchPlacesWithNominatim(
+  rawQuery: string,
+  signal?: AbortSignal
+): Promise<PlaceSearchResult[]> {
+  const cleaned = (rawQuery || '').trim();
+  if (cleaned.length < 2) return [];
+
+  const hasState = /\b(wi|wisconsin|il|illinois|mn|minnesota|mi|michigan)\b/i.test(cleaned);
+  const query = hasState ? cleaned : `${cleaned}, WI`;
+
+  try {
+    const url =
+      `https://nominatim.openstreetmap.org/search?format=json&addressdetails=1&limit=4&countrycodes=us` +
+      `&viewbox=${encodeURIComponent(WI_SERVICE_VIEWBOX)}&q=${encodeURIComponent(query)}`;
+    const res = await fetch(url, {
+      headers: { Accept: 'application/json' },
+      signal,
+    });
+    if (!res.ok) return [];
+    const data = await res.json();
+    if (!Array.isArray(data)) return [];
+    const results: PlaceSearchResult[] = [];
+    for (const item of data) {
+      const formatted = formatNominatimResult(item);
+      if (formatted) results.push(formatted);
+    }
+    return results.slice(0, 4);
+  } catch {
+    return [];
+  }
+}
+
 export interface PinWeatherSummary {
   tempF: number;
   windMph: number;
@@ -898,10 +1020,69 @@ export function buildGoogleMapsMultiStopUrl(
   return `https://www.google.com/maps/dir/?api=1&origin=${origin}&destination=${destination}${waypointsParam}&travelmode=driving`;
 }
 
+export interface DriveFromBaseEstimate {
+  oneWayMiles: number;
+  roundTripMiles: number;
+  etaMinutes: number;
+  isRoadData: boolean;
+}
+
+const driveFromBaseCache = new Map<string, DriveFromBaseEstimate>();
+
+export function estimateDriveFromBase(lat: number, lng: number): DriveFromBaseEstimate {
+  const straight = haversineMiles(HOME_BASE.lat, HOME_BASE.lng, lat, lng);
+  const oneWay = Math.max(0.2, Math.round(straight * WI_ROAD_FACTOR * 10) / 10);
+  const roundTrip = Math.round(oneWay * 2 * 10) / 10;
+  const etaMinutes = Math.max(1, Math.round((oneWay / 36) * 60));
+  return {
+    oneWayMiles: oneWay,
+    roundTripMiles: roundTrip,
+    etaMinutes,
+    isRoadData: false,
+  };
+}
+
+export async function fetchDriveFromBase(
+  lat: number,
+  lng: number
+): Promise<DriveFromBaseEstimate> {
+  const key = `${lat.toFixed(4)},${lng.toFixed(4)}`;
+  const cached = driveFromBaseCache.get(key);
+  if (cached) return cached;
+
+  const fallback = estimateDriveFromBase(lat, lng);
+  try {
+    const coords = `${HOME_BASE.lng.toFixed(5)},${HOME_BASE.lat.toFixed(5)};${lng.toFixed(5)},${lat.toFixed(5)}`;
+    const url = `https://router.project-osrm.org/route/v1/driving/${coords}?overview=false`;
+    const res = await fetch(url);
+    if (!res.ok) return fallback;
+    const data = await res.json();
+    const route = data?.routes?.[0];
+    if (!route) return fallback;
+
+    const oneWayMiles = Math.max(
+      0.1,
+      Math.round((Number(route.distance || 0) / 1609.344) * 10) / 10
+    );
+    const etaMinutes = Math.max(1, Math.round(Number(route.duration || 0) / 60));
+    const result: DriveFromBaseEstimate = {
+      oneWayMiles,
+      roundTripMiles: Math.round(oneWayMiles * 2 * 10) / 10,
+      etaMinutes,
+      isRoadData: true,
+    };
+    driveFromBaseCache.set(key, result);
+    return result;
+  } catch {
+    return fallback;
+  }
+}
+
 export function buildSingleStopMapsUrl(address: string, lat: number, lng: number): string {
-  const dest = encodeURIComponent(address?.trim() ? address.trim() : `${lat.toFixed(5)},${lng.toFixed(5)}`);
-  const origin = encodeURIComponent(HOME_BASE.address);
-  return `https://www.google.com/maps/dir/?api=1&origin=${origin}&destination=${dest}&travelmode=driving`;
+  const dest = encodeURIComponent(
+    address?.trim() ? address.trim() : `${lat.toFixed(5)},${lng.toFixed(5)}`
+  );
+  return `https://www.google.com/maps/dir/?api=1&destination=${dest}&travelmode=driving`;
 }
 
 export function sanitizeTelHref(phone?: string): string {

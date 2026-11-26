@@ -1,15 +1,14 @@
-import React, { useEffect, useMemo, useRef, useState, useCallback } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import L from 'leaflet';
 import {
   Customer,
   JobMapStatus,
-  MileageEntry,
-  RouteStopItem,
   SupplyPinCategory,
   SupplyStopPin,
   SystemConstants,
 } from '../types';
 import {
+  FREQUENT_SUPPLY_STOP_CHIPS,
   HOME_BASE,
   JOB_MAP_STATUS_META,
   MAP_DEFAULT_CENTER,
@@ -17,21 +16,21 @@ import {
   PRESET_SUPPLY_STOPS,
   SUPPLY_CATEGORY_META,
   CustomerMapSummary,
+  DriveFromBaseEstimate,
   PinWeatherSummary,
-  RouteMileageEstimate,
-  buildGoogleMapsMultiStopUrl,
+  PlaceSearchResult,
   buildSingleStopMapsUrl,
-  estimateFallbackRoute,
-  fetchOsrmRoadRoute,
+  estimateDriveFromBase,
+  fetchDriveFromBase,
   fetchPinWeatherSummary,
   geocodeAddressWithNominatim,
   getCustomerMapSummary,
   haversineMiles,
-  optimizeRouteStops,
   resolveApproxWisconsinCoords,
   sanitizeTelHref,
+  searchPlacesWithNominatim,
 } from '../utils/mapHelpers';
-import { formatScheduledDate, getLocalTodayIso } from '../utils/projectHelpers';
+import { formatScheduledDate } from '../utils/projectHelpers';
 
 const NEARBY_RADIUS_MILES = 3;
 const NEARBY_RADIUS_METERS = NEARBY_RADIUS_MILES * 1609.344;
@@ -50,13 +49,27 @@ interface JobsiteMapViewProps {
   onDeleteCustomPin: (pinId: string) => void;
   onOpenFolder: (customerId: number) => void;
   onUpdateCustomer: (updated: Customer) => void;
-  onSaveMileage: (entry: MileageEntry) => void;
+  onSilentLogDispatchMileage: (payload: {
+    destKey: string;
+    destName: string;
+    roundTripMiles: number;
+  }) => void;
   onToast: (msg: string) => void;
+}
+
+interface SearchedPin {
+  id: string;
+  name: string;
+  address: string;
+  lat: number;
+  lng: number;
+  subtitle?: string;
 }
 
 type SelectedPin =
   | { kind: 'CUSTOMER'; customerId: number }
   | { kind: 'SUPPLY'; pinId: string }
+  | { kind: 'SEARCH'; pin: SearchedPin }
   | { kind: 'HOME' };
 
 function escapeHtml(raw: string): string {
@@ -84,7 +97,7 @@ export const JobsiteMapView: React.FC<JobsiteMapViewProps> = ({
   onDeleteCustomPin,
   onOpenFolder,
   onUpdateCustomer,
-  onSaveMileage,
+  onSilentLogDispatchMileage,
   onToast,
 }) => {
   const mapContainerRef = useRef<HTMLDivElement | null>(null);
@@ -92,8 +105,8 @@ export const JobsiteMapView: React.FC<JobsiteMapViewProps> = ({
   const tileLayerRef = useRef<L.TileLayer | null>(null);
   const radiusLayerRef = useRef<L.LayerGroup | null>(null);
   const markersLayerRef = useRef<L.LayerGroup | null>(null);
-  const routeLayerRef = useRef<L.LayerGroup | null>(null);
   const geocodedAttemptedRef = useRef<Set<string>>(new Set());
+  const searchBoxRef = useRef<HTMLDivElement | null>(null);
 
   // Map UI Controls
   const [moneyView, setMoneyView] = useState<boolean>(false);
@@ -101,6 +114,16 @@ export const JobsiteMapView: React.FC<JobsiteMapViewProps> = ({
   const [mapStyle, setMapStyle] = useState<'dark' | 'street'>('dark');
   const [statusFilter, setStatusFilter] = useState<'ALL' | JobMapStatus>('ALL');
   const [selectedPin, setSelectedPin] = useState<SelectedPin | null>(null);
+
+  // Universal Search Bar state (Wisconsin-biased Nominatim + local customers/stores)
+  const [searchQuery, setSearchQuery] = useState<string>('');
+  const [nominatimResults, setNominatimResults] = useState<PlaceSearchResult[]>([]);
+  const [isSearching, setIsSearching] = useState<boolean>(false);
+  const [searchDropdownOpen, setSearchDropdownOpen] = useState<boolean>(false);
+  const [droppedSearchPin, setDroppedSearchPin] = useState<SearchedPin | null>(null);
+
+  // Live Drive Distance & ETA from Home Base (2119 Barton Ave) for active pin
+  const [activeDriveEstimate, setActiveDriveEstimate] = useState<DriveFromBaseEstimate | null>(null);
 
   // Live Open-Meteo weather for currently tapped customer pin & exterior/deck map pins
   const [pinWeather, setPinWeather] = useState<PinWeatherSummary | null>(null);
@@ -115,15 +138,6 @@ export const JobsiteMapView: React.FC<JobsiteMapViewProps> = ({
   >({});
   const [isGeocodingCount, setIsGeocodingCount] = useState<number>(0);
 
-  // Multi-Stop Route Builder state
-  const [routeStops, setRouteStops] = useState<RouteStopItem[]>([]);
-  const [returnToBase, setReturnToBase] = useState<boolean>(true);
-  const [routeEstimate, setRouteEstimate] = useState<RouteMileageEstimate>(() =>
-    estimateFallbackRoute([], true)
-  );
-  const [loadingRoadRoute, setLoadingRoadRoute] = useState<boolean>(false);
-  const [quickAddStopValue, setQuickAddStopValue] = useState<string>('');
-
   // "+ Add Custom Pin" modal state
   const [addPinModalOpen, setAddPinModalOpen] = useState<boolean>(false);
   const [newPinName, setNewPinName] = useState<string>('');
@@ -134,7 +148,7 @@ export const JobsiteMapView: React.FC<JobsiteMapViewProps> = ({
   const [useMapCenterCoords, setUseMapCenterCoords] = useState<boolean>(false);
   const [savingPin, setSavingPin] = useState<boolean>(false);
 
-  // Combine preset paint stores + user-saved custom pins
+  // Combine preset paint/hardware stores + user-saved custom pins
   const allSupplyPins = useMemo<SupplyStopPin[]>(() => {
     return [...PRESET_SUPPLY_STOPS, ...customSupplyPins];
   }, [customSupplyPins]);
@@ -145,7 +159,12 @@ export const JobsiteMapView: React.FC<JobsiteMapViewProps> = ({
   >(() => {
     return customers.map((c) => {
       const summary = getCustomerMapSummary(c, constants);
-      if (typeof c.lat === 'number' && typeof c.lng === 'number' && Number.isFinite(c.lat) && Number.isFinite(c.lng)) {
+      if (
+        typeof c.lat === 'number' &&
+        typeof c.lng === 'number' &&
+        Number.isFinite(c.lat) &&
+        Number.isFinite(c.lng)
+      ) {
         return { ...summary, lat: c.lat, lng: c.lng, isApprox: false };
       }
       const runtime = resolvedCoords[c.id];
@@ -193,11 +212,107 @@ export const JobsiteMapView: React.FC<JobsiteMapViewProps> = ({
     return { totalQuoted, totalDepositsOwed, totalBalancesOwed };
   }, [visibleCustomerPins]);
 
+  // Instant local search matches (customers + supply stores)
+  const localSearchMatches = useMemo<PlaceSearchResult[]>(() => {
+    const q = searchQuery.trim().toLowerCase();
+    if (q.length < 2) return [];
+    const tokens = q.split(/\s+/).filter(Boolean);
+    const matchesAll = (haystack: string) =>
+      tokens.every((tok) => haystack.toLowerCase().includes(tok));
+
+    const out: PlaceSearchResult[] = [];
+
+    for (const s of allSupplyPins) {
+      if (matchesAll(`${s.name} ${s.address} ${s.notes || ''}`)) {
+        out.push({
+          id: `supply-${s.id}`,
+          name: s.name,
+          address: s.address,
+          lat: s.lat,
+          lng: s.lng,
+          source: 'SUPPLY',
+          refId: s.id,
+          subtitle: SUPPLY_CATEGORY_META[s.category].label,
+        });
+      }
+    }
+
+    for (const c of customerSummaries) {
+      if (matchesAll(`${c.customer.name} ${c.customer.address || ''}`)) {
+        out.push({
+          id: `cust-${c.customer.id}`,
+          name: c.customer.name,
+          address: c.customer.address || 'Wisconsin Jobsite',
+          lat: c.lat,
+          lng: c.lng,
+          source: 'CUSTOMER',
+          refId: c.customer.id,
+          subtitle: JOB_MAP_STATUS_META[c.mapStatus].label,
+        });
+      }
+    }
+
+    return out.slice(0, 3);
+  }, [searchQuery, allSupplyPins, customerSummaries]);
+
+  // Debounced Nominatim Wisconsin-biased search
+  useEffect(() => {
+    const q = searchQuery.trim();
+    if (q.length < 2) {
+      setNominatimResults([]);
+      setIsSearching(false);
+      return;
+    }
+
+    const controller = new AbortController();
+    setIsSearching(true);
+    const timer = setTimeout(async () => {
+      const results = await searchPlacesWithNominatim(q, controller.signal);
+      if (!controller.signal.aborted) {
+        setNominatimResults(results);
+        setIsSearching(false);
+      }
+    }, 320);
+
+    return () => {
+      clearTimeout(timer);
+      controller.abort();
+    };
+  }, [searchQuery]);
+
+  // Combined top 4 deduplicated dropdown results
+  const combinedSearchResults = useMemo<PlaceSearchResult[]>(() => {
+    const merged: PlaceSearchResult[] = [...localSearchMatches];
+    for (const nr of nominatimResults) {
+      const isDup = merged.some(
+        (m) => haversineMiles(m.lat, m.lng, nr.lat, nr.lng) < 0.08
+      );
+      if (!isDup) merged.push(nr);
+      if (merged.length >= 4) break;
+    }
+    return merged.slice(0, 4);
+  }, [localSearchMatches, nominatimResults]);
+
+  // Close search dropdown on outside tap
+  useEffect(() => {
+    const handleOutside = (e: MouseEvent) => {
+      if (searchBoxRef.current && !searchBoxRef.current.contains(e.target as Node)) {
+        setSearchDropdownOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleOutside);
+    return () => document.removeEventListener('mousedown', handleOutside);
+  }, []);
+
   // Background geocode customers that have a street address but no saved lat/lng yet
   useEffect(() => {
     let cancelled = false;
     const toGeocode = customers.filter((c) => {
-      const hasCoords = typeof c.lat === 'number' && typeof c.lng === 'number' && Number.isFinite(c.lat) && Number.isFinite(c.lng);
+      const hasCoords =
+        typeof c.lat === 'number' &&
+        typeof c.lng === 'number' &&
+        Number.isFinite(c.lat) &&
+        Number.isFinite(c.lng);
       const addr = (c.address || '').trim();
       const attemptKey = `${c.id}:${addr.toLowerCase()}`;
       return !hasCoords && addr.length >= 5 && !geocodedAttemptedRef.current.has(attemptKey);
@@ -253,12 +368,10 @@ export const JobsiteMapView: React.FC<JobsiteMapViewProps> = ({
 
     const radiusLayer = L.layerGroup().addTo(map);
     const markersLayer = L.layerGroup().addTo(map);
-    const routeLayer = L.layerGroup().addTo(map);
 
     mapInstanceRef.current = map;
     radiusLayerRef.current = radiusLayer;
     markersLayerRef.current = markersLayer;
-    routeLayerRef.current = routeLayer;
 
     const handleResize = () => map.invalidateSize();
     window.addEventListener('resize', handleResize);
@@ -272,7 +385,6 @@ export const JobsiteMapView: React.FC<JobsiteMapViewProps> = ({
       tileLayerRef.current = null;
       radiusLayerRef.current = null;
       markersLayerRef.current = null;
-      routeLayerRef.current = null;
     };
   }, []);
 
@@ -292,7 +404,7 @@ export const JobsiteMapView: React.FC<JobsiteMapViewProps> = ({
     }).addTo(map);
   }, [mapStyle]);
 
-  // Selected customer / supply pin lookup
+  // Selected pin lookups
   const selectedCustomerItem = useMemo(() => {
     if (selectedPin?.kind !== 'CUSTOMER') return null;
     return customerSummaries.find((s) => s.customer.id === selectedPin.customerId) || null;
@@ -302,6 +414,47 @@ export const JobsiteMapView: React.FC<JobsiteMapViewProps> = ({
     if (selectedPin?.kind !== 'SUPPLY') return null;
     return allSupplyPins.find((p) => p.id === selectedPin.pinId) || null;
   }, [selectedPin, allSupplyPins]);
+
+  const selectedSearchPin = useMemo(() => {
+    if (selectedPin?.kind !== 'SEARCH') return null;
+    return selectedPin.pin;
+  }, [selectedPin]);
+
+  // Coordinates of the currently selected destination (for Drive Distance / ETA from 2119 Barton Ave)
+  const activeDestinationCoords = useMemo<{ lat: number; lng: number } | null>(() => {
+    if (selectedCustomerItem) {
+      return { lat: selectedCustomerItem.lat, lng: selectedCustomerItem.lng };
+    }
+    if (selectedSupplyPin) {
+      return { lat: selectedSupplyPin.lat, lng: selectedSupplyPin.lng };
+    }
+    if (selectedSearchPin) {
+      return { lat: selectedSearchPin.lat, lng: selectedSearchPin.lng };
+    }
+    return null;
+  }, [selectedCustomerItem, selectedSupplyPin, selectedSearchPin]);
+
+  // Immediately estimate + silently upgrade live driving distance & ETA from 2119 Barton Ave
+  useEffect(() => {
+    if (!activeDestinationCoords) {
+      setActiveDriveEstimate(null);
+      return;
+    }
+    let cancelled = false;
+    const immediate = estimateDriveFromBase(
+      activeDestinationCoords.lat,
+      activeDestinationCoords.lng
+    );
+    setActiveDriveEstimate(immediate);
+
+    fetchDriveFromBase(activeDestinationCoords.lat, activeDestinationCoords.lng).then((res) => {
+      if (!cancelled) setActiveDriveEstimate(res);
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [activeDestinationCoords?.lat, activeDestinationCoords?.lng]);
 
   // Nearby leads & past clients within 3 miles of the selected customer pin
   const nearbyCustomers = useMemo(() => {
@@ -378,29 +531,7 @@ export const JobsiteMapView: React.FC<JobsiteMapViewProps> = ({
     };
   }, [exteriorPinKey]);
 
-  // Route stop helpers
-  const routeIndexById = useMemo(() => {
-    const map = new Map<string, number>();
-    routeStops.forEach((s, idx) => map.set(s.id, idx + 1));
-    return map;
-  }, [routeStops]);
-
-  const toggleStopInRoute = useCallback(
-    (stop: RouteStopItem) => {
-      setRouteStops((prev) => {
-        const exists = prev.some((s) => s.id === stop.id);
-        if (exists) {
-          onToast(`Removed ${stop.name} from route`);
-          return prev.filter((s) => s.id !== stop.id);
-        }
-        onToast(`Added ${stop.name} (#${prev.length + 1}) to route`);
-        return [...prev, stop];
-      });
-    },
-    [onToast]
-  );
-
-  // Render markers whenever pins, mode, selection, or route sequence changes
+  // Render map markers whenever pins, mode, selection, or search pin changes
   useEffect(() => {
     const map = mapInstanceRef.current;
     const markersLayer = markersLayerRef.current;
@@ -434,17 +565,11 @@ export const JobsiteMapView: React.FC<JobsiteMapViewProps> = ({
     }).addTo(markersLayer);
     homeMarker.on('click', () => setSelectedPin({ kind: 'HOME' }));
 
-    // 2. Supply & Gas Stop Overlay Pins
+    // 2. Supply & Hardware Stop Overlay Pins
     if (showSupplyLayer) {
       allSupplyPins.forEach((pin) => {
         const cat = SUPPLY_CATEGORY_META[pin.category];
-        const routeStopId = `supply-${pin.id}`;
-        const stopNum = routeIndexById.get(routeStopId);
         const isSelected = selectedPin?.kind === 'SUPPLY' && selectedPin.pinId === pin.id;
-
-        const stopBadgeHtml = stopNum
-          ? `<span style="background:#06b6d4;color:#04121a;border-radius:9999px;padding:0 5px;font-size:9px;font-weight:900;margin-left:2px;">#${stopNum}</span>`
-          : '';
 
         const supplyIcon = L.divIcon({
           className: 'krueger-map-divicon',
@@ -452,7 +577,7 @@ export const JobsiteMapView: React.FC<JobsiteMapViewProps> = ({
             <div style="
               display:inline-flex;align-items:center;gap:3px;
               background:${cat.bg};color:${cat.color};
-              border:2px solid ${isSelected ? '#ffffff' : stopNum ? '#06b6d4' : cat.color};
+              border:2px solid ${isSelected ? '#ffffff' : cat.color};
               border-radius:8px;padding:3px 6px;
               font-size:10px;font-weight:800;white-space:nowrap;
               box-shadow:0 2px 10px rgba(0,0,0,0.72);
@@ -460,7 +585,6 @@ export const JobsiteMapView: React.FC<JobsiteMapViewProps> = ({
             ">
               <span>${cat.icon}</span>
               <span>${escapeHtml(pin.name.split('—')[0].trim().slice(0, 14))}</span>
-              ${stopBadgeHtml}
             </div>
           `,
           iconSize: [0, 0],
@@ -469,7 +593,7 @@ export const JobsiteMapView: React.FC<JobsiteMapViewProps> = ({
 
         const marker = L.marker([pin.lat, pin.lng], {
           icon: supplyIcon,
-          zIndexOffset: isSelected ? 850 : stopNum ? 700 : 350,
+          zIndexOffset: isSelected ? 850 : 350,
         }).addTo(markersLayer);
 
         marker.on('click', () => {
@@ -478,12 +602,43 @@ export const JobsiteMapView: React.FC<JobsiteMapViewProps> = ({
       });
     }
 
-    // 3. Customer & Jobsite Pins (Status Mode vs Money View)
+    // 3. Dropped Search Result Pin (if user searched an address or store)
+    if (droppedSearchPin) {
+      const isSearchSelected = selectedPin?.kind === 'SEARCH';
+      const searchIcon = L.divIcon({
+        className: 'krueger-map-divicon',
+        html: `
+          <div style="
+            display:inline-flex;align-items:center;gap:4px;
+            background:#0c4a6e;color:#f0f9ff;
+            border:2px solid ${isSearchSelected ? '#ffffff' : '#38bdf8'};
+            border-radius:9999px;padding:4px 9px;
+            font-size:10.5px;font-weight:900;white-space:nowrap;
+            box-shadow:0 0 0 3px rgba(56,189,248,0.35), 0 4px 14px rgba(0,0,0,0.85);
+            transform:translate(-50%,-50%);
+          ">
+            <span>🔎</span>
+            <span>${escapeHtml(droppedSearchPin.name.slice(0, 18))}</span>
+          </div>
+        `,
+        iconSize: [0, 0],
+        iconAnchor: [0, 0],
+      });
+
+      const searchMarker = L.marker([droppedSearchPin.lat, droppedSearchPin.lng], {
+        icon: searchIcon,
+        zIndexOffset: 980,
+      }).addTo(markersLayer);
+
+      searchMarker.on('click', () => {
+        setSelectedPin({ kind: 'SEARCH', pin: droppedSearchPin });
+      });
+    }
+
+    // 4. Customer & Jobsite Pins (Status Mode vs Money View)
     visibleCustomerPins.forEach((item) => {
       const { customer, mapStatus, isActiveInProgress, isExteriorJob, financials, lat, lng } = item;
       const meta = JOB_MAP_STATUS_META[mapStatus];
-      const routeStopId = `cust-${customer.id}`;
-      const stopNum = routeIndexById.get(routeStopId);
       const isSelected = selectedPin?.kind === 'CUSTOMER' && selectedPin.customerId === customer.id;
       const isNearbyNeighbor = nearbyCustomerIdSet.has(customer.id);
       const extWx = isExteriorJob ? exteriorWeatherByCustId[customer.id] : undefined;
@@ -494,10 +649,6 @@ export const JobsiteMapView: React.FC<JobsiteMapViewProps> = ({
             const tip = `Exterior Weather: ${extWx.paintBadge} (${extWx.tempF}°F, ${extWx.windMph} mph, ${extWx.rainChancePct}% rain)`;
             return `<span data-weather-dot="${extWx.paintTone}" title="${escapeHtml(tip)}" style="width:8px;height:8px;border-radius:50%;background:${dotColor};border:1.5px solid #09090b;box-shadow:0 0 6px ${dotColor};display:inline-block;flex-shrink:0;"></span>`;
           })()
-        : '';
-
-      const stopBadgeHtml = stopNum
-        ? `<span style="background:#06b6d4;color:#04121a;border-radius:9999px;padding:0 5px;font-size:9px;font-weight:900;margin-left:3px;">#${stopNum}</span>`
         : '';
 
       const pinShadow = isNearbyNeighbor
@@ -533,7 +684,6 @@ export const JobsiteMapView: React.FC<JobsiteMapViewProps> = ({
             <span style="width:7px;height:7px;border-radius:50%;background:${moneyColor};display:inline-block;flex-shrink:0;"></span>
             <span>${escapeHtml(pillText)}</span>
             ${weatherDotHtml}
-            ${stopBadgeHtml}
           </div>
         `;
       } else {
@@ -545,7 +695,7 @@ export const JobsiteMapView: React.FC<JobsiteMapViewProps> = ({
           <div style="
             display:inline-flex;align-items:center;gap:4px;
             background:#111319;color:#f8fafc;
-            border:2px solid ${isSelected ? '#ffffff' : isNearbyNeighbor ? '#38bdf8' : stopNum ? '#06b6d4' : meta.color};
+            border:2px solid ${isSelected ? '#ffffff' : isNearbyNeighbor ? '#38bdf8' : meta.color};
             border-radius:9999px;padding:3px 8px;
             font-size:10.5px;font-weight:800;white-space:nowrap;
             box-shadow:${pinShadow};
@@ -555,7 +705,6 @@ export const JobsiteMapView: React.FC<JobsiteMapViewProps> = ({
             <span>${escapeHtml(shortName)}</span>
             ${weatherDotHtml}
             ${activeDot}
-            ${stopBadgeHtml}
           </div>
         `;
       }
@@ -569,7 +718,7 @@ export const JobsiteMapView: React.FC<JobsiteMapViewProps> = ({
 
       const marker = L.marker([lat, lng], {
         icon,
-        zIndexOffset: isSelected ? 950 : isNearbyNeighbor ? 820 : stopNum ? 750 : 500,
+        zIndexOffset: isSelected ? 950 : isNearbyNeighbor ? 820 : 500,
       }).addTo(markersLayer);
 
       marker.on('click', () => {
@@ -582,59 +731,10 @@ export const JobsiteMapView: React.FC<JobsiteMapViewProps> = ({
     showSupplyLayer,
     moneyView,
     selectedPin,
-    routeIndexById,
     nearbyCustomerIdSet,
     exteriorWeatherByCustId,
+    droppedSearchPin,
   ]);
-
-  // Compute route mileage & fetch live OSRM road geometry whenever routeStops or returnToBase changes
-  useEffect(() => {
-    const fallback = estimateFallbackRoute(routeStops, returnToBase);
-    setRouteEstimate(fallback);
-
-    if (routeStops.length === 0) {
-      setLoadingRoadRoute(false);
-      return;
-    }
-
-    let cancelled = false;
-    setLoadingRoadRoute(true);
-
-    fetchOsrmRoadRoute(routeStops, returnToBase).then((osrmRes) => {
-      if (cancelled) return;
-      setLoadingRoadRoute(false);
-      if (osrmRes) {
-        setRouteEstimate(osrmRes);
-      }
-    });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [routeStops, returnToBase]);
-
-  // Draw route polyline on Leaflet map
-  useEffect(() => {
-    const routeLayer = routeLayerRef.current;
-    if (!routeLayer) return;
-    routeLayer.clearLayers();
-
-    if (routeEstimate.geometryLatLngs.length < 2) return;
-
-    // Subtle dark outer halo + bright cyan/amber road line
-    L.polyline(routeEstimate.geometryLatLngs, {
-      color: '#020617',
-      weight: 7,
-      opacity: 0.7,
-    }).addTo(routeLayer);
-
-    L.polyline(routeEstimate.geometryLatLngs, {
-      color: '#22d3ee',
-      weight: 4,
-      opacity: 0.95,
-      dashArray: routeEstimate.isRoadGeometry ? undefined : '8 6',
-    }).addTo(routeLayer);
-  }, [routeEstimate]);
 
   // Fetch live Open-Meteo weather when a customer pin is tapped
   useEffect(() => {
@@ -659,6 +759,80 @@ export const JobsiteMapView: React.FC<JobsiteMapViewProps> = ({
     };
   }, [selectedCustomerItem?.customer.id, selectedCustomerItem?.lat, selectedCustomerItem?.lng]);
 
+  // Search selection handler
+  const handleSelectSearchResult = (res: PlaceSearchResult) => {
+    setSearchDropdownOpen(false);
+    setSearchQuery(res.name);
+
+    if (res.source === 'CUSTOMER' && typeof res.refId === 'number') {
+      setDroppedSearchPin(null);
+      setSelectedPin({ kind: 'CUSTOMER', customerId: res.refId });
+      mapInstanceRef.current?.setView([res.lat, res.lng], 13, { animate: true });
+      return;
+    }
+
+    if (res.source === 'SUPPLY' && typeof res.refId === 'string') {
+      setDroppedSearchPin(null);
+      setShowSupplyLayer(true);
+      setSelectedPin({ kind: 'SUPPLY', pinId: res.refId });
+      mapInstanceRef.current?.setView([res.lat, res.lng], 13, { animate: true });
+      return;
+    }
+
+    const pin: SearchedPin = {
+      id: res.id,
+      name: res.name,
+      address: res.address,
+      lat: res.lat,
+      lng: res.lng,
+      subtitle: res.subtitle,
+    };
+    setDroppedSearchPin(pin);
+    setSelectedPin({ kind: 'SEARCH', pin });
+    mapInstanceRef.current?.setView([pin.lat, pin.lng], 13, { animate: true });
+  };
+
+  // Handle Enter key in search input
+  const handleSearchSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (combinedSearchResults.length > 0) {
+      handleSelectSearchResult(combinedSearchResults[0]);
+      return;
+    }
+    const q = searchQuery.trim();
+    if (q.length < 2) return;
+    setIsSearching(true);
+    const results = await searchPlacesWithNominatim(q);
+    setIsSearching(false);
+    setNominatimResults(results);
+    if (results.length > 0) {
+      handleSelectSearchResult(results[0]);
+    } else {
+      onToast('No matching WI address or store found');
+    }
+  };
+
+  // One-tap Frequent Supply Stop chip handler
+  const handleSelectFrequentStop = (pinId: string) => {
+    const found = allSupplyPins.find((p) => p.id === pinId);
+    if (!found) return;
+    setShowSupplyLayer(true);
+    setDroppedSearchPin(null);
+    setSearchDropdownOpen(false);
+    setSelectedPin({ kind: 'SUPPLY', pinId: found.id });
+    mapInstanceRef.current?.setView([found.lat, found.lng], 13, { animate: true });
+  };
+
+  // Silent background mileage trigger when opening Google Maps (zero popups/toasts)
+  const handleOpenGoogleMapsClick = (destKey: string, destName: string, lat: number, lng: number) => {
+    const drive = activeDriveEstimate || estimateDriveFromBase(lat, lng);
+    onSilentLogDispatchMileage({
+      destKey,
+      destName,
+      roundTripMiles: drive.roundTripMiles,
+    });
+  };
+
   // Map navigation actions
   const handleCenterHomeBase = () => {
     mapInstanceRef.current?.setView([HOME_BASE.lat, HOME_BASE.lng], 12, { animate: true });
@@ -672,6 +846,9 @@ export const JobsiteMapView: React.FC<JobsiteMapViewProps> = ({
     visibleCustomerPins.forEach((c) => pts.push([c.lat, c.lng]));
     if (showSupplyLayer) {
       allSupplyPins.forEach((s) => pts.push([s.lat, s.lng]));
+    }
+    if (droppedSearchPin) {
+      pts.push([droppedSearchPin.lat, droppedSearchPin.lng]);
     }
     if (pts.length <= 1) {
       map.setView(MAP_DEFAULT_CENTER, MAP_DEFAULT_ZOOM, { animate: true });
@@ -759,118 +936,18 @@ export const JobsiteMapView: React.FC<JobsiteMapViewProps> = ({
     onToast(`✔ Saved custom pin: ${newPin.name}`);
   };
 
-  // Route Builder mutations
-  const moveStop = (index: number, delta: -1 | 1) => {
-    setRouteStops((prev) => {
-      const target = index + delta;
-      if (target < 0 || target >= prev.length) return prev;
-      const copy = [...prev];
-      const [item] = copy.splice(index, 1);
-      copy.splice(target, 0, item);
-      return copy;
-    });
-  };
-
-  const handleOptimizeRoute = () => {
-    if (routeStops.length < 2) return;
-    const beforeEst = estimateFallbackRoute(routeStops, returnToBase);
-    const beforeMiles = returnToBase ? beforeEst.roundTripMiles : beforeEst.oneWayMiles;
-    const sorted = optimizeRouteStops(routeStops, returnToBase);
-    const afterEst = estimateFallbackRoute(sorted, returnToBase);
-    const afterMiles = returnToBase ? afterEst.roundTripMiles : afterEst.oneWayMiles;
-    const savedMiles = Math.max(0, Math.round((beforeMiles - afterMiles) * 10) / 10);
-    setRouteStops(sorted);
-    onToast(
-      savedMiles >= 0.2
-        ? `⚡ Sorted fastest ${returnToBase ? 'loop' : 'route'} — saved ~${savedMiles.toFixed(1)} mi`
-        : `⚡ Stops sorted into fastest ${returnToBase ? 'loop' : 'sequence'} from Home Base`
-    );
-  };
-
-  const handleQuickAddStop = (val: string) => {
-    setQuickAddStopValue('');
-    if (!val) return;
-    if (val.startsWith('cust-')) {
-      const cid = Number(val.slice(5));
-      const found = customerSummaries.find((c) => c.customer.id === cid);
-      if (!found) return;
-      const stop: RouteStopItem = {
-        id: `cust-${found.customer.id}`,
-        kind: 'CUSTOMER',
-        refId: found.customer.id,
-        name: found.customer.name,
-        address: found.customer.address || 'Wisconsin Jobsite',
-        lat: found.lat,
-        lng: found.lng,
-        subtitle: JOB_MAP_STATUS_META[found.mapStatus].shortLabel,
-      };
-      if (!routeIndexById.has(stop.id)) {
-        toggleStopInRoute(stop);
-      }
-    } else if (val.startsWith('supply-')) {
-      const pid = val.slice(7);
-      const found = allSupplyPins.find((p) => p.id === pid);
-      if (!found) return;
-      const stop: RouteStopItem = {
-        id: `supply-${found.id}`,
-        kind: 'SUPPLY',
-        refId: found.id,
-        name: found.name,
-        address: found.address,
-        lat: found.lat,
-        lng: found.lng,
-        subtitle: SUPPLY_CATEGORY_META[found.category].shortLabel,
-      };
-      if (!routeIndexById.has(stop.id)) {
-        toggleStopInRoute(stop);
-      }
-    }
-  };
-
-  const handleLogRouteMileage = () => {
-    if (routeStops.length === 0) return;
-    const milesToLog = returnToBase
-      ? routeEstimate.roundTripMiles
-      : routeEstimate.oneWayMiles;
-    const stopSequence = [
-      HOME_BASE.shortName,
-      ...routeStops.map((s) => s.name),
-      ...(returnToBase ? [HOME_BASE.shortName] : []),
-    ].join(' → ');
-    const entry: MileageEntry = {
-      id: Date.now(),
-      date: getLocalTodayIso(),
-      vehicle: 'Work Van / Truck',
-      miles: Math.round(milesToLog * 10) / 10,
-      purpose: `${returnToBase ? 'Round-trip' : 'One-way'} route: ${stopSequence}`,
-    };
-    onSaveMileage(entry);
-    onToast(`✔ Saved ${entry.miles.toFixed(1)} mi to Mileage Log`);
-  };
-
-  const googleMapsRouteUrl = useMemo(
-    () => buildGoogleMapsMultiStopUrl(routeStops, returnToBase),
-    [routeStops, returnToBase]
-  );
-
-  const displayedMiles = returnToBase
-    ? routeEstimate.roundTripMiles
-    : routeEstimate.oneWayMiles;
-  const irsRate = constants.irsRate || 0.67;
-  const estTaxDeduction = displayedMiles * irsRate;
-
   return (
     <div className="space-y-3 pb-24">
-      {/* Top Bar */}
+      {/* Top Dispatch Search, Frequent Stops & Map Controls */}
       <div className="bg-[var(--surface)] border border-[var(--border)] rounded-2xl p-3 shadow-sm space-y-2.5">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <div>
             <h2 className="text-sm sm:text-base font-black uppercase tracking-wide text-[var(--accent)] flex items-center gap-1.5">
               <span>🗺️</span>
-              <span>Jobsite Map &amp; Route Board</span>
+              <span>Jobsite Map &amp; Dispatch</span>
             </h2>
             <p className="text-[10px] text-[var(--text-muted)]">
-              Washington &amp; S. Fond du Lac Counties • Base: {HOME_BASE.address}
+              Base: {HOME_BASE.address}
               {isGeocodingCount > 0 && (
                 <span className="ml-2 text-amber-400 font-bold">
                   • Locating {isGeocodingCount} address{isGeocodingCount > 1 ? 'es' : ''}…
@@ -905,6 +982,118 @@ export const JobsiteMapView: React.FC<JobsiteMapViewProps> = ({
           </div>
         </div>
 
+        {/* Universal Store & Address Search Bar (Wisconsin-Biased Nominatim) */}
+        <div ref={searchBoxRef} className="relative">
+          <form onSubmit={handleSearchSubmit} className="relative flex items-center">
+            <span className="pointer-events-none absolute left-3 text-sm text-[var(--text-muted)]">
+              🔎
+            </span>
+            <input
+              type="text"
+              inputMode="search"
+              enterKeyHint="search"
+              value={searchQuery}
+              onFocus={() => setSearchDropdownOpen(true)}
+              onChange={(e) => {
+                setSearchQuery(e.target.value);
+                setSearchDropdownOpen(true);
+              }}
+              placeholder="Search address, town, or store (e.g. Menards West Bend)…"
+              aria-label="Search store, town, or address"
+              className="w-full bg-[var(--bg)] border border-[var(--border)] focus:border-sky-400 text-[var(--text)] rounded-xl pl-9 pr-16 py-2.5 text-xs font-semibold outline-none shadow-inner"
+            />
+            {isSearching && (
+              <span className="absolute right-9 text-[10px] font-bold text-sky-400 animate-pulse">
+                …
+              </span>
+            )}
+            {searchQuery.trim().length > 0 && (
+              <button
+                type="button"
+                onClick={() => {
+                  setSearchQuery('');
+                  setNominatimResults([]);
+                  setSearchDropdownOpen(false);
+                }}
+                aria-label="Clear search"
+                className="absolute right-2.5 px-1.5 py-0.5 rounded-md text-xs font-bold text-[var(--text-muted)] hover:text-[var(--text)] cursor-pointer"
+              >
+                ✕
+              </button>
+            )}
+          </form>
+
+          {/* Instant Search Dropdown (Top 3–4 Results) */}
+          {searchDropdownOpen && searchQuery.trim().length >= 2 && (
+            <div
+              data-search-dropdown="true"
+              className="absolute left-0 right-0 top-full mt-1.5 z-[600] bg-[#101218] border border-sky-500/40 rounded-xl shadow-2xl overflow-hidden divide-y divide-slate-800/80"
+            >
+              {combinedSearchResults.length > 0 ? (
+                combinedSearchResults.map((res) => {
+                  const est = estimateDriveFromBase(res.lat, res.lng);
+                  const badgeIcon =
+                    res.source === 'CUSTOMER' ? '📍' : res.source === 'SUPPLY' ? '🎨' : '🔎';
+                  return (
+                    <button
+                      key={res.id}
+                      type="button"
+                      onClick={() => handleSelectSearchResult(res)}
+                      className="w-full px-3 py-2.5 text-left hover:bg-slate-800/90 flex items-center justify-between gap-2 transition-colors cursor-pointer"
+                    >
+                      <div className="flex items-start gap-2 min-w-0">
+                        <span className="text-sm mt-0.5 shrink-0">{badgeIcon}</span>
+                        <div className="min-w-0">
+                          <div className="text-xs font-extrabold text-white truncate">
+                            {res.name}
+                          </div>
+                          <div className="text-[10px] text-slate-400 truncate">
+                            {res.address}
+                          </div>
+                        </div>
+                      </div>
+                      <div className="text-right shrink-0">
+                        <div className="text-[10.5px] font-extrabold text-sky-300">
+                          {est.oneWayMiles.toFixed(1)} mi
+                        </div>
+                        <div className="text-[9px] text-slate-400">~{est.etaMinutes} min</div>
+                      </div>
+                    </button>
+                  );
+                })
+              ) : (
+                <div className="px-3 py-2.5 text-[11px] text-slate-400">
+                  {isSearching
+                    ? 'Searching Wisconsin addresses & stores…'
+                    : 'No matches yet — press Enter to search'}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+
+        {/* Quick "Frequent Stops" Horizontal Chip Bar */}
+        <div className="flex items-center gap-1.5 overflow-x-auto pb-0.5" data-frequent-stops="true">
+          {FREQUENT_SUPPLY_STOP_CHIPS.map((chip) => {
+            const active = selectedPin?.kind === 'SUPPLY' && selectedPin.pinId === chip.pinId;
+            return (
+              <button
+                key={chip.pinId}
+                type="button"
+                onClick={() => handleSelectFrequentStop(chip.pinId)}
+                className={`px-2.5 py-1.5 rounded-full text-[10.5px] font-extrabold border whitespace-nowrap cursor-pointer transition-all active:scale-95 flex items-center gap-1 shrink-0 ${
+                  active
+                    ? 'bg-amber-500 text-slate-950 border-amber-400 shadow'
+                    : 'bg-[var(--bg)] text-[var(--text)] border-[var(--border)] hover:border-amber-400/70'
+                }`}
+              >
+                <span>{chip.icon}</span>
+                <span>{chip.label}</span>
+              </button>
+            );
+          })}
+        </div>
+
         {/* Mode & Layer Toggle Row */}
         <div className="flex flex-wrap items-center gap-1.5">
           {/* Status vs Money View segmented toggle */}
@@ -933,7 +1122,7 @@ export const JobsiteMapView: React.FC<JobsiteMapViewProps> = ({
             </button>
           </div>
 
-          {/* Supply & Gas Stops Overlay Toggle */}
+          {/* Supply Stops Overlay Toggle */}
           <button
             type="button"
             onClick={() => setShowSupplyLayer((prev) => !prev)}
@@ -944,7 +1133,7 @@ export const JobsiteMapView: React.FC<JobsiteMapViewProps> = ({
             }`}
           >
             <span>🎨</span>
-            <span>Supply &amp; Gas Stops ({allSupplyPins.length})</span>
+            <span>Supply Stops ({allSupplyPins.length})</span>
           </button>
 
           {/* + Add Custom Pin Button */}
@@ -1032,18 +1221,18 @@ export const JobsiteMapView: React.FC<JobsiteMapViewProps> = ({
       <div className="relative rounded-2xl overflow-hidden border border-[var(--border)] shadow-2xl bg-[#0b0d12]">
         <div
           ref={mapContainerRef}
-          className="w-full h-[50vh] sm:h-[56vh] min-h-[340px] max-h-[600px] z-0"
+          className="w-full h-[52vh] sm:h-[58vh] min-h-[340px] max-h-[600px] z-0"
         />
 
         {/* Empty state hint overlay when zero customers are saved yet */}
-        {customers.length === 0 && (
+        {customers.length === 0 && !selectedPin && (
           <div className="pointer-events-none absolute top-3 left-1/2 -translate-x-1/2 z-[450] bg-slate-950/90 border border-amber-400/50 text-amber-200 px-3 py-1.5 rounded-full text-[10px] font-bold shadow-lg whitespace-nowrap">
-            No customer folders yet — tap paint stores or add a customer to plot jobsites
+            Search any store/address above or tap a Frequent Stop chip to dispatch
           </div>
         )}
       </div>
 
-      {/* Selected Pin Detail Card (rendered below map so the 3-mile ring & pins stay unobstructed) */}
+      {/* Clean One-Tap Google Maps Handoff Action Card (rendered cleanly below map) */}
       {selectedPin && (
         <div
           data-selected-pin-card="true"
@@ -1064,657 +1253,465 @@ export const JobsiteMapView: React.FC<JobsiteMapViewProps> = ({
               isApprox,
             } = selectedCustomerItem;
             const meta = JOB_MAP_STATUS_META[mapStatus];
-            const stopId = `cust-${customer.id}`;
-            const routeNum = routeIndexById.get(stopId);
             const telHref = sanitizeTelHref(customer.phone);
             const activeWeather = pinWeather || exteriorWeatherByCustId[customer.id] || null;
+            const drive = activeDriveEstimate || estimateDriveFromBase(lat, lng);
 
             return (
               <div className="space-y-2.5">
-                  <div className="flex items-start justify-between gap-2">
-                    <div className="min-w-0">
-                      <div className="flex flex-wrap items-center gap-1.5">
-                        <h3 className="text-sm font-black text-white truncate">
-                          {customer.name}
-                        </h3>
-                        <span
-                          className="text-[9px] font-black uppercase px-2 py-0.5 rounded-full"
-                          style={{ backgroundColor: meta.bgTint, color: meta.textColor, border: `1px solid ${meta.color}` }}
-                        >
-                          {meta.label}
-                        </span>
-                        {isExteriorJob && (
-                          <span
-                            className="inline-flex items-center gap-1 text-[9px] font-black uppercase px-2 py-0.5 rounded-full bg-slate-900 text-slate-200 border border-slate-700"
-                            title={
-                              activeWeather
-                                ? `Exterior Weather: ${activeWeather.paintBadge}`
-                                : 'Exterior / Deck job'
-                            }
-                          >
-                            {activeWeather && (
-                              <span
-                                className="w-2 h-2 rounded-full inline-block shrink-0"
-                                style={{
-                                  backgroundColor: getWeatherDotColor(activeWeather.paintTone),
-                                  boxShadow: `0 0 6px ${getWeatherDotColor(activeWeather.paintTone)}`,
-                                }}
-                              />
-                            )}
-                            <span>Exterior / Deck</span>
-                          </span>
-                        )}
-                        {isActiveInProgress && (
-                          <span className="text-[9px] font-black uppercase px-1.5 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/50">
-                            In Progress
-                          </span>
-                        )}
-                      </div>
-                      <p className="text-[10.5px] text-slate-300 truncate mt-0.5">
-                        📍 {customer.address || 'No street address entered'}
-                        {isApprox && customer.address?.trim() && (
-                          <button
-                            type="button"
-                            onClick={() => handleReGeocodeCustomer(customer)}
-                            className="ml-1.5 text-amber-400 underline font-bold cursor-pointer"
-                          >
-                            (~approx · retry pin)
-                          </button>
-                        )}
-                      </p>
-                    </div>
-                    <button
-                      type="button"
-                      onClick={() => setSelectedPin(null)}
-                      className="text-xs font-bold text-slate-400 hover:text-white px-1.5 py-0.5 cursor-pointer"
-                      aria-label="Close pin card"
-                    >
-                      ✕
-                    </button>
-                  </div>
-
-                  {/* Scope & Schedule Summary */}
-                  <div className="bg-slate-900/90 border border-slate-800 rounded-xl px-2.5 py-2 text-[11px] text-slate-200 space-y-1">
-                    <div className="flex items-center justify-between gap-2">
-                      <span className="text-[9px] font-extrabold uppercase tracking-wider text-slate-400">
-                        Job Scope
-                      </span>
-                      {schedDate && (
-                        <span className="text-[9.5px] font-bold text-sky-300">
-                          📅 {formatScheduledDate(schedDate)}
-                        </span>
-                      )}
-                    </div>
-                    <p className="leading-snug line-clamp-2">{scopeSummary}</p>
-                  </div>
-
-                  {/* Money + Live Open-Meteo Weather Row */}
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5">
-                    {/* Money Status */}
-                    <div className="bg-slate-900/90 border border-slate-800 rounded-xl px-2.5 py-1.5 flex items-center justify-between gap-2">
-                      <div>
-                        <div className="text-[9px] uppercase font-bold text-slate-400">
-                          Quote / Payment
-                        </div>
-                        <div className="text-xs font-black text-white">
-                          {financials.grossTotal > 0
-                            ? `$${financials.grossTotal.toLocaleString()}`
-                            : 'Unquoted'}
-                        </div>
-                      </div>
-                      <span
-                        className={`text-[9.5px] font-extrabold px-2 py-0.5 rounded-lg text-right ${
-                          financials.moneyState === 'PAID'
-                            ? 'bg-emerald-500/20 text-emerald-300'
-                            : financials.moneyState === 'DEPOSIT_OWED'
-                            ? 'bg-amber-500/20 text-amber-300'
-                            : financials.moneyState === 'BALANCE_OWED'
-                            ? 'bg-rose-500/20 text-rose-300'
-                            : 'bg-slate-800 text-slate-400'
-                        }`}
-                      >
-                        {financials.moneyDetailLabel}
-                      </span>
-                    </div>
-
-                    {/* Live Open-Meteo Weather */}
-                    <div className="bg-slate-900/90 border border-slate-800 rounded-xl px-2.5 py-1.5">
-                      <div className="flex items-center justify-between gap-1">
-                        <span className="text-[9px] uppercase font-bold text-slate-400">
-                          Live Jobsite Weather
-                        </span>
-                        {activeWeather && (
-                          <span
-                            className={`inline-flex items-center gap-1 text-[9px] font-extrabold px-1.5 py-0.5 rounded ${
-                              activeWeather.paintTone === 'ok'
-                                ? 'bg-emerald-500/20 text-emerald-300'
-                                : activeWeather.paintTone === 'warn'
-                                ? 'bg-amber-500/20 text-amber-300'
-                                : 'bg-rose-500/20 text-rose-300'
-                            }`}
-                          >
-                            <span
-                              className="w-1.5 h-1.5 rounded-full inline-block shrink-0"
-                              style={{ backgroundColor: getWeatherDotColor(activeWeather.paintTone) }}
-                            />
-                            <span>{activeWeather.paintBadge}</span>
-                          </span>
-                        )}
-                      </div>
-                      {loadingWeather && !activeWeather ? (
-                        <div className="text-[10.5px] text-slate-400 mt-0.5">
-                          Fetching Open-Meteo…
-                        </div>
-                      ) : activeWeather ? (
-                        <div className="text-[11px] font-bold text-slate-100 mt-0.5 flex flex-wrap items-center gap-x-2.5 gap-y-0.5">
-                          <span>🌡️ {activeWeather.tempF}°F</span>
-                          <span>💨 {activeWeather.windMph} mph</span>
-                          <span>🌧️ {activeWeather.rainChancePct}% rain</span>
-                        </div>
-                      ) : (
-                        <div className="text-[10.5px] text-slate-400 mt-0.5">
-                          Weather unavailable offline
-                        </div>
-                      )}
-                    </div>
-                  </div>
-
-                  {/* Nearby (Within 3 mi) Neighbor Chips */}
-                  <div className="bg-sky-950/35 border border-sky-500/30 rounded-xl px-2.5 py-1.5 space-y-1.5">
-                    <div className="flex items-center justify-between gap-2">
-                      <span className="text-[9px] font-extrabold uppercase tracking-wider text-sky-300 flex items-center gap-1">
-                        <span>📡</span>
-                        <span>Nearby (Within 3 mi)</span>
-                      </span>
-                      <span className="text-[9px] font-bold text-sky-300/80">
-                        {nearbyCustomers.length > 0
-                          ? `${nearbyCustomers.length} lead${nearbyCustomers.length === 1 ? '' : 's'} / client${nearbyCustomers.length === 1 ? '' : 's'}`
-                          : 'None within 3 mi'}
-                      </span>
-                    </div>
-                    {nearbyCustomers.length > 0 && (
-                      <div className="flex flex-wrap items-center gap-1.5">
-                        {nearbyCustomers.map((nb) => {
-                          const nbMeta = JOB_MAP_STATUS_META[nb.mapStatus];
-                          const nbRouteNum = routeIndexById.get(`cust-${nb.customer.id}`);
-                          return (
-                            <button
-                              key={nb.customer.id}
-                              type="button"
-                              onClick={() => {
-                                setSelectedPin({ kind: 'CUSTOMER', customerId: nb.customer.id });
-                                mapInstanceRef.current?.panTo([nb.lat, nb.lng], { animate: true });
-                              }}
-                              className="inline-flex items-center gap-1.5 px-2 py-1 rounded-full bg-slate-900/90 hover:bg-slate-800 border border-sky-400/40 text-[10px] font-bold text-slate-100 cursor-pointer transition-all active:scale-95"
-                              title={`Focus ${nb.customer.name} (${nb.distanceMiles.toFixed(1)} mi away)`}
-                            >
-                              <span
-                                className="w-2 h-2 rounded-full inline-block shrink-0"
-                                style={{ backgroundColor: nbMeta.color }}
-                              />
-                              <span className="truncate max-w-[110px]">{nb.customer.name}</span>
-                              <span className="text-[9px] font-extrabold text-sky-300">
-                                {nb.distanceMiles.toFixed(1)} mi
-                              </span>
-                              {nbRouteNum && (
-                                <span className="text-[8.5px] font-black px-1 rounded-full bg-cyan-500 text-slate-950">
-                                  #{nbRouteNum}
-                                </span>
-                              )}
-                            </button>
-                          );
-                        })}
-                      </div>
-                    )}
-                  </div>
-
-                  {/* Quick Actions */}
-                  <div className="flex flex-wrap items-center gap-1.5 pt-0.5">
-                    <button
-                      type="button"
-                      onClick={() => onOpenFolder(customer.id)}
-                      className="flex-1 min-w-[120px] py-2 px-3 rounded-xl bg-[var(--accent)] text-white text-[11px] font-extrabold shadow hover:opacity-95 active:scale-95 transition-all cursor-pointer"
-                    >
-                      📁 Open Customer
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() =>
-                        toggleStopInRoute({
-                          id: stopId,
-                          kind: 'CUSTOMER',
-                          refId: customer.id,
-                          name: customer.name,
-                          address: customer.address || 'Wisconsin Jobsite',
-                          lat,
-                          lng,
-                          subtitle: meta.shortLabel,
-                        })
-                      }
-                      className={`flex-1 min-w-[120px] py-2 px-3 rounded-xl text-[11px] font-extrabold border transition-all active:scale-95 cursor-pointer ${
-                        routeNum
-                          ? 'bg-cyan-500/20 border-cyan-400 text-cyan-200'
-                          : 'bg-sky-600 border-sky-500 text-white hover:bg-sky-500'
-                      }`}
-                    >
-                      {routeNum ? `✓ Stop #${routeNum} (Remove)` : '+ Add to Route'}
-                    </button>
-                    {telHref && (
-                      <a
-                        href={telHref}
-                        className="py-2 px-2.5 rounded-xl bg-slate-800 border border-slate-700 text-emerald-300 text-[11px] font-extrabold hover:border-emerald-400"
-                        title={`Call ${customer.name}`}
-                      >
-                        📞
-                      </a>
-                    )}
-                    <a
-                      href={buildSingleStopMapsUrl(customer.address, lat, lng)}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="py-2 px-2.5 rounded-xl bg-slate-800 border border-slate-700 text-sky-300 text-[11px] font-extrabold hover:border-sky-400"
-                      title="Open single-stop Google Maps directions"
-                    >
-                      🧭
-                    </a>
-                  </div>
-                </div>
-              );
-            })()}
-
-            {/* SUPPLY / GAS STOP PIN CARD */}
-            {selectedSupplyPin && (() => {
-              const cat = SUPPLY_CATEGORY_META[selectedSupplyPin.category];
-              const stopId = `supply-${selectedSupplyPin.id}`;
-              const routeNum = routeIndexById.get(stopId);
-              const telHref = sanitizeTelHref(selectedSupplyPin.phone);
-
-              return (
-                <div className="space-y-2">
-                  <div className="flex items-start justify-between gap-2">
-                    <div className="min-w-0">
-                      <div className="flex flex-wrap items-center gap-1.5">
-                        <span className="text-base">{cat.icon}</span>
-                        <h3 className="text-sm font-black text-white truncate">
-                          {selectedSupplyPin.name}
-                        </h3>
-                        <span
-                          className="text-[9px] font-black uppercase px-2 py-0.5 rounded-full"
-                          style={{ backgroundColor: cat.bg, color: cat.color, border: `1px solid ${cat.color}` }}
-                        >
-                          {cat.label}
-                        </span>
-                      </div>
-                      <p className="text-[10.5px] text-slate-300 mt-0.5">
-                        📍 {selectedSupplyPin.address}
-                      </p>
-                      {selectedSupplyPin.phone && (
-                        <p className="text-[10.5px] text-emerald-300 font-bold mt-0.5">
-                          📞 {selectedSupplyPin.phone}
-                        </p>
-                      )}
-                      {selectedSupplyPin.notes && (
-                        <p className="text-[10.5px] text-slate-400 mt-1 italic">
-                          {selectedSupplyPin.notes}
-                        </p>
-                      )}
-                    </div>
-                    <button
-                      type="button"
-                      onClick={() => setSelectedPin(null)}
-                      className="text-xs font-bold text-slate-400 hover:text-white px-1.5 py-0.5 cursor-pointer"
-                      aria-label="Close supply card"
-                    >
-                      ✕
-                    </button>
-                  </div>
-
-                  <div className="flex flex-wrap items-center gap-1.5 pt-0.5">
-                    {telHref ? (
-                      <a
-                        href={telHref}
-                        className="flex-1 min-w-[110px] py-2 px-3 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-[11px] font-extrabold text-center shadow transition-all"
-                      >
-                        📞 Call Store
-                      </a>
-                    ) : (
-                      <span className="flex-1 min-w-[110px] py-2 px-3 rounded-xl bg-slate-800/80 text-slate-500 text-[11px] font-bold text-center border border-slate-700">
-                        No Phone Saved
-                      </span>
-                    )}
-
-                    <button
-                      type="button"
-                      onClick={() =>
-                        toggleStopInRoute({
-                          id: stopId,
-                          kind: 'SUPPLY',
-                          refId: selectedSupplyPin.id,
-                          name: selectedSupplyPin.name,
-                          address: selectedSupplyPin.address,
-                          lat: selectedSupplyPin.lat,
-                          lng: selectedSupplyPin.lng,
-                          subtitle: cat.shortLabel,
-                        })
-                      }
-                      className={`flex-1 min-w-[120px] py-2 px-3 rounded-xl text-[11px] font-extrabold border transition-all active:scale-95 cursor-pointer ${
-                        routeNum
-                          ? 'bg-cyan-500/20 border-cyan-400 text-cyan-200'
-                          : 'bg-amber-500 border-amber-400 text-slate-950 hover:bg-amber-400'
-                      }`}
-                    >
-                      {routeNum ? `✓ Stop #${routeNum} (Remove)` : '+ Add to Route'}
-                    </button>
-
-                    {!selectedSupplyPin.isPreset && (
-                      <button
-                        type="button"
-                        onClick={() => {
-                          onDeleteCustomPin(selectedSupplyPin.id);
-                          setRouteStops((prev) => prev.filter((s) => s.id !== stopId));
-                          setSelectedPin(null);
-                          onToast(`Deleted custom pin: ${selectedSupplyPin.name}`);
-                        }}
-                        className="py-2 px-2.5 rounded-xl bg-rose-950/80 border border-rose-500/50 text-rose-300 text-[11px] font-extrabold hover:bg-rose-600 hover:text-white cursor-pointer"
-                        title="Delete custom pin"
-                      >
-                        🗑️
-                      </button>
-                    )}
-                  </div>
-                </div>
-              );
-            })()}
-
-            {/* HOME BASE PIN CARD */}
-            {selectedPin.kind === 'HOME' && (
-              <div className="flex items-center justify-between gap-2">
-                <div>
-                  <div className="text-xs font-black text-amber-300 flex items-center gap-1.5">
-                    <span>🏠</span>
-                    <span>{HOME_BASE.name}</span>
-                  </div>
-                  <p className="text-[11px] text-slate-300 mt-0.5">{HOME_BASE.address}</p>
-                  <p className="text-[10px] text-slate-400">
-                    Starting &amp; return point for multi-stop route mileage tracking.
-                  </p>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => setSelectedPin(null)}
-                  className="text-xs font-bold text-slate-400 hover:text-white px-2 py-1 cursor-pointer"
-                >
-                  ✕
-                </button>
-              </div>
-            )}
-        </div>
-      )}
-
-      {/* MULTI-STOP ROUTE BUILDER & MILEAGE CALCULATOR */}
-      <div className="bg-[var(--surface)] border border-[var(--border)] rounded-2xl p-3.5 shadow-sm space-y-3">
-        <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[var(--border)] pb-2.5">
-          <div>
-            <h3 className="text-xs sm:text-sm font-black uppercase tracking-wide text-cyan-400 flex items-center gap-1.5">
-              <span>🧭</span>
-              <span>Multi-Stop Route Builder &amp; Mileage Calculator</span>
-            </h3>
-            <p className="text-[10px] text-[var(--text-muted)]">
-              Tap customer or supply pins on the map (or pick below) to plan stops &amp; track round-trip tax miles
-            </p>
-          </div>
-
-          <label className="inline-flex items-center gap-1.5 text-[10.5px] font-bold text-[var(--text)] bg-[var(--bg)] border border-[var(--border)] px-2.5 py-1.5 rounded-xl cursor-pointer select-none">
-            <input
-              type="checkbox"
-              checked={returnToBase}
-              onChange={(e) => setReturnToBase(e.target.checked)}
-              className="accent-cyan-400"
-            />
-            <span>Round Trip ↩ Base</span>
-          </label>
-        </div>
-
-        {/* Start Point + Quick Stop Picker */}
-        <div className="flex flex-col sm:flex-row sm:items-center gap-2">
-          <div className="flex-1 bg-[var(--bg)] border border-amber-500/35 rounded-xl px-3 py-2 flex items-center gap-2">
-            <span className="text-sm">🏠</span>
-            <div className="min-w-0">
-              <div className="text-[9px] uppercase font-extrabold text-amber-400">
-                Origin (Home Base)
-              </div>
-              <div className="text-[11px] font-bold text-[var(--text)] truncate">
-                {HOME_BASE.address}
-              </div>
-            </div>
-          </div>
-
-          <select
-            value={quickAddStopValue}
-            onChange={(e) => handleQuickAddStop(e.target.value)}
-            aria-label="Quick add stop to route"
-            className="sm:w-64 bg-[var(--bg)] border border-[var(--border)] text-[var(--text)] rounded-xl px-3 py-2 text-[11px] font-bold outline-none focus:border-cyan-400 cursor-pointer"
-          >
-            <option value="">+ Quick Add Stop to Route…</option>
-            {customerSummaries.length > 0 && (
-              <optgroup label="Customer Jobsites">
-                {customerSummaries.map((c) => (
-                  <option
-                    key={`cust-${c.customer.id}`}
-                    value={`cust-${c.customer.id}`}
-                    disabled={routeIndexById.has(`cust-${c.customer.id}`)}
-                  >
-                    {c.customer.name} ({JOB_MAP_STATUS_META[c.mapStatus].shortLabel})
-                  </option>
-                ))}
-              </optgroup>
-            )}
-            <optgroup label="Supply & Gas Stops">
-              {allSupplyPins.map((p) => (
-                <option
-                  key={`supply-${p.id}`}
-                  value={`supply-${p.id}`}
-                  disabled={routeIndexById.has(`supply-${p.id}`)}
-                >
-                  {SUPPLY_CATEGORY_META[p.category].icon} {p.name}
-                </option>
-              ))}
-            </optgroup>
-          </select>
-        </div>
-
-        {/* Ordered Stop List */}
-        {routeStops.length === 0 ? (
-          <div className="bg-[var(--bg)]/70 border border-dashed border-[var(--border)] rounded-xl p-4 text-center space-y-1">
-            <div className="text-xs font-extrabold text-[var(--text)]">
-              No stops selected yet
-            </div>
-            <p className="text-[10.5px] text-[var(--text-muted)]">
-              Tap any customer jobsite or paint/gas stop pin on the map and hit{' '}
-              <strong className="text-cyan-400">+ Add to Route</strong> to calculate mileage and launch turn-by-turn directions.
-            </p>
-          </div>
-        ) : (
-          <div className="space-y-1.5">
-            {routeStops.map((stop, idx) => (
-              <div
-                key={stop.id}
-                className="bg-[var(--bg)] border border-[var(--border)] rounded-xl px-2.5 py-2 flex items-center justify-between gap-2"
-              >
-                <div className="flex items-center gap-2 min-w-0">
-                  <span className="w-6 h-6 rounded-full bg-cyan-500 text-slate-950 font-black text-xs flex items-center justify-center shrink-0">
-                    {idx + 1}
-                  </span>
+                <div className="flex items-start justify-between gap-2">
                   <div className="min-w-0">
-                    <div className="text-xs font-extrabold text-[var(--text)] truncate flex items-center gap-1.5">
-                      <span>{stop.kind === 'CUSTOMER' ? '📍' : '🏪'}</span>
-                      <span className="truncate">{stop.name}</span>
-                      {stop.subtitle && (
-                        <span className="text-[9px] font-bold uppercase px-1.5 py-0.5 rounded bg-[var(--surface-subtle)] text-[var(--text-muted)] shrink-0">
-                          {stop.subtitle}
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      <h3 className="text-sm font-black text-white truncate">
+                        {customer.name}
+                      </h3>
+                      <span
+                        className="text-[9px] font-black uppercase px-2 py-0.5 rounded-full"
+                        style={{
+                          backgroundColor: meta.bgTint,
+                          color: meta.textColor,
+                          border: `1px solid ${meta.color}`,
+                        }}
+                      >
+                        {meta.label}
+                      </span>
+                      {isExteriorJob && (
+                        <span
+                          className="inline-flex items-center gap-1 text-[9px] font-black uppercase px-2 py-0.5 rounded-full bg-slate-900 text-slate-200 border border-slate-700"
+                          title={
+                            activeWeather
+                              ? `Exterior Weather: ${activeWeather.paintBadge}`
+                              : 'Exterior / Deck job'
+                          }
+                        >
+                          {activeWeather && (
+                            <span
+                              className="w-2 h-2 rounded-full inline-block shrink-0"
+                              style={{
+                                backgroundColor: getWeatherDotColor(activeWeather.paintTone),
+                                boxShadow: `0 0 6px ${getWeatherDotColor(activeWeather.paintTone)}`,
+                              }}
+                            />
+                          )}
+                          <span>Exterior / Deck</span>
+                        </span>
+                      )}
+                      {isActiveInProgress && (
+                        <span className="text-[9px] font-black uppercase px-1.5 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/50">
+                          In Progress
                         </span>
                       )}
                     </div>
-                    <div className="text-[10px] text-[var(--text-muted)] truncate">
-                      {stop.address}
+                    <p className="text-[10.5px] text-slate-300 truncate mt-0.5">
+                      📍 {customer.address || 'No street address entered'}
+                      {isApprox && customer.address?.trim() && (
+                        <button
+                          type="button"
+                          onClick={() => handleReGeocodeCustomer(customer)}
+                          className="ml-1.5 text-amber-400 underline font-bold cursor-pointer"
+                        >
+                          (~approx · retry pin)
+                        </button>
+                      )}
+                    </p>
+                    <div className="mt-1 inline-flex items-center gap-1.5 text-[10.5px] font-extrabold text-sky-300 bg-sky-500/10 border border-sky-500/30 rounded-lg px-2 py-0.5">
+                      <span>🚗</span>
+                      <span>
+                        {drive.oneWayMiles.toFixed(1)} mi • ~{drive.etaMinutes} min from 2119 Barton Ave
+                      </span>
                     </div>
                   </div>
-                </div>
-
-                <div className="flex items-center gap-1 shrink-0">
                   <button
                     type="button"
-                    disabled={idx === 0}
-                    onClick={() => moveStop(idx, -1)}
-                    className="w-6 h-6 rounded-lg bg-[var(--surface-subtle)] border border-[var(--border)] text-[10px] font-black text-[var(--text)] disabled:opacity-30 cursor-pointer"
-                    aria-label="Move stop up"
-                  >
-                    ▲
-                  </button>
-                  <button
-                    type="button"
-                    disabled={idx === routeStops.length - 1}
-                    onClick={() => moveStop(idx, 1)}
-                    className="w-6 h-6 rounded-lg bg-[var(--surface-subtle)] border border-[var(--border)] text-[10px] font-black text-[var(--text)] disabled:opacity-30 cursor-pointer"
-                    aria-label="Move stop down"
-                  >
-                    ▼
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setRouteStops((prev) => prev.filter((s) => s.id !== stop.id))}
-                    className="w-6 h-6 rounded-lg bg-rose-950/60 border border-rose-500/40 text-[10px] font-black text-rose-300 hover:bg-rose-600 hover:text-white cursor-pointer"
-                    aria-label="Remove stop"
+                    onClick={() => setSelectedPin(null)}
+                    className="text-xs font-bold text-slate-400 hover:text-white px-1.5 py-0.5 cursor-pointer"
+                    aria-label="Close pin card"
                   >
                     ✕
                   </button>
                 </div>
+
+                {/* Scope & Schedule Summary */}
+                <div className="bg-slate-900/90 border border-slate-800 rounded-xl px-2.5 py-2 text-[11px] text-slate-200 space-y-1">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-[9px] font-extrabold uppercase tracking-wider text-slate-400">
+                      Job Scope
+                    </span>
+                    {schedDate && (
+                      <span className="text-[9.5px] font-bold text-sky-300">
+                        📅 {formatScheduledDate(schedDate)}
+                      </span>
+                    )}
+                  </div>
+                  <p className="leading-snug line-clamp-2">{scopeSummary}</p>
+                </div>
+
+                {/* Money + Live Open-Meteo Weather Row */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5">
+                  <div className="bg-slate-900/90 border border-slate-800 rounded-xl px-2.5 py-1.5 flex items-center justify-between gap-2">
+                    <div>
+                      <div className="text-[9px] uppercase font-bold text-slate-400">
+                        Quote / Payment
+                      </div>
+                      <div className="text-xs font-black text-white">
+                        {financials.grossTotal > 0
+                          ? `$${financials.grossTotal.toLocaleString()}`
+                          : 'Unquoted'}
+                      </div>
+                    </div>
+                    <span
+                      className={`text-[9.5px] font-extrabold px-2 py-0.5 rounded-lg text-right ${
+                        financials.moneyState === 'PAID'
+                          ? 'bg-emerald-500/20 text-emerald-300'
+                          : financials.moneyState === 'DEPOSIT_OWED'
+                          ? 'bg-amber-500/20 text-amber-300'
+                          : financials.moneyState === 'BALANCE_OWED'
+                          ? 'bg-rose-500/20 text-rose-300'
+                          : 'bg-slate-800 text-slate-400'
+                      }`}
+                    >
+                      {financials.moneyDetailLabel}
+                    </span>
+                  </div>
+
+                  <div className="bg-slate-900/90 border border-slate-800 rounded-xl px-2.5 py-1.5">
+                    <div className="flex items-center justify-between gap-1">
+                      <span className="text-[9px] uppercase font-bold text-slate-400">
+                        Live Jobsite Weather
+                      </span>
+                      {activeWeather && (
+                        <span
+                          className={`inline-flex items-center gap-1 text-[9px] font-extrabold px-1.5 py-0.5 rounded ${
+                            activeWeather.paintTone === 'ok'
+                              ? 'bg-emerald-500/20 text-emerald-300'
+                              : activeWeather.paintTone === 'warn'
+                              ? 'bg-amber-500/20 text-amber-300'
+                              : 'bg-rose-500/20 text-rose-300'
+                          }`}
+                        >
+                          <span
+                            className="w-1.5 h-1.5 rounded-full inline-block shrink-0"
+                            style={{ backgroundColor: getWeatherDotColor(activeWeather.paintTone) }}
+                          />
+                          <span>{activeWeather.paintBadge}</span>
+                        </span>
+                      )}
+                    </div>
+                    {loadingWeather && !activeWeather ? (
+                      <div className="text-[10.5px] text-slate-400 mt-0.5">
+                        Fetching Open-Meteo…
+                      </div>
+                    ) : activeWeather ? (
+                      <div className="text-[11px] font-bold text-slate-100 mt-0.5 flex flex-wrap items-center gap-x-2.5 gap-y-0.5">
+                        <span>🌡️ {activeWeather.tempF}°F</span>
+                        <span>💨 {activeWeather.windMph} mph</span>
+                        <span>🌧️ {activeWeather.rainChancePct}% rain</span>
+                      </div>
+                    ) : (
+                      <div className="text-[10.5px] text-slate-400 mt-0.5">
+                        Weather unavailable offline
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                {/* Nearby (Within 3 mi) Neighbor Chips */}
+                <div className="bg-sky-950/35 border border-sky-500/30 rounded-xl px-2.5 py-1.5 space-y-1.5">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-[9px] font-extrabold uppercase tracking-wider text-sky-300 flex items-center gap-1">
+                      <span>📡</span>
+                      <span>Nearby (Within 3 mi)</span>
+                    </span>
+                    <span className="text-[9px] font-bold text-sky-300/80">
+                      {nearbyCustomers.length > 0
+                        ? `${nearbyCustomers.length} lead${nearbyCustomers.length === 1 ? '' : 's'} / client${nearbyCustomers.length === 1 ? '' : 's'}`
+                        : 'None within 3 mi'}
+                    </span>
+                  </div>
+                  {nearbyCustomers.length > 0 && (
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      {nearbyCustomers.map((nb) => {
+                        const nbMeta = JOB_MAP_STATUS_META[nb.mapStatus];
+                        return (
+                          <button
+                            key={nb.customer.id}
+                            type="button"
+                            onClick={() => {
+                              setSelectedPin({ kind: 'CUSTOMER', customerId: nb.customer.id });
+                              mapInstanceRef.current?.panTo([nb.lat, nb.lng], { animate: true });
+                            }}
+                            className="inline-flex items-center gap-1.5 px-2 py-1 rounded-full bg-slate-900/90 hover:bg-slate-800 border border-sky-400/40 text-[10px] font-bold text-slate-100 cursor-pointer transition-all active:scale-95"
+                            title={`Focus ${nb.customer.name} (${nb.distanceMiles.toFixed(1)} mi away)`}
+                          >
+                            <span
+                              className="w-2 h-2 rounded-full inline-block shrink-0"
+                              style={{ backgroundColor: nbMeta.color }}
+                            />
+                            <span className="truncate max-w-[110px]">{nb.customer.name}</span>
+                            <span className="text-[9px] font-extrabold text-sky-300">
+                              {nb.distanceMiles.toFixed(1)} mi
+                            </span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+
+                {/* Primary Google Maps Handoff + Quick Actions */}
+                <div className="flex flex-wrap items-center gap-1.5 pt-0.5">
+                  <a
+                    href={buildSingleStopMapsUrl(customer.address, lat, lng)}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    onClick={() =>
+                      handleOpenGoogleMapsClick(
+                        `cust-${customer.id}`,
+                        customer.name,
+                        lat,
+                        lng
+                      )
+                    }
+                    className="flex-1 min-w-[175px] py-2.5 px-3.5 rounded-xl bg-gradient-to-r from-sky-500 to-blue-600 hover:opacity-95 text-white text-xs font-black uppercase tracking-wide text-center shadow-lg transition-all active:scale-95 flex items-center justify-center gap-1.5"
+                  >
+                    <span>🧭</span>
+                    <span>Open in Google Maps</span>
+                  </a>
+                  <button
+                    type="button"
+                    onClick={() => onOpenFolder(customer.id)}
+                    className="py-2.5 px-3 rounded-xl bg-[var(--accent)] text-white text-[11px] font-extrabold shadow hover:opacity-95 active:scale-95 transition-all cursor-pointer"
+                  >
+                    📁 Folder
+                  </button>
+                  {telHref && (
+                    <a
+                      href={telHref}
+                      className="py-2.5 px-3 rounded-xl bg-slate-800 border border-slate-700 text-emerald-300 text-[11px] font-extrabold hover:border-emerald-400"
+                      title={`Call ${customer.name}`}
+                    >
+                      📞
+                    </a>
+                  )}
+                </div>
               </div>
-            ))}
+            );
+          })()}
 
-            {returnToBase && (
-              <div className="px-3 py-1.5 rounded-xl bg-amber-500/10 border border-amber-500/30 text-[10.5px] font-bold text-amber-300 flex items-center gap-2">
-                <span>↩</span>
-                <span>Return to Home Base: {HOME_BASE.address}</span>
+          {/* SUPPLY / HARDWARE STOP PIN CARD */}
+          {selectedSupplyPin && (() => {
+            const cat = SUPPLY_CATEGORY_META[selectedSupplyPin.category];
+            const telHref = sanitizeTelHref(selectedSupplyPin.phone);
+            const drive =
+              activeDriveEstimate ||
+              estimateDriveFromBase(selectedSupplyPin.lat, selectedSupplyPin.lng);
+
+            return (
+              <div className="space-y-2.5">
+                <div className="flex items-start justify-between gap-2">
+                  <div className="min-w-0">
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      <span className="text-base">{cat.icon}</span>
+                      <h3 className="text-sm font-black text-white truncate">
+                        {selectedSupplyPin.name}
+                      </h3>
+                      <span
+                        className="text-[9px] font-black uppercase px-2 py-0.5 rounded-full"
+                        style={{
+                          backgroundColor: cat.bg,
+                          color: cat.color,
+                          border: `1px solid ${cat.color}`,
+                        }}
+                      >
+                        {cat.label}
+                      </span>
+                    </div>
+                    <p className="text-[10.5px] text-slate-300 mt-0.5">
+                      📍 {selectedSupplyPin.address}
+                    </p>
+                    <div className="mt-1 inline-flex items-center gap-1.5 text-[10.5px] font-extrabold text-sky-300 bg-sky-500/10 border border-sky-500/30 rounded-lg px-2 py-0.5">
+                      <span>🚗</span>
+                      <span>
+                        {drive.oneWayMiles.toFixed(1)} mi • ~{drive.etaMinutes} min from 2119 Barton Ave
+                      </span>
+                    </div>
+                    {selectedSupplyPin.phone && (
+                      <p className="text-[10.5px] text-emerald-300 font-bold mt-1">
+                        📞 {selectedSupplyPin.phone}
+                      </p>
+                    )}
+                    {selectedSupplyPin.notes && (
+                      <p className="text-[10px] text-slate-400 mt-0.5 italic">
+                        {selectedSupplyPin.notes}
+                      </p>
+                    )}
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setSelectedPin(null)}
+                    className="text-xs font-bold text-slate-400 hover:text-white px-1.5 py-0.5 cursor-pointer"
+                    aria-label="Close supply card"
+                  >
+                    ✕
+                  </button>
+                </div>
+
+                <div className="flex flex-wrap items-center gap-1.5 pt-0.5">
+                  <a
+                    href={buildSingleStopMapsUrl(
+                      selectedSupplyPin.address,
+                      selectedSupplyPin.lat,
+                      selectedSupplyPin.lng
+                    )}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    onClick={() =>
+                      handleOpenGoogleMapsClick(
+                        `supply-${selectedSupplyPin.id}`,
+                        selectedSupplyPin.name,
+                        selectedSupplyPin.lat,
+                        selectedSupplyPin.lng
+                      )
+                    }
+                    className="flex-1 min-w-[175px] py-2.5 px-3.5 rounded-xl bg-gradient-to-r from-sky-500 to-blue-600 hover:opacity-95 text-white text-xs font-black uppercase tracking-wide text-center shadow-lg transition-all active:scale-95 flex items-center justify-center gap-1.5"
+                  >
+                    <span>🧭</span>
+                    <span>Open in Google Maps</span>
+                  </a>
+
+                  {telHref && (
+                    <a
+                      href={telHref}
+                      className="py-2.5 px-3 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-[11px] font-extrabold text-center shadow transition-all"
+                    >
+                      📞 Call
+                    </a>
+                  )}
+
+                  {!selectedSupplyPin.isPreset && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        onDeleteCustomPin(selectedSupplyPin.id);
+                        setSelectedPin(null);
+                        onToast(`Deleted custom pin: ${selectedSupplyPin.name}`);
+                      }}
+                      className="py-2.5 px-2.5 rounded-xl bg-rose-950/80 border border-rose-500/50 text-rose-300 text-[11px] font-extrabold hover:bg-rose-600 hover:text-white cursor-pointer"
+                      title="Delete custom pin"
+                    >
+                      🗑️
+                    </button>
+                  )}
+                </div>
               </div>
-            )}
-          </div>
-        )}
+            );
+          })()}
 
-        {/* Mileage & IRS Tax Summary Tiles */}
-        <div className="grid grid-cols-3 gap-2">
-          <div className="bg-[var(--bg)] border border-cyan-500/40 rounded-xl p-2.5 text-center">
-            <div className="text-[9px] uppercase font-bold text-cyan-300">
-              {returnToBase ? 'Round-Trip Miles' : 'One-Way Miles'}
-            </div>
-            <div className="text-sm sm:text-base font-black text-white">
-              {displayedMiles.toFixed(1)} mi
-            </div>
-            <div className="text-[9px] text-[var(--text-muted)]">
-              {loadingRoadRoute
-                ? 'Calculating road…'
-                : routeEstimate.isRoadGeometry
-                ? 'OSRM Road'
-                : 'Est. Road'}
-            </div>
-          </div>
+          {/* SEARCHED ADDRESS / STORE PIN CARD */}
+          {selectedSearchPin && (() => {
+            const drive =
+              activeDriveEstimate ||
+              estimateDriveFromBase(selectedSearchPin.lat, selectedSearchPin.lng);
+            return (
+              <div className="space-y-2.5">
+                <div className="flex items-start justify-between gap-2">
+                  <div className="min-w-0">
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      <span className="text-base">🔎</span>
+                      <h3 className="text-sm font-black text-white truncate">
+                        {selectedSearchPin.name}
+                      </h3>
+                      <span className="text-[9px] font-black uppercase px-2 py-0.5 rounded-full bg-sky-500/20 text-sky-300 border border-sky-400/50">
+                        Search Pin
+                      </span>
+                    </div>
+                    <p className="text-[10.5px] text-slate-300 mt-0.5">
+                      📍 {selectedSearchPin.address}
+                    </p>
+                    <div className="mt-1 inline-flex items-center gap-1.5 text-[10.5px] font-extrabold text-sky-300 bg-sky-500/10 border border-sky-500/30 rounded-lg px-2 py-0.5">
+                      <span>🚗</span>
+                      <span>
+                        {drive.oneWayMiles.toFixed(1)} mi • ~{drive.etaMinutes} min from 2119 Barton Ave
+                      </span>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSelectedPin(null);
+                      setDroppedSearchPin(null);
+                    }}
+                    className="text-xs font-bold text-slate-400 hover:text-white px-1.5 py-0.5 cursor-pointer"
+                    aria-label="Close search pin card"
+                  >
+                    ✕
+                  </button>
+                </div>
 
-          <div className="bg-[var(--bg)] border border-[var(--border)] rounded-xl p-2.5 text-center">
-            <div className="text-[9px] uppercase font-bold text-[var(--text-muted)]">
-              Est. Drive Time
-            </div>
-            <div className="text-sm sm:text-base font-black text-white">
-              {routeStops.length > 0 ? `${routeEstimate.estDriveMinutes} min` : '0 min'}
-            </div>
-            <div className="text-[9px] text-[var(--text-muted)]">
-              {routeStops.length} stop{routeStops.length === 1 ? '' : 's'}
-            </div>
-          </div>
+                <div className="flex flex-wrap items-center gap-1.5 pt-0.5">
+                  <a
+                    href={buildSingleStopMapsUrl(
+                      selectedSearchPin.address,
+                      selectedSearchPin.lat,
+                      selectedSearchPin.lng
+                    )}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    onClick={() =>
+                      handleOpenGoogleMapsClick(
+                        `search-${selectedSearchPin.address || selectedSearchPin.name}`,
+                        selectedSearchPin.name,
+                        selectedSearchPin.lat,
+                        selectedSearchPin.lng
+                      )
+                    }
+                    className="flex-1 min-w-[175px] py-2.5 px-3.5 rounded-xl bg-gradient-to-r from-sky-500 to-blue-600 hover:opacity-95 text-white text-xs font-black uppercase tracking-wide text-center shadow-lg transition-all active:scale-95 flex items-center justify-center gap-1.5"
+                  >
+                    <span>🧭</span>
+                    <span>Open in Google Maps</span>
+                  </a>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setNewPinName(selectedSearchPin.name);
+                      setNewPinAddress(selectedSearchPin.address);
+                      setNewPinCategory('HARDWARE');
+                      setUseMapCenterCoords(false);
+                      setAddPinModalOpen(true);
+                    }}
+                    className="py-2.5 px-3 rounded-xl bg-slate-800 border border-slate-700 text-amber-300 text-[11px] font-extrabold hover:border-amber-400 cursor-pointer"
+                  >
+                    + Save Pin
+                  </button>
+                </div>
+              </div>
+            );
+          })()}
 
-          <div className="bg-[var(--bg)] border border-emerald-500/40 rounded-xl p-2.5 text-center">
-            <div className="text-[9px] uppercase font-bold text-emerald-300">
-              Tax Deduction
-            </div>
-            <div className="text-sm sm:text-base font-black text-emerald-400">
-              ${estTaxDeduction.toFixed(2)}
-            </div>
-            <div className="text-[9px] text-[var(--text-muted)]">
-              {returnToBase ? 'RT' : '1-Way'} @ ${(irsRate).toFixed(2)}/mi
-            </div>
-          </div>
-        </div>
-
-        {/* Route Action Buttons */}
-        <div className="space-y-2">
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-            {routeStops.length > 0 ? (
-              <a
-                href={googleMapsRouteUrl}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="py-2.5 px-3.5 rounded-xl bg-gradient-to-r from-cyan-500 to-blue-600 hover:opacity-95 text-white font-black text-xs uppercase tracking-wide text-center shadow-lg transition-all active:scale-95 flex items-center justify-center gap-1.5"
-              >
-                <span>🗺️</span>
-                <span>Launch Route in Google Maps</span>
-              </a>
-            ) : (
+          {/* HOME BASE PIN CARD */}
+          {selectedPin.kind === 'HOME' && (
+            <div className="flex items-center justify-between gap-2">
+              <div>
+                <div className="text-xs font-black text-amber-300 flex items-center gap-1.5">
+                  <span>🏠</span>
+                  <span>{HOME_BASE.name}</span>
+                </div>
+                <p className="text-[11px] text-slate-300 mt-0.5">{HOME_BASE.address}</p>
+                <p className="text-[10px] text-slate-400">
+                  Home dispatch origin for distance, drive-time ETAs, and background tax mileage.
+                </p>
+              </div>
               <button
                 type="button"
-                disabled
-                className="py-2.5 px-3.5 rounded-xl bg-[var(--surface-subtle)] border border-[var(--border)] text-[var(--text-muted)] font-black text-xs uppercase tracking-wide text-center opacity-60 cursor-not-allowed flex items-center justify-center gap-1.5"
+                onClick={() => setSelectedPin(null)}
+                className="text-xs font-bold text-slate-400 hover:text-white px-2 py-1 cursor-pointer"
               >
-                <span>🗺️</span>
-                <span>Launch Route in Google Maps</span>
+                ✕
               </button>
-            )}
-
-            <button
-              type="button"
-              disabled={routeStops.length === 0}
-              onClick={handleLogRouteMileage}
-              className={`py-2.5 px-3.5 rounded-xl font-black text-xs uppercase tracking-wide text-center border transition-all flex items-center justify-center gap-1.5 ${
-                routeStops.length > 0
-                  ? 'bg-emerald-500/20 border-emerald-400/60 text-emerald-300 hover:bg-emerald-500/30 shadow cursor-pointer active:scale-95'
-                  : 'bg-[var(--surface-subtle)] border-[var(--border)] text-[var(--text-muted)] opacity-60 cursor-not-allowed'
-              }`}
-            >
-              <span>🚗</span>
-              <span>Log Trip Miles</span>
-            </button>
-          </div>
-
-          <div className="flex flex-wrap items-center gap-2">
-            <button
-              type="button"
-              disabled={routeStops.length < 2}
-              onClick={handleOptimizeRoute}
-              title={
-                routeStops.length < 2
-                  ? 'Add at least 2 stops to auto-sort the fastest loop from Home Base'
-                  : `Reorder stops for shortest driving ${returnToBase ? 'loop' : 'sequence'} from ${HOME_BASE.address}`
-              }
-              className={`flex-1 min-w-[170px] py-2 px-3 rounded-xl font-extrabold text-[11px] border transition-all flex items-center justify-center gap-1.5 ${
-                routeStops.length >= 2
-                  ? 'bg-amber-500/20 border-amber-400/60 text-amber-300 hover:bg-amber-500/30 cursor-pointer active:scale-95'
-                  : 'bg-[var(--surface-subtle)] border-[var(--border)] text-[var(--text-muted)] opacity-60 cursor-not-allowed'
-              }`}
-            >
-              <span>⚡</span>
-              <span>Sort Fastest Loop</span>
-            </button>
-
-            {routeStops.length > 0 && (
-              <button
-                type="button"
-                onClick={() => setRouteStops([])}
-                className="py-2 px-3.5 rounded-xl bg-[var(--surface-subtle)] border border-[var(--border)] text-[var(--text-muted)] font-extrabold text-[11px] hover:text-rose-400 cursor-pointer"
-              >
-                Clear
-              </button>
-            )}
-          </div>
+            </div>
+          )}
         </div>
-      </div>
+      )}
 
       {/* "+ ADD CUSTOM PIN" MODAL */}
       {addPinModalOpen && (

@@ -10,7 +10,6 @@ interface ToolsViewProps {
   onOpenMileage: () => void;
   onOpenExpenses: () => void;
   onOpenShoppingList: () => void;
-  onOpenRegionalMap: () => void;
   onSyncCalendar: () => void;
   onOpenSettings: () => void;
   onOpenCloudSync?: () => void;
@@ -26,7 +25,6 @@ export const ToolsView: React.FC<ToolsViewProps> = ({
   onOpenMileage,
   onOpenExpenses,
   onOpenShoppingList,
-  onOpenRegionalMap,
   onSyncCalendar,
   onOpenSettings,
   onOpenCloudSync,
@@ -43,7 +41,6 @@ export const ToolsView: React.FC<ToolsViewProps> = ({
     { title: 'Mileage Log', icon: '🚗', desc: 'IRS 67¢/mi auto deduction', action: onOpenMileage },
     { title: 'Expenses & OCR', icon: '🧾', desc: 'Receipt scanner & ledger', action: onOpenExpenses },
     { title: 'Shopping List', icon: '🛒', desc: 'Tape, plastic & paint checklist', action: onOpenShoppingList },
-    { title: 'Jobsite Map & Route', icon: '🗺️', desc: 'Jobs, weather, supply stops & routes', action: onOpenRegionalMap },
     { title: 'Settings', icon: '⚙️', desc: 'Themes, rates & print terms', action: onOpenSettings },
   ];
 

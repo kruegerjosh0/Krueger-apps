@@ -26,11 +26,21 @@ import {
   fetchPinWeatherSummary,
   geocodeAddressWithNominatim,
   getCustomerMapSummary,
+  haversineMiles,
   optimizeRouteStops,
   resolveApproxWisconsinCoords,
   sanitizeTelHref,
 } from '../utils/mapHelpers';
 import { formatScheduledDate, getLocalTodayIso } from '../utils/projectHelpers';
+
+const NEARBY_RADIUS_MILES = 3;
+const NEARBY_RADIUS_METERS = NEARBY_RADIUS_MILES * 1609.344;
+
+function getWeatherDotColor(tone: PinWeatherSummary['paintTone']): string {
+  if (tone === 'ok') return '#22c55e';
+  if (tone === 'warn') return '#facc15';
+  return '#ef4444';
+}
 
 interface JobsiteMapViewProps {
   customers: Customer[];
@@ -80,6 +90,7 @@ export const JobsiteMapView: React.FC<JobsiteMapViewProps> = ({
   const mapContainerRef = useRef<HTMLDivElement | null>(null);
   const mapInstanceRef = useRef<L.Map | null>(null);
   const tileLayerRef = useRef<L.TileLayer | null>(null);
+  const radiusLayerRef = useRef<L.LayerGroup | null>(null);
   const markersLayerRef = useRef<L.LayerGroup | null>(null);
   const routeLayerRef = useRef<L.LayerGroup | null>(null);
   const geocodedAttemptedRef = useRef<Set<string>>(new Set());
@@ -91,9 +102,12 @@ export const JobsiteMapView: React.FC<JobsiteMapViewProps> = ({
   const [statusFilter, setStatusFilter] = useState<'ALL' | JobMapStatus>('ALL');
   const [selectedPin, setSelectedPin] = useState<SelectedPin | null>(null);
 
-  // Live Open-Meteo weather for currently tapped customer pin
+  // Live Open-Meteo weather for currently tapped customer pin & exterior/deck map pins
   const [pinWeather, setPinWeather] = useState<PinWeatherSummary | null>(null);
   const [loadingWeather, setLoadingWeather] = useState<boolean>(false);
+  const [exteriorWeatherByCustId, setExteriorWeatherByCustId] = useState<
+    Record<number, PinWeatherSummary>
+  >({});
 
   // Runtime geocode map for customers whose addresses are geocoded on the fly
   const [resolvedCoords, setResolvedCoords] = useState<
@@ -237,10 +251,12 @@ export const JobsiteMapView: React.FC<JobsiteMapViewProps> = ({
       attributionControl: true,
     });
 
+    const radiusLayer = L.layerGroup().addTo(map);
     const markersLayer = L.layerGroup().addTo(map);
     const routeLayer = L.layerGroup().addTo(map);
 
     mapInstanceRef.current = map;
+    radiusLayerRef.current = radiusLayer;
     markersLayerRef.current = markersLayer;
     routeLayerRef.current = routeLayer;
 
@@ -254,6 +270,7 @@ export const JobsiteMapView: React.FC<JobsiteMapViewProps> = ({
       map.remove();
       mapInstanceRef.current = null;
       tileLayerRef.current = null;
+      radiusLayerRef.current = null;
       markersLayerRef.current = null;
       routeLayerRef.current = null;
     };
@@ -274,6 +291,92 @@ export const JobsiteMapView: React.FC<JobsiteMapViewProps> = ({
       attribution: '&copy; OpenStreetMap contributors',
     }).addTo(map);
   }, [mapStyle]);
+
+  // Selected customer / supply pin lookup
+  const selectedCustomerItem = useMemo(() => {
+    if (selectedPin?.kind !== 'CUSTOMER') return null;
+    return customerSummaries.find((s) => s.customer.id === selectedPin.customerId) || null;
+  }, [selectedPin, customerSummaries]);
+
+  const selectedSupplyPin = useMemo(() => {
+    if (selectedPin?.kind !== 'SUPPLY') return null;
+    return allSupplyPins.find((p) => p.id === selectedPin.pinId) || null;
+  }, [selectedPin, allSupplyPins]);
+
+  // Nearby leads & past clients within 3 miles of the selected customer pin
+  const nearbyCustomers = useMemo(() => {
+    if (!selectedCustomerItem) return [];
+    return customerSummaries
+      .filter((other) => other.customer.id !== selectedCustomerItem.customer.id)
+      .map((other) => ({
+        ...other,
+        distanceMiles: haversineMiles(
+          selectedCustomerItem.lat,
+          selectedCustomerItem.lng,
+          other.lat,
+          other.lng
+        ),
+      }))
+      .filter((other) => other.distanceMiles <= NEARBY_RADIUS_MILES)
+      .sort((a, b) => a.distanceMiles - b.distanceMiles);
+  }, [selectedCustomerItem, customerSummaries]);
+
+  const nearbyCustomerIdSet = useMemo(() => {
+    return new Set(nearbyCustomers.map((n) => n.customer.id));
+  }, [nearbyCustomers]);
+
+  // Draw subtle 3-mile neighbor radius circle around tapped customer pin
+  useEffect(() => {
+    const radiusLayer = radiusLayerRef.current;
+    if (!radiusLayer) return;
+    radiusLayer.clearLayers();
+
+    if (!selectedCustomerItem) return;
+
+    L.circle([selectedCustomerItem.lat, selectedCustomerItem.lng], {
+      radius: NEARBY_RADIUS_METERS,
+      color: '#38bdf8',
+      weight: 1.75,
+      opacity: 0.78,
+      dashArray: '6 5',
+      fillColor: '#38bdf8',
+      fillOpacity: 0.09,
+      interactive: false,
+    }).addTo(radiusLayer);
+  }, [selectedCustomerItem?.customer.id, selectedCustomerItem?.lat, selectedCustomerItem?.lng]);
+
+  // Fetch Open-Meteo suitability dot data for visible exterior/deck pins (grid-cached 15 min)
+  const exteriorPinKey = useMemo(() => {
+    return visibleCustomerPins
+      .filter((p) => p.isExteriorJob)
+      .map((p) => `${p.customer.id}:${p.lat.toFixed(2)},${p.lng.toFixed(2)}`)
+      .join('|');
+  }, [visibleCustomerPins]);
+
+  useEffect(() => {
+    const extPins = visibleCustomerPins.filter((p) => p.isExteriorJob);
+    if (extPins.length === 0) return;
+
+    let cancelled = false;
+    const run = async () => {
+      const updates: Record<number, PinWeatherSummary> = {};
+      await Promise.all(
+        extPins.map(async (p) => {
+          const summary = await fetchPinWeatherSummary(p.lat, p.lng);
+          if (summary) {
+            updates[p.customer.id] = summary;
+          }
+        })
+      );
+      if (!cancelled && Object.keys(updates).length > 0) {
+        setExteriorWeatherByCustId((prev) => ({ ...prev, ...updates }));
+      }
+    };
+    run();
+    return () => {
+      cancelled = true;
+    };
+  }, [exteriorPinKey]);
 
   // Route stop helpers
   const routeIndexById = useMemo(() => {
@@ -377,15 +480,29 @@ export const JobsiteMapView: React.FC<JobsiteMapViewProps> = ({
 
     // 3. Customer & Jobsite Pins (Status Mode vs Money View)
     visibleCustomerPins.forEach((item) => {
-      const { customer, mapStatus, isActiveInProgress, financials, lat, lng } = item;
+      const { customer, mapStatus, isActiveInProgress, isExteriorJob, financials, lat, lng } = item;
       const meta = JOB_MAP_STATUS_META[mapStatus];
       const routeStopId = `cust-${customer.id}`;
       const stopNum = routeIndexById.get(routeStopId);
       const isSelected = selectedPin?.kind === 'CUSTOMER' && selectedPin.customerId === customer.id;
+      const isNearbyNeighbor = nearbyCustomerIdSet.has(customer.id);
+      const extWx = isExteriorJob ? exteriorWeatherByCustId[customer.id] : undefined;
+
+      const weatherDotHtml = extWx
+        ? (() => {
+            const dotColor = getWeatherDotColor(extWx.paintTone);
+            const tip = `Exterior Weather: ${extWx.paintBadge} (${extWx.tempF}°F, ${extWx.windMph} mph, ${extWx.rainChancePct}% rain)`;
+            return `<span data-weather-dot="${extWx.paintTone}" title="${escapeHtml(tip)}" style="width:8px;height:8px;border-radius:50%;background:${dotColor};border:1.5px solid #09090b;box-shadow:0 0 6px ${dotColor};display:inline-block;flex-shrink:0;"></span>`;
+          })()
+        : '';
 
       const stopBadgeHtml = stopNum
         ? `<span style="background:#06b6d4;color:#04121a;border-radius:9999px;padding:0 5px;font-size:9px;font-weight:900;margin-left:3px;">#${stopNum}</span>`
         : '';
+
+      const pinShadow = isNearbyNeighbor
+        ? '0 0 0 2.5px #38bdf8, 0 3px 12px rgba(0,0,0,0.85)'
+        : '0 3px 12px rgba(0,0,0,0.8)';
 
       let html = '';
 
@@ -407,14 +524,15 @@ export const JobsiteMapView: React.FC<JobsiteMapViewProps> = ({
           <div style="
             display:inline-flex;align-items:center;gap:4px;
             background:#0f172a;color:#f8fafc;
-            border:2px solid ${isSelected ? '#ffffff' : moneyColor};
+            border:2px solid ${isSelected ? '#ffffff' : isNearbyNeighbor ? '#38bdf8' : moneyColor};
             border-radius:9999px;padding:3px 8px;
             font-size:10px;font-weight:900;white-space:nowrap;
-            box-shadow:0 3px 12px rgba(0,0,0,0.8);
+            box-shadow:${pinShadow};
             transform:translate(-50%,-50%);
           ">
             <span style="width:7px;height:7px;border-radius:50%;background:${moneyColor};display:inline-block;flex-shrink:0;"></span>
             <span>${escapeHtml(pillText)}</span>
+            ${weatherDotHtml}
             ${stopBadgeHtml}
           </div>
         `;
@@ -427,14 +545,15 @@ export const JobsiteMapView: React.FC<JobsiteMapViewProps> = ({
           <div style="
             display:inline-flex;align-items:center;gap:4px;
             background:#111319;color:#f8fafc;
-            border:2px solid ${isSelected ? '#ffffff' : stopNum ? '#06b6d4' : meta.color};
+            border:2px solid ${isSelected ? '#ffffff' : isNearbyNeighbor ? '#38bdf8' : stopNum ? '#06b6d4' : meta.color};
             border-radius:9999px;padding:3px 8px;
             font-size:10.5px;font-weight:800;white-space:nowrap;
-            box-shadow:0 3px 12px rgba(0,0,0,0.8);
+            box-shadow:${pinShadow};
             transform:translate(-50%,-50%);
           ">
             <span style="width:9px;height:9px;border-radius:50%;background:${meta.color};border:1.5px solid #ffffff;display:inline-block;flex-shrink:0;"></span>
             <span>${escapeHtml(shortName)}</span>
+            ${weatherDotHtml}
             ${activeDot}
             ${stopBadgeHtml}
           </div>
@@ -450,7 +569,7 @@ export const JobsiteMapView: React.FC<JobsiteMapViewProps> = ({
 
       const marker = L.marker([lat, lng], {
         icon,
-        zIndexOffset: isSelected ? 950 : stopNum ? 750 : 500,
+        zIndexOffset: isSelected ? 950 : isNearbyNeighbor ? 820 : stopNum ? 750 : 500,
       }).addTo(markersLayer);
 
       marker.on('click', () => {
@@ -464,6 +583,8 @@ export const JobsiteMapView: React.FC<JobsiteMapViewProps> = ({
     moneyView,
     selectedPin,
     routeIndexById,
+    nearbyCustomerIdSet,
+    exteriorWeatherByCustId,
   ]);
 
   // Compute route mileage & fetch live OSRM road geometry whenever routeStops or returnToBase changes
@@ -514,17 +635,6 @@ export const JobsiteMapView: React.FC<JobsiteMapViewProps> = ({
       dashArray: routeEstimate.isRoadGeometry ? undefined : '8 6',
     }).addTo(routeLayer);
   }, [routeEstimate]);
-
-  // Selected customer / supply pin lookup
-  const selectedCustomerItem = useMemo(() => {
-    if (selectedPin?.kind !== 'CUSTOMER') return null;
-    return customerSummaries.find((s) => s.customer.id === selectedPin.customerId) || null;
-  }, [selectedPin, customerSummaries]);
-
-  const selectedSupplyPin = useMemo(() => {
-    if (selectedPin?.kind !== 'SUPPLY') return null;
-    return allSupplyPins.find((p) => p.id === selectedPin.pinId) || null;
-  }, [selectedPin, allSupplyPins]);
 
   // Fetch live Open-Meteo weather when a customer pin is tapped
   useEffect(() => {
@@ -663,8 +773,18 @@ export const JobsiteMapView: React.FC<JobsiteMapViewProps> = ({
 
   const handleOptimizeRoute = () => {
     if (routeStops.length < 2) return;
-    setRouteStops((prev) => optimizeRouteStops(prev));
-    onToast('⚡ Route stops optimized for shortest drive');
+    const beforeEst = estimateFallbackRoute(routeStops, returnToBase);
+    const beforeMiles = returnToBase ? beforeEst.roundTripMiles : beforeEst.oneWayMiles;
+    const sorted = optimizeRouteStops(routeStops, returnToBase);
+    const afterEst = estimateFallbackRoute(sorted, returnToBase);
+    const afterMiles = returnToBase ? afterEst.roundTripMiles : afterEst.oneWayMiles;
+    const savedMiles = Math.max(0, Math.round((beforeMiles - afterMiles) * 10) / 10);
+    setRouteStops(sorted);
+    onToast(
+      savedMiles >= 0.2
+        ? `⚡ Sorted fastest ${returnToBase ? 'loop' : 'route'} — saved ~${savedMiles.toFixed(1)} mi`
+        : `⚡ Stops sorted into fastest ${returnToBase ? 'loop' : 'sequence'} from Home Base`
+    );
   };
 
   const handleQuickAddStop = (val: string) => {
@@ -712,16 +832,20 @@ export const JobsiteMapView: React.FC<JobsiteMapViewProps> = ({
     const milesToLog = returnToBase
       ? routeEstimate.roundTripMiles
       : routeEstimate.oneWayMiles;
-    const stopNames = routeStops.map((s) => s.name).join(' → ');
+    const stopSequence = [
+      HOME_BASE.shortName,
+      ...routeStops.map((s) => s.name),
+      ...(returnToBase ? [HOME_BASE.shortName] : []),
+    ].join(' → ');
     const entry: MileageEntry = {
       id: Date.now(),
       date: getLocalTodayIso(),
       vehicle: 'Work Van / Truck',
       miles: Math.round(milesToLog * 10) / 10,
-      purpose: `${returnToBase ? 'Round-trip' : 'One-way'} jobsite route: ${stopNames}`,
+      purpose: `${returnToBase ? 'Round-trip' : 'One-way'} route: ${stopSequence}`,
     };
     onSaveMileage(entry);
-    onToast(`✔ Logged ${entry.miles} mi to IRS Mileage Log`);
+    onToast(`✔ Saved ${entry.miles.toFixed(1)} mi to Mileage Log`);
   };
 
   const googleMapsRouteUrl = useMemo(
@@ -733,7 +857,7 @@ export const JobsiteMapView: React.FC<JobsiteMapViewProps> = ({
     ? routeEstimate.roundTripMiles
     : routeEstimate.oneWayMiles;
   const irsRate = constants.irsRate || 0.67;
-  const estTaxDeduction = routeEstimate.roundTripMiles * irsRate;
+  const estTaxDeduction = displayedMiles * irsRate;
 
   return (
     <div className="space-y-3 pb-24">
@@ -917,21 +1041,36 @@ export const JobsiteMapView: React.FC<JobsiteMapViewProps> = ({
             No customer folders yet — tap paint stores or add a customer to plot jobsites
           </div>
         )}
+      </div>
 
-        {/* Selected Pin Compact Card (Customer, Supply Store, or Home Base) */}
-        {selectedPin && (
-          <div className="absolute bottom-2.5 left-2.5 right-2.5 z-[500] bg-[#101218]/95 backdrop-blur-md border border-[var(--border)] rounded-2xl p-3 shadow-2xl max-w-xl mx-auto">
-            {/* CUSTOMER PIN CARD */}
-            {selectedCustomerItem && (() => {
-              const { customer, mapStatus, isActiveInProgress, financials, scopeSummary, schedDate, lat, lng, isApprox } =
-                selectedCustomerItem;
-              const meta = JOB_MAP_STATUS_META[mapStatus];
-              const stopId = `cust-${customer.id}`;
-              const routeNum = routeIndexById.get(stopId);
-              const telHref = sanitizeTelHref(customer.phone);
+      {/* Selected Pin Detail Card (rendered below map so the 3-mile ring & pins stay unobstructed) */}
+      {selectedPin && (
+        <div
+          data-selected-pin-card="true"
+          className="bg-[#101218] border border-[var(--border)] rounded-2xl p-3.5 shadow-xl"
+        >
+          {/* CUSTOMER PIN CARD */}
+          {selectedCustomerItem && (() => {
+            const {
+              customer,
+              mapStatus,
+              isActiveInProgress,
+              isExteriorJob,
+              financials,
+              scopeSummary,
+              schedDate,
+              lat,
+              lng,
+              isApprox,
+            } = selectedCustomerItem;
+            const meta = JOB_MAP_STATUS_META[mapStatus];
+            const stopId = `cust-${customer.id}`;
+            const routeNum = routeIndexById.get(stopId);
+            const telHref = sanitizeTelHref(customer.phone);
+            const activeWeather = pinWeather || exteriorWeatherByCustId[customer.id] || null;
 
-              return (
-                <div className="space-y-2">
+            return (
+              <div className="space-y-2.5">
                   <div className="flex items-start justify-between gap-2">
                     <div className="min-w-0">
                       <div className="flex flex-wrap items-center gap-1.5">
@@ -944,6 +1083,27 @@ export const JobsiteMapView: React.FC<JobsiteMapViewProps> = ({
                         >
                           {meta.label}
                         </span>
+                        {isExteriorJob && (
+                          <span
+                            className="inline-flex items-center gap-1 text-[9px] font-black uppercase px-2 py-0.5 rounded-full bg-slate-900 text-slate-200 border border-slate-700"
+                            title={
+                              activeWeather
+                                ? `Exterior Weather: ${activeWeather.paintBadge}`
+                                : 'Exterior / Deck job'
+                            }
+                          >
+                            {activeWeather && (
+                              <span
+                                className="w-2 h-2 rounded-full inline-block shrink-0"
+                                style={{
+                                  backgroundColor: getWeatherDotColor(activeWeather.paintTone),
+                                  boxShadow: `0 0 6px ${getWeatherDotColor(activeWeather.paintTone)}`,
+                                }}
+                              />
+                            )}
+                            <span>Exterior / Deck</span>
+                          </span>
+                        )}
                         {isActiveInProgress && (
                           <span className="text-[9px] font-black uppercase px-1.5 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/50">
                             In Progress
@@ -1023,29 +1183,33 @@ export const JobsiteMapView: React.FC<JobsiteMapViewProps> = ({
                         <span className="text-[9px] uppercase font-bold text-slate-400">
                           Live Jobsite Weather
                         </span>
-                        {pinWeather && (
+                        {activeWeather && (
                           <span
-                            className={`text-[9px] font-extrabold px-1.5 py-0.5 rounded ${
-                              pinWeather.paintTone === 'ok'
+                            className={`inline-flex items-center gap-1 text-[9px] font-extrabold px-1.5 py-0.5 rounded ${
+                              activeWeather.paintTone === 'ok'
                                 ? 'bg-emerald-500/20 text-emerald-300'
-                                : pinWeather.paintTone === 'warn'
+                                : activeWeather.paintTone === 'warn'
                                 ? 'bg-amber-500/20 text-amber-300'
                                 : 'bg-rose-500/20 text-rose-300'
                             }`}
                           >
-                            {pinWeather.paintBadge}
+                            <span
+                              className="w-1.5 h-1.5 rounded-full inline-block shrink-0"
+                              style={{ backgroundColor: getWeatherDotColor(activeWeather.paintTone) }}
+                            />
+                            <span>{activeWeather.paintBadge}</span>
                           </span>
                         )}
                       </div>
-                      {loadingWeather ? (
+                      {loadingWeather && !activeWeather ? (
                         <div className="text-[10.5px] text-slate-400 mt-0.5">
                           Fetching Open-Meteo…
                         </div>
-                      ) : pinWeather ? (
+                      ) : activeWeather ? (
                         <div className="text-[11px] font-bold text-slate-100 mt-0.5 flex flex-wrap items-center gap-x-2.5 gap-y-0.5">
-                          <span>🌡️ {pinWeather.tempF}°F</span>
-                          <span>💨 {pinWeather.windMph} mph</span>
-                          <span>🌧️ {pinWeather.rainChancePct}% rain</span>
+                          <span>🌡️ {activeWeather.tempF}°F</span>
+                          <span>💨 {activeWeather.windMph} mph</span>
+                          <span>🌧️ {activeWeather.rainChancePct}% rain</span>
                         </div>
                       ) : (
                         <div className="text-[10.5px] text-slate-400 mt-0.5">
@@ -1053,6 +1217,55 @@ export const JobsiteMapView: React.FC<JobsiteMapViewProps> = ({
                         </div>
                       )}
                     </div>
+                  </div>
+
+                  {/* Nearby (Within 3 mi) Neighbor Chips */}
+                  <div className="bg-sky-950/35 border border-sky-500/30 rounded-xl px-2.5 py-1.5 space-y-1.5">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-[9px] font-extrabold uppercase tracking-wider text-sky-300 flex items-center gap-1">
+                        <span>📡</span>
+                        <span>Nearby (Within 3 mi)</span>
+                      </span>
+                      <span className="text-[9px] font-bold text-sky-300/80">
+                        {nearbyCustomers.length > 0
+                          ? `${nearbyCustomers.length} lead${nearbyCustomers.length === 1 ? '' : 's'} / client${nearbyCustomers.length === 1 ? '' : 's'}`
+                          : 'None within 3 mi'}
+                      </span>
+                    </div>
+                    {nearbyCustomers.length > 0 && (
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        {nearbyCustomers.map((nb) => {
+                          const nbMeta = JOB_MAP_STATUS_META[nb.mapStatus];
+                          const nbRouteNum = routeIndexById.get(`cust-${nb.customer.id}`);
+                          return (
+                            <button
+                              key={nb.customer.id}
+                              type="button"
+                              onClick={() => {
+                                setSelectedPin({ kind: 'CUSTOMER', customerId: nb.customer.id });
+                                mapInstanceRef.current?.panTo([nb.lat, nb.lng], { animate: true });
+                              }}
+                              className="inline-flex items-center gap-1.5 px-2 py-1 rounded-full bg-slate-900/90 hover:bg-slate-800 border border-sky-400/40 text-[10px] font-bold text-slate-100 cursor-pointer transition-all active:scale-95"
+                              title={`Focus ${nb.customer.name} (${nb.distanceMiles.toFixed(1)} mi away)`}
+                            >
+                              <span
+                                className="w-2 h-2 rounded-full inline-block shrink-0"
+                                style={{ backgroundColor: nbMeta.color }}
+                              />
+                              <span className="truncate max-w-[110px]">{nb.customer.name}</span>
+                              <span className="text-[9px] font-extrabold text-sky-300">
+                                {nb.distanceMiles.toFixed(1)} mi
+                              </span>
+                              {nbRouteNum && (
+                                <span className="text-[8.5px] font-black px-1 rounded-full bg-cyan-500 text-slate-950">
+                                  #{nbRouteNum}
+                                </span>
+                              )}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    )}
                   </div>
 
                   {/* Quick Actions */}
@@ -1235,9 +1448,8 @@ export const JobsiteMapView: React.FC<JobsiteMapViewProps> = ({
                 </button>
               </div>
             )}
-          </div>
-        )}
-      </div>
+        </div>
+      )}
 
       {/* MULTI-STOP ROUTE BUILDER & MILEAGE CALCULATOR */}
       <div className="bg-[var(--surface)] border border-[var(--border)] rounded-2xl p-3.5 shadow-sm space-y-3">
@@ -1427,60 +1639,80 @@ export const JobsiteMapView: React.FC<JobsiteMapViewProps> = ({
               ${estTaxDeduction.toFixed(2)}
             </div>
             <div className="text-[9px] text-[var(--text-muted)]">
-              RT @ ${(irsRate).toFixed(2)}/mi
+              {returnToBase ? 'RT' : '1-Way'} @ ${(irsRate).toFixed(2)}/mi
             </div>
           </div>
         </div>
 
         {/* Route Action Buttons */}
-        <div className="flex flex-wrap items-center gap-2">
-          {routeStops.length > 0 ? (
-            <a
-              href={googleMapsRouteUrl}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="flex-1 min-w-[210px] py-2.5 px-4 rounded-xl bg-gradient-to-r from-cyan-500 to-blue-600 hover:opacity-95 text-white font-black text-xs uppercase tracking-wide text-center shadow-lg transition-all active:scale-95"
-            >
-              🗺️ Launch Route in Google Maps
-            </a>
-          ) : (
-            <button
-              type="button"
-              disabled
-              className="flex-1 min-w-[210px] py-2.5 px-4 rounded-xl bg-[var(--surface-subtle)] border border-[var(--border)] text-[var(--text-muted)] font-black text-xs uppercase tracking-wide text-center opacity-60 cursor-not-allowed"
-            >
-              🗺️ Launch Route in Google Maps
-            </button>
-          )}
-
-          {routeStops.length >= 2 && (
-            <button
-              type="button"
-              onClick={handleOptimizeRoute}
-              className="py-2.5 px-3 rounded-xl bg-amber-500/20 border border-amber-400/50 text-amber-300 font-extrabold text-[11px] hover:bg-amber-500/30 cursor-pointer"
-            >
-              ⚡ Optimize
-            </button>
-          )}
-
-          {routeStops.length > 0 && (
-            <>
+        <div className="space-y-2">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+            {routeStops.length > 0 ? (
+              <a
+                href={googleMapsRouteUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="py-2.5 px-3.5 rounded-xl bg-gradient-to-r from-cyan-500 to-blue-600 hover:opacity-95 text-white font-black text-xs uppercase tracking-wide text-center shadow-lg transition-all active:scale-95 flex items-center justify-center gap-1.5"
+              >
+                <span>🗺️</span>
+                <span>Launch Route in Google Maps</span>
+              </a>
+            ) : (
               <button
                 type="button"
-                onClick={handleLogRouteMileage}
-                className="py-2.5 px-3 rounded-xl bg-emerald-500/20 border border-emerald-400/50 text-emerald-300 font-extrabold text-[11px] hover:bg-emerald-500/30 cursor-pointer"
+                disabled
+                className="py-2.5 px-3.5 rounded-xl bg-[var(--surface-subtle)] border border-[var(--border)] text-[var(--text-muted)] font-black text-xs uppercase tracking-wide text-center opacity-60 cursor-not-allowed flex items-center justify-center gap-1.5"
               >
-                🚗 Log Miles
+                <span>🗺️</span>
+                <span>Launch Route in Google Maps</span>
               </button>
+            )}
+
+            <button
+              type="button"
+              disabled={routeStops.length === 0}
+              onClick={handleLogRouteMileage}
+              className={`py-2.5 px-3.5 rounded-xl font-black text-xs uppercase tracking-wide text-center border transition-all flex items-center justify-center gap-1.5 ${
+                routeStops.length > 0
+                  ? 'bg-emerald-500/20 border-emerald-400/60 text-emerald-300 hover:bg-emerald-500/30 shadow cursor-pointer active:scale-95'
+                  : 'bg-[var(--surface-subtle)] border-[var(--border)] text-[var(--text-muted)] opacity-60 cursor-not-allowed'
+              }`}
+            >
+              <span>🚗</span>
+              <span>Log Trip Miles</span>
+            </button>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              disabled={routeStops.length < 2}
+              onClick={handleOptimizeRoute}
+              title={
+                routeStops.length < 2
+                  ? 'Add at least 2 stops to auto-sort the fastest loop from Home Base'
+                  : `Reorder stops for shortest driving ${returnToBase ? 'loop' : 'sequence'} from ${HOME_BASE.address}`
+              }
+              className={`flex-1 min-w-[170px] py-2 px-3 rounded-xl font-extrabold text-[11px] border transition-all flex items-center justify-center gap-1.5 ${
+                routeStops.length >= 2
+                  ? 'bg-amber-500/20 border-amber-400/60 text-amber-300 hover:bg-amber-500/30 cursor-pointer active:scale-95'
+                  : 'bg-[var(--surface-subtle)] border-[var(--border)] text-[var(--text-muted)] opacity-60 cursor-not-allowed'
+              }`}
+            >
+              <span>⚡</span>
+              <span>Sort Fastest Loop</span>
+            </button>
+
+            {routeStops.length > 0 && (
               <button
                 type="button"
                 onClick={() => setRouteStops([])}
-                className="py-2.5 px-3 rounded-xl bg-[var(--surface-subtle)] border border-[var(--border)] text-[var(--text-muted)] font-extrabold text-[11px] hover:text-rose-400 cursor-pointer"
+                className="py-2 px-3.5 rounded-xl bg-[var(--surface-subtle)] border border-[var(--border)] text-[var(--text-muted)] font-extrabold text-[11px] hover:text-rose-400 cursor-pointer"
               >
                 Clear
               </button>
-            </>
-          )}
+            )}
+          </div>
         </div>
       </div>
 

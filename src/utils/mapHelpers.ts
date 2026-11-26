@@ -279,10 +279,34 @@ export interface CustomerMapSummary {
   customer: Customer;
   mapStatus: JobMapStatus;
   isActiveInProgress: boolean;
+  isExteriorJob: boolean;
   primaryJob: JobProject | null;
   financials: JobFinancialSummary;
   scopeSummary: string;
   schedDate: string;
+}
+
+const EXTERIOR_JOB_REGEX =
+  /\b(ext(erior)?|deck(s|ing)?|siding|porch|fence|fascia|soffit|stucco|cedar|stain(ing|ed)?|power\s*wash|pressure\s*wash|outdoor|patio|railing|shutters|gable|eaves|garage\s*door|house\s*wash)\b/i;
+
+export function isCustomerExteriorOrDeckJob(customer: Customer): boolean {
+  const textParts: string[] = [];
+  if (customer.notes) textParts.push(customer.notes);
+  (customer.jobs || []).forEach((job) => {
+    if (job.title) textParts.push(job.title);
+    if (job.scope) textParts.push(job.scope);
+    if (job.prepScope) textParts.push(job.prepScope);
+    if (job.internalNotes) textParts.push(job.internalNotes);
+    (job.rooms || []).forEach((r) => {
+      if (r.n) textParts.push(r.n);
+      if (r.prod) textParts.push(r.prod);
+      if (r.prep && r.prep.length > 0) textParts.push(r.prep.join(' '));
+    });
+    (job.repairs || []).forEach((rep) => {
+      if (rep.d) textParts.push(rep.d);
+    });
+  });
+  return EXTERIOR_JOB_REGEX.test(textParts.join(' '));
 }
 
 export function getCustomerMapSummary(
@@ -363,6 +387,7 @@ export function getCustomerMapSummary(
     customer,
     mapStatus,
     isActiveInProgress,
+    isExteriorJob: isCustomerExteriorOrDeckJob(customer),
     primaryJob,
     financials,
     scopeSummary,
@@ -723,30 +748,120 @@ export async function fetchOsrmRoadRoute(
   }
 }
 
-export function optimizeRouteStops(stops: RouteStopItem[]): RouteStopItem[] {
-  if (stops.length <= 1) return [...stops];
-  const remaining = [...stops];
-  const ordered: RouteStopItem[] = [];
-  let curLat: number = HOME_BASE.lat;
-  let curLng: number = HOME_BASE.lng;
+function computeSequenceMiles(
+  indices: number[],
+  distFromBase: number[],
+  distMatrix: number[][],
+  returnToBase: boolean
+): number {
+  if (indices.length === 0) return 0;
+  let total = distFromBase[indices[0]];
+  for (let i = 0; i < indices.length - 1; i++) {
+    total += distMatrix[indices[i]][indices[i + 1]];
+  }
+  if (returnToBase) {
+    total += distFromBase[indices[indices.length - 1]];
+  }
+  return total;
+}
 
-  while (remaining.length > 0) {
-    let bestIdx = 0;
-    let bestDist = Infinity;
-    for (let i = 0; i < remaining.length; i++) {
-      const d = haversineMiles(curLat, curLng, remaining[i].lat, remaining[i].lng);
-      if (d < bestDist) {
-        bestDist = d;
-        bestIdx = i;
+/**
+ * Reorders stops into the shortest driving sequence starting from Home Base
+ * (`2119 Barton Ave, West Bend, WI 53090`) and optionally returning to Home Base.
+ * Uses exact branch-and-bound for up to 9 stops, and nearest-neighbor + 2-opt for larger lists.
+ */
+export function optimizeRouteStops(
+  stops: RouteStopItem[],
+  returnToBase = true
+): RouteStopItem[] {
+  const n = stops.length;
+  if (n <= 1) return [...stops];
+
+  // Precompute pairwise distances and distance from Home Base
+  const distFromBase = stops.map((s) =>
+    haversineMiles(HOME_BASE.lat, HOME_BASE.lng, s.lat, s.lng)
+  );
+  const distMatrix: number[][] = Array.from({ length: n }, (_, i) =>
+    Array.from({ length: n }, (_, j) =>
+      i === j ? 0 : haversineMiles(stops[i].lat, stops[i].lng, stops[j].lat, stops[j].lng)
+    )
+  );
+
+  // 1. Nearest-neighbor seed from Home Base
+  const visitedSeed = new Array<boolean>(n).fill(false);
+  let bestOrder: number[] = [];
+  let lastIdx = -1;
+  for (let step = 0; step < n; step++) {
+    let pick = -1;
+    let bestD = Infinity;
+    for (let i = 0; i < n; i++) {
+      if (visitedSeed[i]) continue;
+      const d = lastIdx === -1 ? distFromBase[i] : distMatrix[lastIdx][i];
+      if (d < bestD) {
+        bestD = d;
+        pick = i;
       }
     }
-    const [picked] = remaining.splice(bestIdx, 1);
-    ordered.push(picked);
-    curLat = picked.lat;
-    curLng = picked.lng;
+    visitedSeed[pick] = true;
+    bestOrder.push(pick);
+    lastIdx = pick;
   }
 
-  return ordered;
+  let bestCost = computeSequenceMiles(bestOrder, distFromBase, distMatrix, returnToBase);
+
+  // 2. For <= 9 stops, exact DFS branch-and-bound guarantees the globally shortest loop/route
+  if (n <= 9) {
+    const used = new Array<boolean>(n).fill(false);
+    const current: number[] = [];
+
+    const dfs = (depth: number, prev: number, costSoFar: number) => {
+      if (costSoFar >= bestCost - 1e-6) return;
+      if (depth === n) {
+        const finalCost = returnToBase ? costSoFar + distFromBase[prev] : costSoFar;
+        if (finalCost < bestCost - 1e-6) {
+          bestCost = finalCost;
+          bestOrder = [...current];
+        }
+        return;
+      }
+      for (let i = 0; i < n; i++) {
+        if (used[i]) continue;
+        const stepCost = depth === 0 ? distFromBase[i] : distMatrix[prev][i];
+        if (costSoFar + stepCost >= bestCost - 1e-6) continue;
+        used[i] = true;
+        current.push(i);
+        dfs(depth + 1, i, costSoFar + stepCost);
+        current.pop();
+        used[i] = false;
+      }
+    };
+
+    dfs(0, -1, 0);
+    return bestOrder.map((idx) => stops[idx]);
+  }
+
+  // 3. For > 9 stops, run 2-opt local improvement swaps
+  let improved = true;
+  while (improved) {
+    improved = false;
+    for (let i = 0; i < n - 1; i++) {
+      for (let j = i + 1; j < n; j++) {
+        const candidate = [
+          ...bestOrder.slice(0, i),
+          ...bestOrder.slice(i, j + 1).reverse(),
+          ...bestOrder.slice(j + 1),
+        ];
+        const candCost = computeSequenceMiles(candidate, distFromBase, distMatrix, returnToBase);
+        if (candCost < bestCost - 1e-6) {
+          bestOrder = candidate;
+          bestCost = candCost;
+          improved = true;
+        }
+      }
+    }
+  }
+
+  return bestOrder.map((idx) => stops[idx]);
 }
 
 function stopToMapsQuery(stop: RouteStopItem): string {

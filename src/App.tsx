@@ -1144,7 +1144,6 @@ export default function App() {
             onOpenMileage={() => setMileageOpen(true)}
             onOpenExpenses={() => setExpenseOpen(true)}
             onOpenShoppingList={() => setShoppingListOpen(true)}
-            onOpenRegionalMap={() => setActiveTab('map')}
             onSyncCalendar={() => setCalendarSyncOpen(true)}
             onOpenSettings={() => setSettingsOpen(true)}
             onOpenCloudSync={() => setCloudSyncOpen(true)}

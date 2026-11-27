@@ -165,7 +165,7 @@ export const PREP_CHECKLIST_CATEGORIES: readonly PrepCategory[] = [
     items: [
       {
         label: 'Mask/tape baseboards',
-        scopeText: '- Tape and mask all baseboards and trim edges for clean paint lines',
+        scopeText: '- Tape and mask all baseboards',
       },
       {
         label: 'Mask windows & trim',
@@ -191,6 +191,10 @@ export const PREP_CHECKLIST_CATEGORIES: readonly PrepCategory[] = [
     icon: '🔧',
     items: [
       {
+        label: 'Fill nail holes & minor cracks',
+        scopeText: '- Fill all nail holes and minor cracks with nail hole filler',
+      },
+      {
         label: 'Patch nail holes & minor drywall',
         scopeText: '- Patch all nail holes, dings, and minor drywall imperfections, sand smooth, and spot-prime',
       },
@@ -209,11 +213,15 @@ export const PREP_CHECKLIST_CATEGORIES: readonly PrepCategory[] = [
       },
       {
         label: 'Caulk trim & gaps',
-        scopeText: '- Caulk all open gaps, trim seams, and minor cracks with paintable elastomeric caulk',
+        scopeText: '- Caulk trim, gaps, and seams in all areas necessary for a smooth finish',
       },
       {
         label: 'Degrease / wash walls (Spray Nine)',
         scopeText: '- Clean and degrease soiled walls and high-touch surfaces (Spray Nine) prior to coating',
+      },
+      {
+        label: 'Prime all areas necessary',
+        scopeText: '- Prime all areas necessary with appropriate primer',
       },
       {
         label: 'Prime stains / bare spots',

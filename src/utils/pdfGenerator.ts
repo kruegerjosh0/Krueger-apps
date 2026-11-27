@@ -7,6 +7,13 @@ import {
   computeRoomSqft,
   applySnapshotToJobForPdf,
   getLocalTodayIso,
+  getCustomerPipelineStage,
+  PIPELINE_STAGE_META,
+  getEstimateSnapshot,
+  getFinalBillSnapshot,
+  computeSnapshotTotals,
+  normalizePipelineStage,
+  formatScheduledDate,
 } from './projectHelpers';
 import { KRUEGER_BUSINESS_CARD, getQrMatrix } from './businessCard';
 
@@ -1397,4 +1404,528 @@ export async function generateBlankLetterheadPdf(
     balanceDue: 0,
   };
 }
+
+/**
+ * Truncates text cleanly to fit inside a given width (pt) in jsPDF.
+ */
+function truncateToWidth(doc: jsPDF, text: string, maxWidth: number): string {
+  const cleaned = String(text || '').replace(/\s+/g, ' ').trim();
+  if (!cleaned) return '';
+  if (doc.getTextWidth(cleaned) <= maxWidth) return cleaned;
+  let cut = cleaned;
+  while (cut.length > 1 && doc.getTextWidth(`${cut}…`) > maxWidth) {
+    cut = cut.slice(0, -1);
+  }
+  return `${cut.trimEnd()}…`;
+}
+
+/**
+ * Generates a strictly 1-Page Master Customer Record Dossier PDF:
+ * `Krueger-Painting-Customer-Record-[ClientName].pdf`
+ *
+ * Includes:
+ * 1. Branded Krueger Painting Header + Client Contact Info, Status & Site Notes
+ * 2. 4-Card Financial Totals Strip across all projects (Estimated, Final Billed, Payments, Balance Due)
+ * 3. All Projects Summary Table (Project | Dates | Status | Rooms/Scope | Estimate $ | Final Bill $)
+ * 4. Saved Paint & Color Spec Log (rooms, products, colors, sheens — strictly omitting blank fields)
+ */
+export async function generateCustomerRecordPdf(
+  customer: Customer,
+  settings: PrintSettings,
+  constants: SystemConstants,
+  customLogoBase64?: string
+): Promise<GeneratedPdfResult> {
+  const doc = new jsPDF({
+    orientation: 'portrait',
+    unit: 'pt',
+    format: 'letter', // 612 x 792 pt — strictly 1 page
+  });
+
+  const pageWidth = 612;
+  const pageHeight = 792;
+  const margin = 36;
+  const contentWidth = pageWidth - margin * 2; // 540 pt
+  const rightMargin = pageWidth - margin;
+
+  // 1. Official Krueger Painting Black & Yellow Brand Header
+  let y = await drawBrandedBlackHeader(doc, settings, {
+    pageWidth,
+    margin,
+    docBadge: 'CUSTOMER RECORD',
+    customLogoBase64,
+  });
+
+  const jobs = customer.jobs || [];
+  const custStage = getCustomerPipelineStage(customer);
+  const custStageMeta = PIPELINE_STAGE_META[custStage];
+
+  // Helper: Gold blotch compact section header
+  const drawCompactSectionHeader = (title: string) => {
+    doc.setFillColor(241, 196, 15);
+    doc.rect(margin, y - 8.5, 3.5, 10, 'F');
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(8.5);
+    doc.setTextColor(35, 35, 40);
+    doc.text(title, margin + 8.5, y);
+    y += 11;
+  };
+
+  // =========================================================================
+  // SECTION 1: CLIENT PROFILE & SITE NOTES
+  // =========================================================================
+  const profileTopY = y;
+  const leftColW = 282;
+  const rightColX = margin + leftColW + 12;
+  const rightColW = contentWidth - leftColW - 12; // 246 pt
+
+  // Left: Name + Status Pill + Contact Lines
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(13.5);
+  doc.setTextColor(17, 17, 17);
+  const displayName = truncateToWidth(doc, customer.name || 'Valued Client', leftColW - 88);
+  const nameTextW = doc.getTextWidth(displayName);
+  doc.text(displayName, margin, profileTopY + 2);
+
+  // Status badge right beside name (zero overlap)
+  const statusBadgeText = custStageMeta.label.toUpperCase();
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(6.8);
+  const badgeW = Math.min(84, doc.getTextWidth(statusBadgeText) + 12);
+  const badgeX = margin + Math.min(nameTextW + 8, leftColW - badgeW);
+  doc.setFillColor(241, 196, 15);
+  doc.roundedRect(badgeX, profileTopY - 8.5, badgeW, 13, 2.5, 2.5, 'F');
+  doc.setTextColor(17, 17, 17);
+  doc.text(statusBadgeText, badgeX + badgeW / 2, profileTopY + 0.5, { align: 'center' });
+
+  let leftY = profileTopY + 15;
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(8.2);
+  doc.setTextColor(55, 65, 81);
+
+  if (customer.address?.trim()) {
+    const addrText = truncateToWidth(doc, customer.address.trim(), leftColW);
+    doc.text(addrText, margin, leftY);
+    leftY += 11.5;
+  }
+
+  const contactBits = [customer.phone?.trim(), customer.email?.trim()].filter(Boolean);
+  if (contactBits.length > 0) {
+    doc.text(truncateToWidth(doc, contactBits.join('   •   '), leftColW), margin, leftY);
+    leftY += 11.5;
+  }
+
+  doc.setFontSize(7.4);
+  doc.setTextColor(100, 116, 139);
+  doc.text(
+    `${jobs.length} project${jobs.length === 1 ? '' : 's'} on file   •   Record Date: ${getLocalTodayIso()}`,
+    margin,
+    leftY
+  );
+  leftY += 8;
+
+  // Right: Site & Customer Notes Box
+  const rawNotes = (customer.notes || '').trim();
+  const noteBoxH = 52;
+  doc.setFillColor(248, 250, 252);
+  doc.setDrawColor(203, 213, 225);
+  doc.setLineWidth(0.75);
+  doc.roundedRect(rightColX, profileTopY - 10, rightColW, noteBoxH, 3, 3, 'FD');
+
+  doc.setFillColor(241, 196, 15);
+  doc.rect(rightColX, profileTopY - 10, 3, noteBoxH, 'F');
+
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(6.8);
+  doc.setTextColor(71, 85, 105);
+  doc.text('SITE & CUSTOMER NOTES', rightColX + 8, profileTopY);
+
+  doc.setFont('helvetica', rawNotes ? 'normal' : 'italic');
+  doc.setFontSize(7.6);
+  doc.setTextColor(rawNotes ? 30 : 120, rawNotes ? 41 : 130, rawNotes ? 59 : 145);
+  const noteLines: string[] = doc.splitTextToSize(
+    rawNotes || 'No site notes, gate codes, or special requests logged.',
+    rightColW - 14
+  );
+  const clippedNotes = noteLines.slice(0, 3);
+  if (noteLines.length > 3) {
+    clippedNotes[2] = truncateToWidth(doc, `${clippedNotes[2]}…`, rightColW - 14);
+  }
+  clippedNotes.forEach((line, i) => {
+    doc.text(line, rightColX + 8, profileTopY + 11 + i * 9.5);
+  });
+
+  y = Math.max(leftY, profileTopY - 10 + noteBoxH) + 12;
+
+  // =========================================================================
+  // SECTION 2: FINANCIAL TOTALS STRIP (ACROSS ALL PROJECTS)
+  // =========================================================================
+  let totalEstimated = 0;
+  let totalFinalBilled = 0;
+  let billedProjectCount = 0;
+  let totalPaymentsReceived = 0;
+  let totalBalanceDue = 0;
+
+  const projectRows = jobs.map((j, idx) => {
+    const estSnap = getEstimateSnapshot(j);
+    const estTot = computeSnapshotTotals(estSnap, constants);
+    const billSnap = getFinalBillSnapshot(j);
+    const billTot = billSnap ? computeSnapshotTotals(billSnap, constants) : null;
+
+    totalEstimated += estTot.grossTotal;
+    if (billTot) {
+      totalFinalBilled += billTot.grossTotal;
+      billedProjectCount += 1;
+    }
+
+    const activeTot = billTot || estTot;
+    totalPaymentsReceived += activeTot.totalPaid;
+    totalBalanceDue += activeTot.balanceDue;
+
+    const isDraft = j.status === 'DRAFT';
+    const stage = normalizePipelineStage(j.status);
+    const statusLabel = isDraft ? 'Draft' : PIPELINE_STAGE_META[stage].shortLabel;
+
+    const dateText = j.schedDate
+      ? formatScheduledDate(j.schedDate).replace(/^[A-Za-z]+,\s*/, '')
+      : j.date || 'Unscheduled';
+
+    const activeSnap = billSnap || estSnap;
+    const roomNames = (activeSnap.rooms || [])
+      .map((r) => (r.n || '').trim())
+      .filter(Boolean);
+    const scopeSummary =
+      roomNames.length > 0
+        ? roomNames.join(', ')
+        : (activeSnap.scope || '').trim() || 'General painting scope';
+
+    return {
+      title: (j.title || `Project #${idx + 1}`).trim(),
+      dateText,
+      statusLabel,
+      scopeSummary,
+      estGross: estTot.grossTotal,
+      billGross: billTot ? billTot.grossTotal : null,
+      activeSnap,
+    };
+  });
+
+  const cardGap = 8;
+  const kpiW = (contentWidth - cardGap * 3) / 4;
+  const kpiH = 44;
+  const kpiCards: Array<{
+    label: string;
+    value: string;
+    sub: string;
+    accent: [number, number, number];
+  }> = [
+    {
+      label: 'TOTAL ESTIMATED',
+      value: `$${totalEstimated.toLocaleString()}`,
+      sub: `${jobs.length} project${jobs.length === 1 ? '' : 's'}`,
+      accent: [241, 196, 15],
+    },
+    {
+      label: 'TOTAL FINAL BILLED',
+      value: `$${totalFinalBilled.toLocaleString()}`,
+      sub: `${billedProjectCount} final bill${billedProjectCount === 1 ? '' : 's'}`,
+      accent: [22, 163, 74],
+    },
+    {
+      label: 'PAYMENTS RECEIVED',
+      value: `$${totalPaymentsReceived.toLocaleString()}`,
+      sub: 'deposits & payments',
+      accent: [2, 132, 199],
+    },
+    {
+      label: 'BALANCE DUE',
+      value: `$${totalBalanceDue.toLocaleString()}`,
+      sub: totalBalanceDue > 0 ? 'remaining balance' : 'paid / settled',
+      accent: totalBalanceDue > 0 ? [220, 38, 38] : [22, 163, 74],
+    },
+  ];
+
+  kpiCards.forEach((card, i) => {
+    const cx = margin + i * (kpiW + cardGap);
+    doc.setFillColor(248, 250, 252);
+    doc.setDrawColor(218, 224, 232);
+    doc.setLineWidth(0.75);
+    doc.roundedRect(cx, y, kpiW, kpiH, 3, 3, 'FD');
+
+    doc.setFillColor(card.accent[0], card.accent[1], card.accent[2]);
+    doc.rect(cx, y, kpiW, 3, 'F');
+
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(6.4);
+    doc.setTextColor(100, 116, 139);
+    doc.text(card.label, cx + 7, y + 12.5);
+
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(13);
+    doc.setTextColor(17, 17, 17);
+    doc.text(card.value, cx + 7, y + 28.5);
+
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(6.6);
+    doc.setTextColor(100, 116, 139);
+    doc.text(card.sub, cx + 7, y + 38.5);
+  });
+
+  y += kpiH + 16;
+
+  // =========================================================================
+  // SECTION 3: ALL PROJECTS SUMMARY TABLE
+  // =========================================================================
+  drawCompactSectionHeader(`ALL PROJECTS SUMMARY (${projectRows.length})`);
+
+  // Column layout totaling 540 pt
+  const colNameX = margin + 5;
+  const colDateX = margin + 125;
+  const colStatX = margin + 198;
+  const colScopeX = margin + 258;
+  const colEstRightX = margin + 474;
+  const colBillRightX = rightMargin - 5;
+
+  // Header bar
+  const tableHeaderH = 16;
+  doc.setFillColor(17, 17, 17);
+  doc.rect(margin, y, contentWidth, tableHeaderH, 'F');
+
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(7.2);
+  doc.setTextColor(241, 196, 15);
+  const hdrTextY = y + 10.8;
+  doc.text('PROJECT NAME', colNameX, hdrTextY);
+  doc.text('DATES', colDateX, hdrTextY);
+  doc.text('STATUS', colStatX, hdrTextY);
+  doc.text('ROOMS / SCOPE SUMMARY', colScopeX, hdrTextY);
+  doc.text('ESTIMATE', colEstRightX, hdrTextY, { align: 'right' });
+  doc.text('FINAL BILL', colBillRightX, hdrTextY, { align: 'right' });
+  y += tableHeaderH;
+
+  // Reserve room for Paint & Color Spec Log (~175pt) + footer (~36pt) so everything fits on 1 page
+  const maxProjectsBottomY = 540;
+  const rowH = 18;
+  const maxVisibleProjects = Math.max(1, Math.floor((maxProjectsBottomY - y) / rowH));
+
+  if (projectRows.length === 0) {
+    doc.setFillColor(250, 250, 252);
+    doc.setDrawColor(226, 232, 240);
+    doc.rect(margin, y, contentWidth, 22, 'FD');
+    doc.setFont('helvetica', 'italic');
+    doc.setFontSize(8);
+    doc.setTextColor(120, 130, 145);
+    doc.text('No projects created for this customer yet.', margin + 8, y + 14);
+    y += 26;
+  } else {
+    const shownProjects = projectRows.slice(0, maxVisibleProjects);
+    shownProjects.forEach((row, idx) => {
+      if (idx % 2 === 1) {
+        doc.setFillColor(248, 250, 252);
+        doc.rect(margin, y, contentWidth, rowH, 'F');
+      }
+      doc.setDrawColor(226, 232, 240);
+      doc.setLineWidth(0.5);
+      doc.line(margin, y + rowH, rightMargin, y + rowH);
+
+      const textY = y + 12;
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(7.6);
+      doc.setTextColor(17, 17, 17);
+      doc.text(truncateToWidth(doc, row.title, 114), colNameX, textY);
+
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(7.2);
+      doc.setTextColor(71, 85, 105);
+      doc.text(truncateToWidth(doc, row.dateText, 68), colDateX, textY);
+
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(6.9);
+      doc.setTextColor(51, 65, 85);
+      doc.text(truncateToWidth(doc, row.statusLabel.toUpperCase(), 54), colStatX, textY);
+
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(7.2);
+      doc.setTextColor(55, 65, 81);
+      doc.text(truncateToWidth(doc, row.scopeSummary, 154), colScopeX, textY);
+
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(7.6);
+      doc.setTextColor(30, 30, 30);
+      doc.text(`$${row.estGross.toLocaleString()}`, colEstRightX, textY, { align: 'right' });
+
+      if (row.billGross !== null) {
+        doc.setTextColor(22, 130, 60);
+        doc.text(`$${row.billGross.toLocaleString()}`, colBillRightX, textY, { align: 'right' });
+      } else {
+        doc.setFont('helvetica', 'normal');
+        doc.setTextColor(148, 163, 184);
+        doc.text('—', colBillRightX, textY, { align: 'right' });
+      }
+
+      y += rowH;
+    });
+
+    if (projectRows.length > shownProjects.length) {
+      doc.setFont('helvetica', 'italic');
+      doc.setFontSize(7.2);
+      doc.setTextColor(100, 116, 139);
+      doc.text(
+        `+ ${projectRows.length - shownProjects.length} additional project(s) stored in app folder`,
+        margin + 5,
+        y + 10
+      );
+      y += 14;
+    }
+  }
+
+  y += 16;
+
+  // =========================================================================
+  // SECTION 4: SAVED PAINT & COLOR SPEC LOG (OMITTING BLANK FIELDS)
+  // =========================================================================
+  interface SpecLogRow {
+    projectTitle: string;
+    roomName: string;
+    specSummary: string;
+  }
+
+  const specRows: SpecLogRow[] = [];
+  projectRows.forEach((proj) => {
+    (proj.activeSnap.rooms || []).forEach((room, rIdx) => {
+      const prod = cleanOptionalSpec(room.prod);
+      const color = cleanOptionalSpec(room.color);
+      const sheen = cleanOptionalSpec(room.sheen);
+      // Omit rooms that have zero recorded product/color/sheen specs
+      const specParts = [prod, color, sheen].filter(Boolean);
+      if (specParts.length === 0) return;
+
+      specRows.push({
+        projectTitle: proj.title,
+        roomName: (room.n || '').trim() || `Room #${rIdx + 1}`,
+        specSummary: specParts.join('  •  '),
+      });
+    });
+  });
+
+  drawCompactSectionHeader(
+    `SAVED PAINT & COLOR SPEC LOG (${specRows.length})`
+  );
+
+  const footerReservedY = pageHeight - 36; // 756 pt
+  const specRowH = 15.5;
+
+  if (specRows.length === 0) {
+    doc.setFillColor(248, 250, 252);
+    doc.setDrawColor(226, 232, 240);
+    doc.roundedRect(margin, y, contentWidth, 24, 3, 3, 'FD');
+    doc.setFont('helvetica', 'italic');
+    doc.setFontSize(7.8);
+    doc.setTextColor(120, 130, 145);
+    doc.text(
+      'No paint products, colors, or sheens logged yet. Recorded room specs will appear here automatically.',
+      margin + 8,
+      y + 15
+    );
+  } else {
+    // Table header for Paint & Color Log
+    doc.setFillColor(241, 245, 249);
+    doc.setDrawColor(203, 213, 225);
+    doc.setLineWidth(0.5);
+    doc.rect(margin, y, contentWidth, 14, 'FD');
+
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(6.8);
+    doc.setTextColor(51, 65, 85);
+    doc.text('ROOM / PROJECT', margin + 6, y + 9.5);
+    doc.text('PAINT PRODUCT  •  COLOR  •  SHEEN', margin + 195, y + 9.5);
+    y += 14;
+
+    const maxSpecRows = Math.max(
+      1,
+      Math.floor((footerReservedY - 12 - y) / specRowH)
+    );
+    const shownSpecs = specRows.slice(0, maxSpecRows);
+
+    shownSpecs.forEach((sp, idx) => {
+      if (idx % 2 === 1) {
+        doc.setFillColor(248, 250, 252);
+        doc.rect(margin, y, contentWidth, specRowH, 'F');
+      }
+      doc.setDrawColor(235, 238, 242);
+      doc.line(margin, y + specRowH, rightMargin, y + specRowH);
+
+      const roomLabel =
+        projectRows.length > 1 ? `${sp.roomName} (${sp.projectTitle})` : sp.roomName;
+
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(7.4);
+      doc.setTextColor(17, 17, 17);
+      doc.text(truncateToWidth(doc, roomLabel, 182), margin + 6, y + 10.5);
+
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(7.4);
+      doc.setTextColor(51, 65, 85);
+      doc.text(
+        truncateToWidth(doc, sp.specSummary, contentWidth - 202),
+        margin + 195,
+        y + 10.5
+      );
+
+      y += specRowH;
+    });
+
+    if (specRows.length > shownSpecs.length) {
+      doc.setFont('helvetica', 'italic');
+      doc.setFontSize(7);
+      doc.setTextColor(100, 116, 139);
+      doc.text(
+        `+ ${specRows.length - shownSpecs.length} more recorded room paint spec(s)`,
+        margin + 6,
+        y + 10
+      );
+    }
+  }
+
+  // =========================================================================
+  // SINGLE-PAGE BRANDED FOOTER
+  // =========================================================================
+  const footerY = pageHeight - 24;
+  doc.setDrawColor(241, 196, 15);
+  doc.setLineWidth(1.2);
+  doc.line(margin, footerY - 10, rightMargin, footerY - 10);
+
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(7.2);
+  doc.setTextColor(35, 35, 40);
+  doc.text(
+    `KRUEGER PAINTING  •  MASTER CUSTOMER RECORD  •  ${KRUEGER_PHONE}  •  ${KRUEGER_WEBSITE}`,
+    margin,
+    footerY
+  );
+  doc.setFont('helvetica', 'normal');
+  doc.setTextColor(100, 116, 139);
+  doc.text('Page 1 of 1', rightMargin, footerY, { align: 'right' });
+
+  const blob = doc.output('blob');
+  const blobUrl = URL.createObjectURL(blob);
+  const dataUrl = doc.output('dataurlstring');
+
+  const cleanCustName =
+    (customer.name || 'Client')
+      .trim()
+      .replace(/[^a-zA-Z0-9]+/g, '-')
+      .replace(/^-+|-+$/g, '') || 'Client';
+  const fileName = `Krueger-Painting-Customer-Record-${cleanCustName}.pdf`;
+
+  return {
+    doc,
+    blob,
+    blobUrl,
+    dataUrl,
+    fileName,
+    grossTotal: totalFinalBilled > 0 ? totalFinalBilled : totalEstimated,
+    balanceDue: totalBalanceDue,
+  };
+}
+
 

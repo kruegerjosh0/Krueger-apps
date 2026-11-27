@@ -40,6 +40,7 @@ interface FolderViewModalProps {
     type: 'ESTIMATE' | 'BILL' | 'MASTER RECORD',
     action: 'OPEN' | 'DOWNLOAD'
   ) => void;
+  onGenerateCustomerRecord?: (customer: Customer) => void;
   onViewImage: (dataUrl: string) => void;
   onViewDocFile?: (file: { name: string; data: string; tag?: string }) => void;
   onGenerateCollage: () => void;
@@ -58,6 +59,7 @@ export const FolderViewModal: React.FC<FolderViewModalProps> = ({
   onDuplicateJob,
   onDeleteJob,
   onGenerateDoc,
+  onGenerateCustomerRecord,
   onViewImage,
   onViewDocFile,
   onGenerateCollage,
@@ -426,8 +428,8 @@ export const FolderViewModal: React.FC<FolderViewModalProps> = ({
           </button>
         </div>
 
-        {/* Contact Export & Business Card Bar */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5">
+        {/* Contact Export, Business Card & 1-Page Master Customer Record Bar */}
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-1.5">
           <button
             type="button"
             onClick={handleSaveToPhoneContacts}
@@ -446,6 +448,27 @@ export const FolderViewModal: React.FC<FolderViewModalProps> = ({
             >
               <span>💼</span>
               <span>Share Business Card</span>
+            </button>
+          )}
+          {onGenerateCustomerRecord && (
+            <button
+              type="button"
+              onClick={() =>
+                onGenerateCustomerRecord({
+                  ...customer,
+                  name: name.trim() || customer.name,
+                  address: address.trim(),
+                  phone: phone.trim(),
+                  email: email.trim(),
+                  notes,
+                  statusOverride,
+                })
+              }
+              className="py-2 px-3 bg-[#0f172a] hover:bg-[#172554] border border-sky-400/60 text-sky-300 font-extrabold text-[10.5px] rounded-lg cursor-pointer transition-transform active:scale-95 flex items-center justify-center gap-1.5 shadow-xs"
+              title="Download 1-page Master Customer Record PDF (all projects, totals, notes & paint/color log)"
+            >
+              <span>📋</span>
+              <span>Customer Record PDF</span>
             </button>
           )}
         </div>
@@ -689,7 +712,7 @@ export const FolderViewModal: React.FC<FolderViewModalProps> = ({
                           title="Open directly in Google Calendar app"
                         >
                           <span>📅</span>
-                          <span>Google Cal</span>
+                          <span>Open in Google Calendar</span>
                         </a>
                         <button
                           type="button"

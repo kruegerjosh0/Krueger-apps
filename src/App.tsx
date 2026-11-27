@@ -31,6 +31,7 @@ import {
 } from './utils/db';
 import {
   generateEstimateOrBillPdf,
+  generateCustomerRecordPdf,
   dataUrlToPdfResult,
   openPdfDirectly,
   downloadPdfFile,
@@ -755,6 +756,24 @@ export default function App() {
     }
   };
 
+  // 1-Page Master Customer Record Dossier PDF (Krueger-Painting-Customer-Record-[ClientName].pdf)
+  const handleGenerateCustomerRecord = async (cust: Customer) => {
+    showToast('Generating 1-page Customer Record PDF...');
+    try {
+      const result = await generateCustomerRecordPdf(
+        cust,
+        settings,
+        constants,
+        customLogo || undefined
+      );
+      downloadPdfFile(result);
+      showToast(`✔ Downloaded ${result.fileName}`);
+    } catch (err) {
+      console.error('Customer Record PDF error:', err);
+      showToast('Failed to generate Customer Record PDF');
+    }
+  };
+
   // Record lastCalendarSyncedAt on exported customers without bumping calendarSequence
   const handleMarkCustomersCalendarSynced = (customerIds: number[], syncedAt: number) => {
     const idSet = new Set<number>(customerIds);
@@ -1338,6 +1357,7 @@ export default function App() {
           onDuplicateJob={handleDuplicateJob}
           onDeleteJob={handleDeleteJob}
           onGenerateDoc={handleGenerateDoc}
+          onGenerateCustomerRecord={handleGenerateCustomerRecord}
           onViewImage={setViewerImageUrl}
           onViewDocFile={handleViewDocFile}
           onGenerateCollage={() => handleGenerateBeforeAfterCollage(activeFolderCustomer)}

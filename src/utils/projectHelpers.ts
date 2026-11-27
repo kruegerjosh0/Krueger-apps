@@ -1,4 +1,4 @@
-import { Customer, JobProject, RoomArea } from '../types';
+import { Customer, JobProject, ProjectDocumentSnapshot, RoomArea, SystemConstants } from '../types';
 
 export const PAINT_PRODUCT_OPTIONS = [
   'Sherwin-Williams Emerald',
@@ -503,4 +503,292 @@ export function resolvePrepOptionScopeText(labelOrText: string): string {
   }
   return labelOrText.replace(/^[-•*]\s*/, '').trim();
 }
+
+export function createBlankRoomArea(): RoomArea {
+  return {
+    n: '',
+    r: 0,
+    len: undefined,
+    wid: undefined,
+    hgt: undefined,
+    manualPrice: false,
+    og: '',
+    sp: true,
+    prod: '',
+    color: '',
+    sheen: '',
+    prep: [],
+  };
+}
+
+export function deepCloneRoomArea(r: RoomArea): RoomArea {
+  return {
+    ...r,
+    prod: cleanOptionalSpec(r.prod),
+    sheen: cleanOptionalSpec(r.sheen),
+    color: cleanOptionalSpec(r.color),
+    prep: Array.isArray(r.prep) ? [...r.prep] : [],
+  };
+}
+
+export function deepCloneDocumentSnapshot(
+  snap: ProjectDocumentSnapshot
+): ProjectDocumentSnapshot {
+  return {
+    showLaborTotal: snap.showLaborTotal ?? true,
+    showOverallTotal: snap.showOverallTotal ?? false,
+    matsIncluded: snap.matsIncluded ?? false,
+    internalNotes: snap.internalNotes || '',
+    paintRate: snap.paintRate || '1.00',
+    repairRate: Number(snap.repairRate) || 75,
+    disc: Number(snap.disc) || 0,
+    discType: snap.discType || 'PCT',
+    discLabel: snap.discLabel || '',
+    matVal: Number(snap.matVal) || 0,
+    sunVal: Number(snap.sunVal) || 0,
+    depo: Number(snap.depo) || 0,
+    payments: Array.isArray(snap.payments) ? snap.payments.map((p) => ({ ...p })) : [],
+    prepScope: snap.prepScope || '',
+    scope: snap.scope || '',
+    rooms:
+      Array.isArray(snap.rooms) && snap.rooms.length > 0
+        ? snap.rooms.map(deepCloneRoomArea)
+        : [createBlankRoomArea()],
+    repairs: Array.isArray(snap.repairs) ? snap.repairs.map((rep) => ({ ...rep })) : [],
+    updatedAt: snap.updatedAt,
+  };
+}
+
+export function createBlankDocumentSnapshot(defaultRepairRate = 75): ProjectDocumentSnapshot {
+  return {
+    showLaborTotal: true,
+    showOverallTotal: false,
+    matsIncluded: false,
+    internalNotes: '',
+    paintRate: '1.00',
+    repairRate: defaultRepairRate || 75,
+    disc: 0,
+    discType: 'PCT',
+    discLabel: '',
+    matVal: 0,
+    sunVal: 0,
+    depo: 0,
+    payments: [],
+    prepScope: '',
+    scope: '',
+    rooms: [createBlankRoomArea()],
+    repairs: [],
+  };
+}
+
+/**
+ * Extracts a project's Estimate snapshot. For legacy saved projects that do not yet
+ * have an explicit `estimate` property, seamlessly maps their existing top-level fields.
+ */
+export function getEstimateSnapshot(job: JobProject): ProjectDocumentSnapshot {
+  if (job.estimate) {
+    return deepCloneDocumentSnapshot(job.estimate);
+  }
+  return deepCloneDocumentSnapshot({
+    showLaborTotal: job.showLaborTotal ?? true,
+    showOverallTotal: job.showOverallTotal ?? false,
+    matsIncluded: job.matsIncluded ?? false,
+    internalNotes: job.internalNotes || '',
+    paintRate: job.paintRate || '1.00',
+    repairRate: Number(job.repairRate) || 75,
+    disc: Number(job.disc) || 0,
+    discType: job.discType || 'PCT',
+    discLabel: job.discLabel || '',
+    matVal: Number(job.matVal) || 0,
+    sunVal: Number(job.sunVal) || 0,
+    depo: Number(job.depo) || 0,
+    payments: Array.isArray(job.payments) ? job.payments : [],
+    prepScope: job.prepScope || '',
+    scope: job.scope || '',
+    rooms: Array.isArray(job.rooms) ? job.rooms : [],
+    repairs: Array.isArray(job.repairs) ? job.repairs : [],
+  });
+}
+
+/**
+ * Returns a deep clone of `job.finalBill` if created, or `null` otherwise.
+ */
+export function getFinalBillSnapshot(job: JobProject): ProjectDocumentSnapshot | null {
+  return job.finalBill ? deepCloneDocumentSnapshot(job.finalBill) : null;
+}
+
+export function hasFinalBill(job: JobProject): boolean {
+  return Boolean(job.finalBill);
+}
+
+/**
+ * Normalizes a legacy project record so `estimate` is explicitly populated
+ * and `finalBill` defaults to `null` if undefined.
+ */
+export function normalizeLegacyJob(job: JobProject): JobProject {
+  const estimate = getEstimateSnapshot(job);
+  const finalBill = getFinalBillSnapshot(job);
+  return {
+    ...job,
+    estimate,
+    finalBill,
+  };
+}
+
+export interface SnapshotTotals {
+  laborSubtotal: number;
+  repairLaborTotal: number;
+  discountAmount: number;
+  matCost: number;
+  sundriesCost: number;
+  grossTotal: number;
+  totalPaid: number;
+  balanceDue: number;
+  computedPaintGals: number;
+}
+
+export function computeSnapshotTotals(
+  snap: ProjectDocumentSnapshot,
+  constants?: Partial<SystemConstants>
+): SnapshotTotals {
+  const spreadRate = constants?.spreadRate || 350;
+  const perGalPrice = Math.round(constants?.paintCostPerGal || 65);
+  const repairRate = Math.round(snap.repairRate || constants?.repairRate || 75);
+
+  let laborSubtotal = 0;
+  let computedPaintGals = 0;
+  (snap.rooms || []).forEach((r) => {
+    laborSubtotal += Math.round(Number(r.r) || 0);
+    computedPaintGals += computeRoomGallons(r, spreadRate);
+  });
+
+  let repHrs = 0;
+  (snap.repairs || []).forEach((rep) => {
+    repHrs += parseFloat(String(rep.h)) || 0;
+  });
+  const repairLaborTotal = Math.round(repHrs * repairRate);
+
+  const dVal = parseFloat(String(snap.disc)) || 0;
+  const discountAmount =
+    (snap.discType || 'PCT') === 'PCT'
+      ? Math.round(laborSubtotal * (dVal / 100))
+      : Math.round(dVal);
+  const finalLabor = laborSubtotal - discountAmount;
+
+  let matCost = 0;
+  if (!snap.matsIncluded) {
+    if (snap.matVal && Number(snap.matVal) > 0) {
+      matCost = Math.round(Number(snap.matVal));
+    } else if (computedPaintGals > 0) {
+      matCost = Math.round(computedPaintGals * perGalPrice);
+    }
+  }
+  const sundriesCost = snap.matsIncluded ? 0 : Math.round(parseFloat(String(snap.sunVal)) || 0);
+  const grossTotal = Math.round(finalLabor + repairLaborTotal + matCost + sundriesCost);
+
+  let totalPaid = 0;
+  if (snap.payments && snap.payments.length > 0) {
+    snap.payments.forEach((p) => {
+      totalPaid += Math.round(Number(p.amt) || 0);
+    });
+  } else if (snap.depo > 0) {
+    totalPaid = Math.round(snap.depo);
+  }
+  const balanceDue = Math.max(0, grossTotal - totalPaid);
+
+  return {
+    laborSubtotal,
+    repairLaborTotal,
+    discountAmount,
+    matCost,
+    sundriesCost,
+    grossTotal,
+    totalPaid,
+    balanceDue,
+    computedPaintGals,
+  };
+}
+
+/**
+ * Projects the appropriate independent snapshot (`estimate` vs `finalBill`) onto a JobProject
+ * object before passing it into the PDF renderer so Estimate PDFs always render `project.estimate`
+ * and Final Bill PDFs always render `project.finalBill`.
+ */
+export function applySnapshotToJobForPdf(
+  job: JobProject,
+  type: 'ESTIMATE' | 'BILL' | 'MASTER RECORD'
+): JobProject {
+  const snap =
+    type === 'ESTIMATE'
+      ? getEstimateSnapshot(job)
+      : getFinalBillSnapshot(job) || getEstimateSnapshot(job);
+
+  return {
+    ...job,
+    showLaborTotal: snap.showLaborTotal,
+    showOverallTotal: snap.showOverallTotal,
+    matsIncluded: snap.matsIncluded,
+    internalNotes: snap.internalNotes || '',
+    paintRate: snap.paintRate,
+    repairRate: snap.repairRate,
+    disc: snap.disc,
+    discType: snap.discType,
+    discLabel: snap.discLabel,
+    matVal: snap.matVal,
+    sunVal: snap.sunVal,
+    depo: snap.depo,
+    payments: snap.payments,
+    prepScope: snap.prepScope,
+    scope: snap.scope,
+    rooms: snap.rooms,
+    repairs: snap.repairs,
+  };
+}
+
+/**
+ * Creates a deep copy of a project under the same customer named `"[Project Name] (Copy)"`,
+ * resetting `finalBill` to `null`, clearing payments/schedule/signature, and setting status to `DRAFT`
+ * ("Draft / Unquoted") so existing room dimensions, prep tasks, and scope can be reused cleanly.
+ */
+export function duplicateJobProject(source: JobProject): JobProject {
+  const estCopy = getEstimateSnapshot(source);
+  estCopy.payments = [];
+  estCopy.depo = 0;
+  estCopy.updatedAt = new Date().toISOString();
+
+  const baseTitle = (source.title || 'Project').trim();
+  const copyTitle = `${baseTitle} (Copy)`;
+
+  return {
+    id: Date.now() + Math.floor(Math.random() * 1000),
+    title: copyTitle,
+    date: new Date().toLocaleDateString(),
+    status: 'DRAFT',
+    showLaborTotal: estCopy.showLaborTotal,
+    showOverallTotal: estCopy.showOverallTotal,
+    matsIncluded: estCopy.matsIncluded,
+    internalNotes: estCopy.internalNotes || '',
+    paintRate: estCopy.paintRate,
+    repairRate: estCopy.repairRate,
+    disc: estCopy.disc,
+    discType: estCopy.discType,
+    discLabel: estCopy.discLabel,
+    matVal: estCopy.matVal,
+    sunVal: estCopy.sunVal,
+    depo: 0,
+    payments: [],
+    prepScope: estCopy.prepScope,
+    scope: estCopy.scope,
+    rooms: estCopy.rooms,
+    repairs: estCopy.repairs,
+    rtMiles: source.rtMiles || 0,
+    workDays: source.workDays || 1,
+    schedDate: '',
+    schedEndDate: '',
+    clientSig: '',
+    estimate: estCopy,
+    finalBill: null,
+  };
+}
+
 

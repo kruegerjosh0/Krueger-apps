@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import {
   Customer,
   JobProject,
+  ProjectDocMode,
   RoomArea,
   RepairItem,
   FieldNote,
@@ -82,7 +83,12 @@ import {
   fetchDriveFromBase,
   resolveApproxWisconsinCoords,
 } from './utils/mapHelpers';
-import { getLocalTodayIso, isJobCompletedOrPaid } from './utils/projectHelpers';
+import {
+  duplicateJobProject,
+  getLocalTodayIso,
+  isJobCompletedOrPaid,
+  normalizeLegacyJob,
+} from './utils/projectHelpers';
 
 export default function App() {
   const [activeTab, setActiveTab] = useState<TabType>('dash');
@@ -120,6 +126,7 @@ export default function App() {
   const [activeFolderCustomer, setActiveFolderCustomer] = useState<Customer | null>(null);
   const [jobModalCustomer, setJobModalCustomer] = useState<Customer | null>(null);
   const [activeEditingJob, setActiveEditingJob] = useState<JobProject | null>(null);
+  const [jobModalInitialMode, setJobModalInitialMode] = useState<ProjectDocMode>('ESTIMATE');
 
   const [taxReportOpen, setTaxReportOpen] = useState(false);
   const [calcOpen, setCalcOpen] = useState(false);
@@ -159,9 +166,13 @@ export default function App() {
     const details: string[] = [];
 
     if (Array.isArray(payload.customers)) {
-      setCustomers(payload.customers);
-      await saveRecord('KMaster_C', payload.customers);
-      customersCount = payload.customers.length;
+      const normalizedCustomers = payload.customers.map((c) => ({
+        ...c,
+        jobs: Array.isArray(c.jobs) ? c.jobs.map(normalizeLegacyJob) : [],
+      }));
+      setCustomers(normalizedCustomers);
+      await saveRecord('KMaster_C', normalizedCustomers);
+      customersCount = normalizedCustomers.length;
       details.push(`${customersCount} customers`);
     }
 
@@ -341,6 +352,11 @@ export default function App() {
           saveRecord('KMaster_C', activeCustomers);
         }
       }
+
+      activeCustomers = activeCustomers.map((c) => ({
+        ...c,
+        jobs: Array.isArray(c.jobs) ? c.jobs.map(normalizeLegacyJob) : [],
+      }));
 
       setCustomers(activeCustomers);
       setNotes(activeNotes);
@@ -686,6 +702,19 @@ export default function App() {
       handleUpdateCustomer(updatedCust);
       showToast('Project Deleted');
     }
+  };
+
+  const handleDuplicateJob = (sourceJob: JobProject) => {
+    if (!activeFolderCustomer) return;
+    const duplicated = duplicateJobProject(sourceJob);
+    const updatedJobs = [...(activeFolderCustomer.jobs || []), duplicated];
+    const updatedCust: Customer = {
+      ...activeFolderCustomer,
+      jobs: updatedJobs,
+      lastActive: Date.now(),
+    };
+    handleUpdateCustomer(updatedCust);
+    showToast(`✔ Duplicated "${duplicated.title}"`);
   };
 
   // Direct 1-Tap PDF Generation (No Intermediate Preview Modal)
@@ -1301,10 +1330,12 @@ export default function App() {
           onClose={() => setActiveFolderCustomer(null)}
           onUpdateCustomer={handleUpdateCustomer}
           onDeleteCustomer={handleDeleteCustomer}
-          onOpenJobModal={(job) => {
+          onOpenJobModal={(job, mode) => {
             setJobModalCustomer(activeFolderCustomer);
             setActiveEditingJob(job || null);
+            setJobModalInitialMode(mode || 'ESTIMATE');
           }}
+          onDuplicateJob={handleDuplicateJob}
           onDeleteJob={handleDeleteJob}
           onGenerateDoc={handleGenerateDoc}
           onViewImage={setViewerImageUrl}
@@ -1320,14 +1351,16 @@ export default function App() {
       {/* Job / Estimate Editor Modal (Overlay Stack Layer 2) */}
       {jobModalCustomer && (
         <JobModal
-          key={`${jobModalCustomer.id}-${activeEditingJob?.id ?? 'new'}`}
+          key={`${jobModalCustomer.id}-${activeEditingJob?.id ?? 'new'}-${jobModalInitialMode}`}
           customer={jobModalCustomer}
           customers={customers}
           job={activeEditingJob}
+          initialDocMode={jobModalInitialMode}
           constants={constants}
           onClose={() => {
             setJobModalCustomer(null);
             setActiveEditingJob(null);
+            setJobModalInitialMode('ESTIMATE');
           }}
           onSelectCustomer={(nextCustomer) => {
             setJobModalCustomer(nextCustomer);

@@ -33,11 +33,43 @@ export interface CustomerFile {
   type: string;
 }
 
+export type ProjectDocMode = 'ESTIMATE' | 'FINAL_BILL';
+
+export interface ProjectDocumentSnapshot {
+  showLaborTotal: boolean;
+  showOverallTotal: boolean;
+  matsIncluded: boolean;
+  internalNotes?: string;
+  paintRate: string;
+  repairRate: number;
+  disc: number;
+  discType: 'PCT' | 'FLAT';
+  discLabel: string;
+  matVal: number;
+  sunVal: number;
+  depo: number;
+  payments: PaymentEntry[];
+  prepScope: string;
+  scope: string;
+  rooms: RoomArea[];
+  repairs: RepairItem[];
+  updatedAt?: string;
+}
+
 export interface JobProject {
   id: number;
   title: string;
   date: string;
-  status: 'PENDING' | 'SCHEDULED' | 'ACTIVE' | 'COMPLETED' | 'PAID' | 'ON HOLD' | 'DECLINED' | 'OTHER';
+  status:
+    | 'DRAFT'
+    | 'PENDING'
+    | 'SCHEDULED'
+    | 'ACTIVE'
+    | 'COMPLETED'
+    | 'PAID'
+    | 'ON HOLD'
+    | 'DECLINED'
+    | 'OTHER';
   showLaborTotal: boolean;
   showOverallTotal: boolean;
   matsIncluded: boolean;
@@ -62,6 +94,10 @@ export interface JobProject {
   clientSig?: string;
   googleEventId?: string;
   googleCalendarEventId?: string;
+  /** Independent original Estimate document snapshot */
+  estimate?: ProjectDocumentSnapshot;
+  /** Independent Final Bill document snapshot (null until created/edited) */
+  finalBill?: ProjectDocumentSnapshot | null;
 }
 
 export interface Customer {

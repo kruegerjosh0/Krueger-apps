@@ -1,5 +1,14 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Customer, JobProject, RoomArea, RepairItem, PaymentEntry, SystemConstants } from '../../types';
+import {
+  Customer,
+  JobProject,
+  ProjectDocMode,
+  ProjectDocumentSnapshot,
+  RoomArea,
+  RepairItem,
+  PaymentEntry,
+  SystemConstants,
+} from '../../types';
 import {
   PAINT_PRODUCT_OPTIONS,
   PAINT_SHEEN_OPTIONS,
@@ -15,6 +24,10 @@ import {
   computeRoomGallons,
   parseAddressParts,
   formatAddressParts,
+  createBlankDocumentSnapshot,
+  deepCloneDocumentSnapshot,
+  getEstimateSnapshot,
+  getFinalBillSnapshot,
 } from '../../utils/projectHelpers';
 import {
   HOME_BASE,
@@ -26,6 +39,7 @@ interface JobModalProps {
   customer: Customer;
   customers?: Customer[];
   job?: JobProject | null;
+  initialDocMode?: ProjectDocMode;
   constants: SystemConstants;
   onClose: () => void;
   onSelectCustomer?: (customer: Customer) => void;
@@ -58,6 +72,17 @@ const sanitizeRoom = (r: RoomArea): RoomArea => ({
   prep: Array.isArray(r.prep) ? [...r.prep] : [],
 });
 
+const shouldAutoCalcCoatingsForSnapshot = (
+  snap: ProjectDocumentSnapshot,
+  spreadRate: number,
+  paintPricePerGal: number
+): boolean => {
+  if (!snap.matVal || snap.matVal <= 0) return true;
+  const gals = (snap.rooms || []).reduce((sum, r) => sum + computeRoomGallons(r, spreadRate || 350), 0);
+  const autoCost = Math.round(gals * (paintPricePerGal || 65));
+  return Math.abs(Math.round(snap.matVal) - autoCost) <= 1;
+};
+
 const estimateRoundTripMilesFromHomeBase = (
   address: string,
   lat?: number,
@@ -79,6 +104,7 @@ export const JobModal: React.FC<JobModalProps> = ({
   customer,
   customers = [],
   job,
+  initialDocMode = 'ESTIMATE',
   constants,
   onClose,
   onSelectCustomer,
@@ -87,6 +113,23 @@ export const JobModal: React.FC<JobModalProps> = ({
   onShareBusinessCard,
   onToast,
 }) => {
+  // Independent Estimate & Final Bill snapshots
+  const initEstSnap = job
+    ? getEstimateSnapshot(job)
+    : createBlankDocumentSnapshot(constants.repairRate || 75);
+  const initExistingBill = job ? getFinalBillSnapshot(job) : null;
+  const startInBill = initialDocMode === 'FINAL_BILL';
+  const initCopiedFromEst = startInBill && !initExistingBill;
+  const initBillSnap = startInBill
+    ? initExistingBill || deepCloneDocumentSnapshot(initEstSnap)
+    : initExistingBill;
+  const initialActiveSnap = startInBill && initBillSnap ? initBillSnap : initEstSnap;
+
+  const [activeDocMode, setActiveDocMode] = useState<ProjectDocMode>(initialDocMode);
+  const [estimateDraft, setEstimateDraft] = useState<ProjectDocumentSnapshot>(initEstSnap);
+  const [finalBillDraft, setFinalBillDraft] = useState<ProjectDocumentSnapshot | null>(initBillSnap);
+  const [copiedFromEstimateBanner, setCopiedFromEstimateBanner] = useState<boolean>(initCopiedFromEst);
+
   // Auto-populated customer / lead contact state
   const initialAddr = parseAddressParts(customer.address);
   const [clientName, setClientName] = useState(customer.name || '');
@@ -98,41 +141,53 @@ export const JobModal: React.FC<JobModalProps> = ({
 
   const [title, setTitle] = useState(job?.title || '');
   const [status, setStatus] = useState<JobProject['status']>(
-    job?.status ? normalizePipelineStage(job.status) : 'PENDING'
+    job?.status === 'DRAFT'
+      ? 'DRAFT'
+      : job?.status
+      ? normalizePipelineStage(job.status)
+      : 'PENDING'
   );
   const [schedDate, setSchedDate] = useState(job?.schedDate || '');
   const [schedEndDate, setSchedEndDate] = useState(job?.schedEndDate || '');
 
-  const [showLaborTotal, setShowLaborTotal] = useState(job?.showLaborTotal ?? true);
-  const [showOverallTotal, setShowOverallTotal] = useState(job?.showOverallTotal ?? false);
-  const [matsIncluded, setMatsIncluded] = useState(job?.matsIncluded ?? false);
+  const [showLaborTotal, setShowLaborTotal] = useState(initialActiveSnap.showLaborTotal ?? true);
+  const [showOverallTotal, setShowOverallTotal] = useState(initialActiveSnap.showOverallTotal ?? false);
+  const [matsIncluded, setMatsIncluded] = useState(initialActiveSnap.matsIncluded ?? false);
 
-  const [internalNotes, setInternalNotes] = useState(job?.internalNotes || '');
-  const [prepScope, setPrepScope] = useState(job?.prepScope || '');
-  const [scope, setScope] = useState(job?.scope || '');
+  const [internalNotes, setInternalNotes] = useState(initialActiveSnap.internalNotes || '');
+  const [prepScope, setPrepScope] = useState(initialActiveSnap.prepScope || '');
+  const [scope, setScope] = useState(initialActiveSnap.scope || '');
 
   const [rooms, setRooms] = useState<RoomArea[]>(
-    job?.rooms && job.rooms.length > 0
-      ? job.rooms.map(sanitizeRoom)
+    initialActiveSnap.rooms && initialActiveSnap.rooms.length > 0
+      ? initialActiveSnap.rooms.map(sanitizeRoom)
       : [createBlankRoom()]
   );
   const [customProductMode, setCustomProductMode] = useState<Record<number, boolean>>({});
 
   const [repairs, setRepairs] = useState<RepairItem[]>(
-    job?.repairs ? job.repairs.map((rep) => ({ ...rep })) : []
+    initialActiveSnap.repairs ? initialActiveSnap.repairs.map((rep) => ({ ...rep })) : []
   );
 
-  const [paintRate, setPaintRate] = useState(job?.paintRate || '1.00');
-  const [repairRate, setRepairRate] = useState<number>(job?.repairRate || constants.repairRate || 75);
+  const [paintRate, setPaintRate] = useState(initialActiveSnap.paintRate || '1.00');
+  const [repairRate, setRepairRate] = useState<number>(
+    initialActiveSnap.repairRate || constants.repairRate || 75
+  );
 
-  const [disc, setDisc] = useState<number>(job?.disc || 0);
-  const [discType, setDiscType] = useState<'PCT' | 'FLAT'>(job?.discType || 'PCT');
-  const [discLabel, setDiscLabel] = useState(job?.discLabel || '');
+  const [disc, setDisc] = useState<number>(initialActiveSnap.disc || 0);
+  const [discType, setDiscType] = useState<'PCT' | 'FLAT'>(initialActiveSnap.discType || 'PCT');
+  const [discLabel, setDiscLabel] = useState(initialActiveSnap.discLabel || '');
 
-  const [matVal, setMatVal] = useState<number>(job?.matVal || 0);
-  const [sunVal, setSunVal] = useState<number>(job?.sunVal || 0);
+  const [matVal, setMatVal] = useState<number>(initialActiveSnap.matVal || 0);
+  const [sunVal, setSunVal] = useState<number>(initialActiveSnap.sunVal || 0);
   const [paintPricePerGal, setPaintPricePerGal] = useState<number>(constants.paintCostPerGal || 65);
-  const [autoCalcCoatings, setAutoCalcCoatings] = useState<boolean>(true);
+  const [autoCalcCoatings, setAutoCalcCoatings] = useState<boolean>(() =>
+    shouldAutoCalcCoatingsForSnapshot(
+      initialActiveSnap,
+      constants.spreadRate || 350,
+      constants.paintCostPerGal || 65
+    )
+  );
 
   const initialAutoMiles =
     job?.rtMiles && job.rtMiles > 0
@@ -143,7 +198,7 @@ export const JobModal: React.FC<JobModalProps> = ({
   const [workDays, setWorkDays] = useState<number>(job?.workDays || 1);
 
   const [payments, setPayments] = useState<PaymentEntry[]>(
-    job?.payments ? job.payments.map((p) => ({ ...p })) : []
+    initialActiveSnap.payments ? initialActiveSnap.payments.map((p) => ({ ...p })) : []
   );
   const [clientSig, setClientSig] = useState<string>(job?.clientSig || '');
   const [expandedRoomPrep, setExpandedRoomPrep] = useState<Record<number, boolean>>({});
@@ -156,6 +211,36 @@ export const JobModal: React.FC<JobModalProps> = ({
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const [isDrawing, setIsDrawing] = useState(false);
 
+  const loadSnapshotIntoForm = (snap: ProjectDocumentSnapshot) => {
+    setShowLaborTotal(snap.showLaborTotal ?? true);
+    setShowOverallTotal(snap.showOverallTotal ?? false);
+    setMatsIncluded(snap.matsIncluded ?? false);
+    setInternalNotes(snap.internalNotes || '');
+    setPrepScope(snap.prepScope || '');
+    setScope(snap.scope || '');
+    setRooms(
+      snap.rooms && snap.rooms.length > 0 ? snap.rooms.map(sanitizeRoom) : [createBlankRoom()]
+    );
+    setCustomProductMode({});
+    setRepairs(snap.repairs ? snap.repairs.map((rep) => ({ ...rep })) : []);
+    setPaintRate(snap.paintRate || '1.00');
+    setRepairRate(snap.repairRate || constants.repairRate || 75);
+    setDisc(snap.disc || 0);
+    setDiscType(snap.discType || 'PCT');
+    setDiscLabel(snap.discLabel || '');
+    setMatVal(snap.matVal || 0);
+    setSunVal(snap.sunVal || 0);
+    setAutoCalcCoatings(
+      shouldAutoCalcCoatingsForSnapshot(
+        snap,
+        constants.spreadRate || 350,
+        constants.paintCostPerGal || 65
+      )
+    );
+    setPayments(snap.payments ? snap.payments.map((p) => ({ ...p })) : []);
+    setExpandedRoomPrep({});
+  };
+
   // Populate client contact fields and reset project state when switching customer or opening a different project
   useEffect(() => {
     const parsedAddr = parseAddressParts(customer.address);
@@ -166,32 +251,35 @@ export const JobModal: React.FC<JobModalProps> = ({
     setClientCity(parsedAddr.city);
     setClientZip(parsedAddr.zip);
 
+    const estSnap = job
+      ? getEstimateSnapshot(job)
+      : createBlankDocumentSnapshot(constants.repairRate || 75);
+    const existingBill = job ? getFinalBillSnapshot(job) : null;
+    const openInBill = initialDocMode === 'FINAL_BILL';
+    const copiedFresh = openInBill && !existingBill;
+    const billSnap = openInBill
+      ? existingBill || deepCloneDocumentSnapshot(estSnap)
+      : existingBill;
+    const activeSnap = openInBill && billSnap ? billSnap : estSnap;
+
+    setActiveDocMode(initialDocMode);
+    setEstimateDraft(estSnap);
+    setFinalBillDraft(billSnap);
+    setCopiedFromEstimateBanner(copiedFresh);
+
     setTitle(job?.title || '');
-    setStatus(job?.status ? normalizePipelineStage(job.status) : 'PENDING');
+    setStatus(
+      job?.status === 'DRAFT'
+        ? 'DRAFT'
+        : job?.status
+        ? normalizePipelineStage(job.status)
+        : 'PENDING'
+    );
     setSchedDate(job?.schedDate || '');
     setSchedEndDate(job?.schedEndDate || '');
-    setShowLaborTotal(job?.showLaborTotal ?? true);
-    setShowOverallTotal(job?.showOverallTotal ?? false);
-    setMatsIncluded(job?.matsIncluded ?? false);
-    setInternalNotes(job?.internalNotes || '');
-    setPrepScope(job?.prepScope || '');
-    setScope(job?.scope || '');
-    setRooms(
-      job?.rooms && job.rooms.length > 0
-        ? job.rooms.map(sanitizeRoom)
-        : [createBlankRoom()]
-    );
-    setCustomProductMode({});
-    setRepairs(job?.repairs ? job.repairs.map((rep) => ({ ...rep })) : []);
-    setPaintRate(job?.paintRate || '1.00');
-    setRepairRate(job?.repairRate || constants.repairRate || 75);
-    setDisc(job?.disc || 0);
-    setDiscType(job?.discType || 'PCT');
-    setDiscLabel(job?.discLabel || '');
-    setMatVal(job?.matVal || 0);
-    setSunVal(job?.sunVal || 0);
     setPaintPricePerGal(constants.paintCostPerGal || 65);
-    setAutoCalcCoatings(true);
+    loadSnapshotIntoForm(activeSnap);
+
     const autoRt =
       job?.rtMiles && job.rtMiles > 0
         ? job.rtMiles
@@ -199,12 +287,10 @@ export const JobModal: React.FC<JobModalProps> = ({
     setRtMiles(autoRt);
     setManualMiles(Boolean(job?.rtMiles && job.rtMiles > 0));
     setWorkDays(job?.workDays || 1);
-    setPayments(job?.payments ? job.payments.map((p) => ({ ...p })) : []);
     setClientSig(job?.clientSig || '');
-    setExpandedRoomPrep({});
     setWeatherAlert(null);
     initSignatureCanvas();
-  }, [customer.id, job?.id]);
+  }, [customer.id, job?.id, initialDocMode]);
 
   // Auto-update round-trip mileage from 2119 Barton Ave whenever address changes (unless manually overridden)
   useEffect(() => {
@@ -595,6 +681,69 @@ export const JobModal: React.FC<JobModalProps> = ({
     window.open(url, '_blank');
   };
 
+  const captureCurrentFormSnapshot = (): ProjectDocumentSnapshot => {
+    const savedMatVal = matsIncluded
+      ? 0
+      : autoCalcCoatings
+      ? autoCoatingsCost
+      : Math.round(matVal);
+
+    const cleanedRooms = rooms.map((r) => ({
+      ...r,
+      prod: cleanOptionalSpec(r.prod),
+      sheen: cleanOptionalSpec(r.sheen),
+      color: cleanOptionalSpec(r.color),
+      prep: Array.isArray(r.prep) ? [...r.prep] : [],
+    }));
+
+    return {
+      showLaborTotal,
+      showOverallTotal,
+      matsIncluded,
+      internalNotes,
+      paintRate,
+      repairRate,
+      disc,
+      discType,
+      discLabel,
+      matVal: savedMatVal,
+      sunVal,
+      depo: 0,
+      payments: payments.map((p) => ({ ...p })),
+      prepScope,
+      scope,
+      rooms: cleanedRooms,
+      repairs: repairs.map((rep) => ({ ...rep })),
+      updatedAt: new Date().toISOString(),
+    };
+  };
+
+  const handleSwitchDocMode = (nextMode: ProjectDocMode) => {
+    if (nextMode === activeDocMode) return;
+    const currentSnap = captureCurrentFormSnapshot();
+
+    if (nextMode === 'FINAL_BILL') {
+      // Save current Estimate edits into estimateDraft without touching finalBillDraft
+      setEstimateDraft(currentSnap);
+      if (!finalBillDraft) {
+        const copiedBill = deepCloneDocumentSnapshot(currentSnap);
+        setFinalBillDraft(copiedBill);
+        setCopiedFromEstimateBanner(true);
+        loadSnapshotIntoForm(copiedBill);
+      } else {
+        setCopiedFromEstimateBanner(false);
+        loadSnapshotIntoForm(finalBillDraft);
+      }
+      setActiveDocMode('FINAL_BILL');
+    } else {
+      // Save current Final Bill edits into finalBillDraft without touching estimateDraft
+      setFinalBillDraft(currentSnap);
+      setCopiedFromEstimateBanner(false);
+      loadSnapshotIntoForm(estimateDraft);
+      setActiveDocMode('ESTIMATE');
+    }
+  };
+
   const handleSave = () => {
     // Persist any updated client contact fields back to the customer record
     const combinedAddress = formatAddressParts({
@@ -620,41 +769,42 @@ export const JobModal: React.FC<JobModalProps> = ({
       });
     }
 
-    const savedMatVal = matsIncluded
-      ? 0
-      : autoCalcCoatings
-      ? autoCoatingsCost
-      : Math.round(matVal);
+    const activeSnapshot = captureCurrentFormSnapshot();
+    // Strict separation: Estimate edits save ONLY to project.estimate; Final Bill edits save ONLY to project.finalBill
+    const nextEstimate =
+      activeDocMode === 'ESTIMATE' ? activeSnapshot : deepCloneDocumentSnapshot(estimateDraft);
+    const nextFinalBill =
+      activeDocMode === 'FINAL_BILL'
+        ? activeSnapshot
+        : finalBillDraft
+        ? deepCloneDocumentSnapshot(finalBillDraft)
+        : null;
 
-    const cleanedRooms = rooms.map((r) => ({
-      ...r,
-      prod: cleanOptionalSpec(r.prod),
-      sheen: cleanOptionalSpec(r.sheen),
-      color: cleanOptionalSpec(r.color),
-    }));
+    // Mirror active financial snapshot (finalBill when present, else estimate) to legacy top-level fields
+    const mirrorSnap = nextFinalBill || nextEstimate;
 
     const saved: JobProject = {
       id: job?.id || Date.now(),
       title: title.trim() || 'General Scope Project',
       date: job?.date || new Date().toLocaleDateString(),
       status,
-      showLaborTotal,
-      showOverallTotal,
-      matsIncluded,
-      paintRate,
-      repairRate,
-      disc,
-      discType,
-      discLabel,
-      matVal: savedMatVal,
-      sunVal,
+      showLaborTotal: mirrorSnap.showLaborTotal,
+      showOverallTotal: mirrorSnap.showOverallTotal,
+      matsIncluded: mirrorSnap.matsIncluded,
+      paintRate: mirrorSnap.paintRate,
+      repairRate: mirrorSnap.repairRate,
+      disc: mirrorSnap.disc,
+      discType: mirrorSnap.discType,
+      discLabel: mirrorSnap.discLabel,
+      matVal: mirrorSnap.matVal,
+      sunVal: mirrorSnap.sunVal,
       depo: 0,
-      payments,
-      internalNotes,
-      prepScope,
-      scope,
-      rooms: cleanedRooms,
-      repairs,
+      payments: mirrorSnap.payments,
+      internalNotes: mirrorSnap.internalNotes,
+      prepScope: mirrorSnap.prepScope,
+      scope: mirrorSnap.scope,
+      rooms: mirrorSnap.rooms,
+      repairs: mirrorSnap.repairs,
       rtMiles,
       workDays,
       schedDate,
@@ -662,9 +812,15 @@ export const JobModal: React.FC<JobModalProps> = ({
       clientSig,
       googleEventId: job?.googleEventId,
       googleCalendarEventId: job?.googleCalendarEventId,
+      estimate: nextEstimate,
+      finalBill: nextFinalBill,
     };
     onSaveJob(saved);
-    onToast('✔ Project Saved');
+    onToast(
+      activeDocMode === 'FINAL_BILL'
+        ? '✔ Final Bill Saved (Estimate untouched)'
+        : '✔ Estimate Saved'
+    );
     onClose();
   };
 
@@ -678,8 +834,16 @@ export const JobModal: React.FC<JobModalProps> = ({
         {/* Modal Header */}
         <div className="flex items-center justify-between border-b border-[var(--border)] pb-2.5">
           <div>
-            <span className="text-[10px] font-extrabold uppercase tracking-wide text-[#f1c40f]">
-              {job ? 'Edit Project & Estimate' : 'New Project & Estimate'}
+            <span
+              className={`text-[10px] font-extrabold uppercase tracking-wide ${
+                activeDocMode === 'FINAL_BILL' ? 'text-[#30d158]' : 'text-[#f1c40f]'
+              }`}
+            >
+              {activeDocMode === 'FINAL_BILL'
+                ? 'Editing Final Bill'
+                : job
+                ? 'Edit Project & Estimate'
+                : 'New Project & Estimate'}
             </span>
             <h2 className="text-sm sm:text-base font-black text-[var(--text)]">
               {clientName || customer.name}
@@ -705,6 +869,57 @@ export const JobModal: React.FC<JobModalProps> = ({
               ✕ Back
             </button>
           </div>
+        </div>
+
+        {/* Editing: Estimate | Final Bill Two-Way Segmented Toggle */}
+        <div className="space-y-1.5" data-doc-mode-switch="true">
+          <div className="grid grid-cols-2 gap-1.5 p-1 rounded-xl bg-[var(--bg)] border border-[var(--border)]">
+            <button
+              type="button"
+              onClick={() => handleSwitchDocMode('ESTIMATE')}
+              aria-pressed={activeDocMode === 'ESTIMATE'}
+              className={`py-2 px-3 rounded-lg text-[11px] sm:text-xs font-black tracking-wide transition-all cursor-pointer flex items-center justify-center gap-1.5 ${
+                activeDocMode === 'ESTIMATE'
+                  ? 'bg-[#f1c40f] text-[#111111] shadow'
+                  : 'text-[var(--text-muted)] hover:text-[var(--text)]'
+              }`}
+            >
+              <span>📄</span>
+              <span>Editing: Estimate</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => handleSwitchDocMode('FINAL_BILL')}
+              aria-pressed={activeDocMode === 'FINAL_BILL'}
+              className={`py-2 px-3 rounded-lg text-[11px] sm:text-xs font-black tracking-wide transition-all cursor-pointer flex items-center justify-center gap-1.5 ${
+                activeDocMode === 'FINAL_BILL'
+                  ? 'bg-[#30d158] text-[#081c0d] shadow'
+                  : 'text-[var(--text-muted)] hover:text-[var(--text)]'
+              }`}
+            >
+              <span>💳</span>
+              <span>Editing: Final Bill</span>
+            </button>
+          </div>
+
+          {activeDocMode === 'FINAL_BILL' && copiedFromEstimateBanner && (
+            <div className="px-3 py-1.5 rounded-lg bg-emerald-500/15 border border-emerald-500/40 text-emerald-300 text-[10.5px] font-bold flex items-center gap-1.5">
+              <span>📋</span>
+              <span>Copied from Estimate — edits here only affect Final Bill</span>
+            </div>
+          )}
+
+          {activeDocMode === 'FINAL_BILL' && !copiedFromEstimateBanner && (
+            <div className="px-3 py-1 rounded-lg bg-emerald-500/10 border border-emerald-500/30 text-emerald-300/90 text-[10px] font-semibold">
+              Separate Final Bill document — original Estimate stays locked &amp; untouched.
+            </div>
+          )}
+
+          {activeDocMode === 'ESTIMATE' && finalBillDraft && (
+            <div className="px-3 py-1 rounded-lg bg-amber-500/10 border border-amber-500/30 text-amber-300 text-[10px] font-semibold">
+              Editing original Estimate — your separate Final Bill will not be overwritten.
+            </div>
+          )}
         </div>
 
         {/* Client / Lead Selection & Contact Autofill */}
@@ -873,6 +1088,7 @@ export const JobModal: React.FC<JobModalProps> = ({
                 onChange={(e) => setStatus(e.target.value as JobProject['status'])}
                 className="w-full bg-[var(--bg)] border border-[var(--border)] text-[var(--text)] rounded-lg px-2.5 py-2 text-xs outline-none"
               >
+                <option value="DRAFT">Draft / Unquoted</option>
                 <option value="ACTIVE">Active</option>
                 <option value="SCHEDULED">Scheduled</option>
                 <option value="PENDING">Pending</option>
@@ -1962,9 +2178,17 @@ export const JobModal: React.FC<JobModalProps> = ({
         </details>
 
         {/* Totals Summary Card */}
-        <div className="bg-[#121318] border-2 border-[#f1c40f] rounded-xl p-3 sm:p-4 text-center shadow-lg space-y-2">
-          <div className="text-[11px] sm:text-xs uppercase font-extrabold text-[#f1c40f] tracking-wider">
-            Project Estimate Summary
+        <div
+          className={`bg-[#121318] border-2 rounded-xl p-3 sm:p-4 text-center shadow-lg space-y-2 ${
+            activeDocMode === 'FINAL_BILL' ? 'border-[#30d158]' : 'border-[#f1c40f]'
+          }`}
+        >
+          <div
+            className={`text-[11px] sm:text-xs uppercase font-extrabold tracking-wider ${
+              activeDocMode === 'FINAL_BILL' ? 'text-[#30d158]' : 'text-[#f1c40f]'
+            }`}
+          >
+            {activeDocMode === 'FINAL_BILL' ? 'Final Bill Summary' : 'Project Estimate Summary'}
           </div>
           <div className="text-3xl sm:text-4xl font-black text-white">
             ${grossTotal}
@@ -1978,7 +2202,9 @@ export const JobModal: React.FC<JobModalProps> = ({
               50% First-Day Deposit: ${fiftyPercentDeposit}
             </span>
             <span className="text-gray-500 hidden min-[360px]:inline">•</span>
-            <span className="text-red-400">Balance Due: ${balanceDue}</span>
+            <span className="text-red-400">
+              {activeDocMode === 'FINAL_BILL' ? `Total Balance Due: $${balanceDue}` : `Balance Due: $${balanceDue}`}
+            </span>
           </div>
           {(totalSqft > 0 || rtMiles > 0) && (
             <div className="flex flex-wrap justify-center items-center gap-x-3 gap-y-0.5 text-[10px] font-semibold text-gray-400">
@@ -1996,9 +2222,13 @@ export const JobModal: React.FC<JobModalProps> = ({
         <button
           type="button"
           onClick={handleSave}
-          className="w-full py-3.5 bg-[var(--accent-tertiary)] hover:opacity-95 text-white font-extrabold uppercase tracking-wider text-xs rounded-xl shadow-lg cursor-pointer transition-transform active:scale-95"
+          className={`w-full py-3.5 hover:opacity-95 font-extrabold uppercase tracking-wider text-xs rounded-xl shadow-lg cursor-pointer transition-transform active:scale-95 ${
+            activeDocMode === 'FINAL_BILL'
+              ? 'bg-[#30d158] text-[#081c0d]'
+              : 'bg-[var(--accent-tertiary)] text-white'
+          }`}
         >
-          Save Project / Estimate
+          {activeDocMode === 'FINAL_BILL' ? 'Save Final Bill' : 'Save Estimate'}
         </button>
       </form>
     </div>

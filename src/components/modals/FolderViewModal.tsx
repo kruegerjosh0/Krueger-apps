@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Customer, JobProject, CustomerFile } from '../../types';
+import { Customer, JobProject, CustomerFile, ProjectDocMode } from '../../types';
 import {
   signInWithGoogle,
   getAccessToken,
@@ -13,6 +13,9 @@ import {
   PIPELINE_STAGE_META,
   normalizePipelineStage,
   formatScheduledDate,
+  getEstimateSnapshot,
+  getFinalBillSnapshot,
+  computeSnapshotTotals,
 } from '../../utils/projectHelpers';
 import {
   exportCustomerVcardToContacts,
@@ -29,7 +32,8 @@ interface FolderViewModalProps {
   onClose: () => void;
   onUpdateCustomer: (updated: Customer) => void;
   onDeleteCustomer: (id: number) => void;
-  onOpenJobModal: (job?: JobProject) => void;
+  onOpenJobModal: (job?: JobProject, initialDocMode?: ProjectDocMode) => void;
+  onDuplicateJob: (job: JobProject) => void;
   onDeleteJob: (jobId: number) => void;
   onGenerateDoc: (
     job: JobProject,
@@ -51,6 +55,7 @@ export const FolderViewModal: React.FC<FolderViewModalProps> = ({
   onUpdateCustomer,
   onDeleteCustomer,
   onOpenJobModal,
+  onDuplicateJob,
   onDeleteJob,
   onGenerateDoc,
   onViewImage,
@@ -580,21 +585,17 @@ export const FolderViewModal: React.FC<FolderViewModalProps> = ({
 
           <div className="space-y-2.5">
             {(customer.jobs || []).map((j, idx) => {
+              const isDraft = j.status === 'DRAFT';
               const stage = normalizePipelineStage(j.status);
               const stageMeta = PIPELINE_STAGE_META[stage];
-              const statusBg = stageMeta.color;
+              const statusBg = isDraft ? '#64748b' : stageMeta.color;
+              const statusLabel = isDraft ? 'Draft / Unquoted' : stageMeta.label;
+              const statusTextColor = isDraft ? '#ffffff' : stageMeta.textColor;
 
-              // Calculate total
-              let labor = 0;
-              (j.rooms || []).forEach((r) => (labor += Math.round(Number(r.r) || 0)));
-              let repH = 0;
-              (j.repairs || []).forEach((rep) => (repH += parseFloat(String(rep.h)) || 0));
-              const repCost = Math.round(repH * (j.repairRate || 75));
-              const dVal = parseFloat(String(j.disc)) || 0;
-              const dAmt = j.discType === 'PCT' ? Math.round(labor * (dVal / 100)) : Math.round(dVal);
-              const mats = j.matsIncluded ? 0 : Math.round(parseFloat(String(j.matVal)) || 0);
-              const sun = j.matsIncluded ? 0 : Math.round(parseFloat(String(j.sunVal)) || 0);
-              const gross = Math.round(labor - dAmt + repCost + mats + sun);
+              const estSnap = getEstimateSnapshot(j);
+              const estTotals = computeSnapshotTotals(estSnap);
+              const billSnap = getFinalBillSnapshot(j);
+              const billTotals = billSnap ? computeSnapshotTotals(billSnap) : null;
 
               const dateRange = j.schedDate
                 ? j.schedEndDate && j.schedEndDate !== j.schedDate
@@ -605,7 +606,8 @@ export const FolderViewModal: React.FC<FolderViewModalProps> = ({
               return (
                 <div
                   key={j.id}
-                  className="bg-[var(--bg)] border border-[var(--border)] rounded-xl p-3.5 shadow-sm space-y-2 relative"
+                  data-project-card={j.id}
+                  className="bg-[var(--bg)] border border-[var(--border)] rounded-xl p-3.5 shadow-sm space-y-2.5 relative"
                   style={{ borderLeft: `4px solid ${statusBg}` }}
                 >
                   <button
@@ -677,67 +679,130 @@ export const FolderViewModal: React.FC<FolderViewModalProps> = ({
                     </div>
                   </div>
 
-                  <div className="flex items-center justify-between border-y border-dashed border-[var(--border)] py-1.5">
+                  {/* Status + Separate Estimate / Final Bill Totals */}
+                  <div className="flex flex-wrap items-center justify-between gap-2 border-y border-dashed border-[var(--border)] py-1.5">
                     <span
-                      style={{ backgroundColor: statusBg, color: stageMeta.textColor }}
-                      className="text-[8px] font-black uppercase px-2 py-0.5 rounded"
+                      style={{ backgroundColor: statusBg, color: statusTextColor }}
+                      className="text-[8.5px] font-black uppercase px-2 py-0.5 rounded"
                     >
-                      {stageMeta.label}
+                      {statusLabel}
                     </span>
-                    <span className="text-base font-black text-[var(--accent)]">${gross}</span>
+                    <div className="flex flex-wrap items-center gap-2 text-right">
+                      <span className="text-[11px] font-extrabold text-[#f1c40f]">
+                        Est: ${estTotals.grossTotal.toLocaleString()}
+                      </span>
+                      {billTotals && (
+                        <span className="text-[11px] font-extrabold text-[#30d158]">
+                          • Bill: ${billTotals.grossTotal.toLocaleString()}
+                          {billTotals.totalPaid > 0
+                            ? ` (Bal $${billTotals.balanceDue.toLocaleString()})`
+                            : ''}
+                        </span>
+                      )}
+                    </div>
                   </div>
 
-                  {/* Direct 1-Tap PDF Actions (No Intermediate Preview) */}
-                  <div className="space-y-1.5 pt-1">
-                    <div className="grid grid-cols-2 gap-1.5">
-                      <button
-                        type="button"
-                        onClick={() => onGenerateDoc(j, 'ESTIMATE', 'OPEN')}
-                        className="py-2 bg-[#f1c40f] hover:bg-[#d4ac0d] text-[#111111] font-black text-[10.5px] rounded-lg cursor-pointer transition-transform active:scale-95 flex items-center justify-center gap-1 shadow-sm"
-                        title="Open full-screen Estimate PDF immediately"
-                      >
-                        <span>📄</span>
-                        <span>Open Estimate PDF</span>
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => onGenerateDoc(j, 'ESTIMATE', 'DOWNLOAD')}
-                        className="py-2 bg-[#111111] hover:bg-[#1c1d25] border border-[#f1c40f]/70 text-[#f1c40f] font-extrabold text-[10.5px] rounded-lg cursor-pointer transition-transform active:scale-95 flex items-center justify-center gap-1 shadow-sm"
-                        title="Download Estimate PDF directly to device"
-                      >
-                        <span>💾</span>
-                        <span>Download Est PDF</span>
-                      </button>
+                  {/* Separate Estimate & Final Bill Document Actions */}
+                  <div className="space-y-2 pt-0.5">
+                    {/* ESTIMATE DOCUMENT */}
+                    <div className="space-y-1">
+                      <div className="flex items-center justify-between text-[9px] font-extrabold uppercase tracking-wider text-[#f1c40f]/90">
+                        <span>📄 Estimate Document</span>
+                        <button
+                          type="button"
+                          onClick={() => onOpenJobModal(j, 'ESTIMATE')}
+                          className="underline hover:text-[#f1c40f] cursor-pointer"
+                        >
+                          Edit Estimate
+                        </button>
+                      </div>
+                      <div className="grid grid-cols-2 gap-1.5">
+                        <button
+                          type="button"
+                          onClick={() => onGenerateDoc(j, 'ESTIMATE', 'OPEN')}
+                          className="py-2 bg-[#f1c40f] hover:bg-[#d4ac0d] text-[#111111] font-black text-[10.5px] rounded-lg cursor-pointer transition-transform active:scale-95 flex items-center justify-center gap-1 shadow-sm"
+                          title="View Estimate PDF (always reflects project.estimate)"
+                        >
+                          <span>📄</span>
+                          <span>View Estimate PDF</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => onGenerateDoc(j, 'ESTIMATE', 'DOWNLOAD')}
+                          className="py-2 bg-[#111111] hover:bg-[#1c1d25] border border-[#f1c40f]/70 text-[#f1c40f] font-extrabold text-[10.5px] rounded-lg cursor-pointer transition-transform active:scale-95 flex items-center justify-center gap-1 shadow-sm"
+                          title="Download Estimate PDF with distinct filename"
+                        >
+                          <span>💾</span>
+                          <span>Download Estimate PDF</span>
+                        </button>
+                      </div>
                     </div>
 
-                    <div className="grid grid-cols-2 gap-1.5">
-                      <button
-                        type="button"
-                        onClick={() => onGenerateDoc(j, 'BILL', 'OPEN')}
-                        className="py-2 bg-[#30d158] hover:opacity-95 text-[#081c0d] font-black text-[10.5px] rounded-lg cursor-pointer transition-transform active:scale-95 flex items-center justify-center gap-1 shadow-sm"
-                        title="Open full-screen Final Bill PDF immediately"
-                      >
-                        <span>💳</span>
-                        <span>Open Bill PDF</span>
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => onGenerateDoc(j, 'BILL', 'DOWNLOAD')}
-                        className="py-2 bg-[#1c2e1f] hover:bg-[#243c28] border border-[#30d158]/60 text-[#30d158] font-extrabold text-[10.5px] rounded-lg cursor-pointer transition-transform active:scale-95 flex items-center justify-center gap-1 shadow-sm"
-                        title="Download Final Bill PDF directly to device"
-                      >
-                        <span>💾</span>
-                        <span>Download Bill PDF</span>
-                      </button>
+                    {/* FINAL BILL DOCUMENT */}
+                    <div className="space-y-1">
+                      <div className="flex items-center justify-between text-[9px] font-extrabold uppercase tracking-wider text-[#30d158]/90">
+                        <span>💳 Final Bill Document</span>
+                        {billSnap && (
+                          <button
+                            type="button"
+                            onClick={() => onOpenJobModal(j, 'FINAL_BILL')}
+                            className="underline hover:text-[#30d158] cursor-pointer"
+                          >
+                            Edit Final Bill
+                          </button>
+                        )}
+                      </div>
+                      {billSnap ? (
+                        <div className="grid grid-cols-2 gap-1.5">
+                          <button
+                            type="button"
+                            onClick={() => onGenerateDoc(j, 'BILL', 'OPEN')}
+                            className="py-2 bg-[#30d158] hover:opacity-95 text-[#081c0d] font-black text-[10.5px] rounded-lg cursor-pointer transition-transform active:scale-95 flex items-center justify-center gap-1 shadow-sm"
+                            title="View Final Bill PDF (reflects project.finalBill)"
+                          >
+                            <span>💳</span>
+                            <span>View Final Bill PDF</span>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => onGenerateDoc(j, 'BILL', 'DOWNLOAD')}
+                            className="py-2 bg-[#1c2e1f] hover:bg-[#243c28] border border-[#30d158]/60 text-[#30d158] font-extrabold text-[10.5px] rounded-lg cursor-pointer transition-transform active:scale-95 flex items-center justify-center gap-1 shadow-sm"
+                            title="Download Final Bill PDF with distinct filename"
+                          >
+                            <span>💾</span>
+                            <span>Download Final Bill PDF</span>
+                          </button>
+                        </div>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() => onOpenJobModal(j, 'FINAL_BILL')}
+                          className="w-full py-2 bg-[#1c2e1f] hover:bg-[#243c28] border border-dashed border-[#30d158]/70 text-[#30d158] font-extrabold text-[10.5px] rounded-lg cursor-pointer transition-transform active:scale-95 flex items-center justify-center gap-1.5"
+                          title="Initialize Final Bill as an independent copy of this Estimate"
+                        >
+                          <span>📝</span>
+                          <span>Create / Edit Final Bill</span>
+                        </button>
+                      )}
                     </div>
 
-                    <div className="grid grid-cols-3 gap-1.5">
+                    {/* Project Utility Actions (Edit, Duplicate Project, Google Cal, Record PDF) */}
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5 pt-0.5">
                       <button
                         type="button"
-                        onClick={() => onOpenJobModal(j)}
+                        onClick={() => onOpenJobModal(j, 'ESTIMATE')}
                         className="py-1.5 bg-[var(--surface-subtle)] hover:bg-[var(--border)] border border-[var(--border)] text-[var(--text)] font-bold text-[10px] rounded-lg cursor-pointer transition-transform active:scale-95"
                       >
                         ✏️ Edit
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => onDuplicateJob(j)}
+                        className="py-1.5 bg-[var(--surface-subtle)] hover:border-sky-400 border border-[var(--border)] text-sky-300 font-extrabold text-[10px] rounded-lg cursor-pointer transition-transform active:scale-95 flex items-center justify-center gap-1"
+                        title="Create an independent Draft copy of this project with rooms, prep & scope"
+                      >
+                        <span>📑</span>
+                        <span>Duplicate Project</span>
                       </button>
                       {j.schedDate ? (
                         <a
@@ -768,7 +833,7 @@ export const FolderViewModal: React.FC<FolderViewModalProps> = ({
                         <button
                           type="button"
                           onClick={() => {
-                            onOpenJobModal(j);
+                            onOpenJobModal(j, 'ESTIMATE');
                             onToast('Set a start date first to open in Google Calendar');
                           }}
                           className="py-1.5 bg-[var(--surface-subtle)] hover:bg-[var(--border)] border border-[var(--border)] text-gray-400 font-bold text-[10px] rounded-lg cursor-pointer flex items-center justify-center gap-1"

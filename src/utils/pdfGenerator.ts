@@ -5,6 +5,8 @@ import {
   cleanOptionalSpec,
   computeRoomGallons,
   computeRoomSqft,
+  applySnapshotToJobForPdf,
+  getLocalTodayIso,
 } from './projectHelpers';
 import { KRUEGER_BUSINESS_CARD, getQrMatrix } from './businessCard';
 
@@ -269,12 +271,15 @@ async function drawBrandedBlackHeader(
  */
 export async function generateEstimateOrBillPdf(
   customer: Customer,
-  job: JobProject,
+  rawJob: JobProject,
   type: 'ESTIMATE' | 'BILL' | 'MASTER RECORD',
   settings: PrintSettings,
   constants: SystemConstants,
   customLogoBase64?: string
 ): Promise<GeneratedPdfResult> {
+  // Always read strictly from project.estimate for ESTIMATE and project.finalBill for BILL
+  const job = applySnapshotToJobForPdf(rawJob, type);
+
   const doc = new jsPDF({
     orientation: 'portrait',
     unit: 'pt',
@@ -728,7 +733,7 @@ export async function generateEstimateOrBillPdf(
   checkPageBreak(50);
   y += 6;
   const isBill = type === 'BILL';
-  const labelTitle = isBill ? 'BALANCE DUE:' : 'ESTIMATED TOTAL:';
+  const labelTitle = isBill ? 'TOTAL BALANCE DUE:' : 'ESTIMATED TOTAL:';
   const labelVal = isBill ? `$${balanceDue}` : `$${grossTotal}`;
 
   doc.setFillColor(241, 196, 15); // #f1c40f
@@ -988,9 +993,38 @@ export async function generateEstimateOrBillPdf(
   const blobUrl = URL.createObjectURL(blob);
   const dataUrl = doc.output('dataurlstring');
 
-  const cleanCustName = (customer.name || 'Client').replace(/[^a-zA-Z0-9]/g, '_');
-  const cleanTitle = (job.title || type).replace(/[^a-zA-Z0-9]/g, '_');
-  const fileName = `Krueger_${type === 'BILL' ? 'Invoice' : 'Estimate'}_${cleanCustName}_${cleanTitle}.pdf`;
+  const cleanCustName =
+    (customer.name || 'Client')
+      .trim()
+      .replace(/[^a-zA-Z0-9]+/g, '-')
+      .replace(/^-+|-+$/g, '') || 'Client';
+
+  const formatFileDate = (rawDate?: string): string => {
+    if (rawDate && /^\d{4}-\d{2}-\d{2}$/.test(rawDate.trim())) {
+      return rawDate.trim();
+    }
+    if (rawDate) {
+      const parsed = new Date(rawDate);
+      if (!Number.isNaN(parsed.getTime())) {
+        const y = parsed.getFullYear();
+        const m = String(parsed.getMonth() + 1).padStart(2, '0');
+        const d = String(parsed.getDate()).padStart(2, '0');
+        return `${y}-${m}-${d}`;
+      }
+    }
+    return getLocalTodayIso();
+  };
+
+  const docDateSlug = formatFileDate(
+    type === 'BILL' ? getLocalTodayIso() : job.date
+  );
+  const docTypeSlug =
+    type === 'BILL'
+      ? 'Final-Bill'
+      : type === 'MASTER RECORD'
+      ? 'Master-Record'
+      : 'Estimate';
+  const fileName = `Krueger-Painting-${docTypeSlug}-${cleanCustName}-${docDateSlug}.pdf`;
 
   return {
     doc,

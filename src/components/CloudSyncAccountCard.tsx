@@ -3,9 +3,10 @@ import { User } from 'firebase/auth';
 import { Cloud, RefreshCw, LogOut, ShieldCheck, Lock, AlertTriangle } from 'lucide-react';
 import {
   ADMIN_CLOUD_EMAIL,
-  FIRESTORE_DOC_LIMIT_BYTES,
   FIRESTORE_DOC_LIMIT_KB,
-  FIRESTORE_WARNING_THRESHOLD_BYTES,
+  FIRESTORE_FREE_TIER_BYTES,
+  FIRESTORE_FREE_TIER_MB,
+  MasterCloudStorageStats,
 } from '../utils/firebaseSync';
 
 export type CloudSyncState = 'idle' | 'syncing' | 'synced' | 'offline' | 'error';
@@ -17,14 +18,25 @@ export interface CloudSyncAccountProps {
   syncState: CloudSyncState;
   lastSyncLabel: string | null;
   syncError: string | null;
-  syncPayloadBytes: number;
+  storageStats: MasterCloudStorageStats;
   onSignIn: (email: string, password: string) => Promise<void>;
   onPasswordReset: (email: string) => Promise<void>;
   onForceSync: () => Promise<void>;
   onSignOut: () => Promise<void>;
 }
 
-function formatKb(bytes: number): string {
+function formatKbOrMb(bytes: number): string {
+  if (!Number.isFinite(bytes) || bytes <= 0) return '0 KB';
+  const mb = bytes / (1024 * 1024);
+  if (mb >= 1) {
+    return `${mb.toFixed(2)} MB`;
+  }
+  const kb = bytes / 1024;
+  if (kb < 1) return `${kb.toFixed(1)} KB`;
+  return `${Math.round(kb).toLocaleString()} KB`;
+}
+
+function formatKbOnly(bytes: number): string {
   if (!Number.isFinite(bytes) || bytes <= 0) return '0';
   const kb = bytes / 1024;
   if (kb < 1) return kb.toFixed(1);
@@ -38,7 +50,7 @@ export const CloudSyncAccountCard: React.FC<CloudSyncAccountProps> = ({
   syncState,
   lastSyncLabel,
   syncError,
-  syncPayloadBytes,
+  storageStats,
   onSignIn,
   onPasswordReset,
   onForceSync,
@@ -103,15 +115,18 @@ export const CloudSyncAccountCard: React.FC<CloudSyncAccountProps> = ({
   };
 
   const isSyncing = syncState === 'syncing';
-  const safeBytes = Math.max(0, syncPayloadBytes || 0);
-  const sizeKbLabel = formatKb(safeBytes);
-  const usagePercent = Math.min(
+  const safeTotalBytes = Math.max(0, storageStats?.totalBytes || 0);
+  const totalDisplay = formatKbOrMb(safeTotalBytes);
+  const totalUsagePercent = Math.min(
     100,
-    Math.round((safeBytes / FIRESTORE_DOC_LIMIT_BYTES) * 100)
+    (safeTotalBytes / FIRESTORE_FREE_TIER_BYTES) * 100
   );
-  const isWarningLimit = safeBytes >= FIRESTORE_WARNING_THRESHOLD_BYTES;
-  const isCriticalLimit = safeBytes >= 950 * 1024;
-  const barWidthPercent = safeBytes > 0 ? Math.max(usagePercent, 2) : 0;
+  const barWidthPercent = safeTotalBytes > 0 ? Math.max(totalUsagePercent, 2) : 0;
+
+  const oversizedCustomers = storageStats?.oversizedCustomers || [];
+  const topOversized = oversizedCustomers[0] || null;
+  const hasSingleCustomerWarning = oversizedCustomers.length > 0;
+  const isCriticalSingleCustomer = Boolean(topOversized && topOversized.bytes >= 950 * 1024);
 
   return (
     <div className="bg-[var(--surface)] border border-[var(--border)] rounded-2xl p-3.5 sm:p-4 shadow-sm space-y-3">
@@ -135,7 +150,7 @@ export const CloudSyncAccountCard: React.FC<CloudSyncAccountProps> = ({
               {!authReady
                 ? 'Checking saved session...'
                 : isAuthorizedAdmin
-                  ? 'Automatic two-way Firestore sync enabled'
+                  ? 'Per-customer Firestore master sync enabled'
                   : 'Local device storage only'}
             </p>
           </div>
@@ -154,38 +169,40 @@ export const CloudSyncAccountCard: React.FC<CloudSyncAccountProps> = ({
         </span>
       </div>
 
-      {/* Live Cloud Storage Meter (against Firestore's 1 MB / 1,024 KB single-document limit) */}
+      {/* Master Cloud Storage Meter (against Firebase 1 GB / 1,024 MB free tier) */}
       <div className="bg-[var(--surface-subtle)] border border-[var(--border)] rounded-xl p-2.5 space-y-1.5">
         <div className="flex items-center justify-between gap-2 text-[10.5px]">
           <span className="font-bold text-[var(--text)]">
-            Sync Storage: {sizeKbLabel} KB / {FIRESTORE_DOC_LIMIT_KB.toLocaleString()} KB ({usagePercent}%)
+            Master Cloud Storage: {totalDisplay} / {FIRESTORE_FREE_TIER_MB.toLocaleString()} MB
           </span>
           <span
-            className={`text-[9.5px] font-extrabold uppercase tracking-wide ${
-              isCriticalLimit
+            className={`text-[9.5px] font-extrabold uppercase tracking-wide shrink-0 ${
+              isCriticalSingleCustomer
                 ? 'text-red-400'
-                : isWarningLimit
+                : hasSingleCustomerWarning
                   ? 'text-amber-400'
                   : 'text-emerald-400'
             }`}
           >
-            {isCriticalLimit ? 'Limit Critical' : isWarningLimit ? '80%+ Warning' : 'Healthy'}
+            {hasSingleCustomerWarning
+              ? 'Doc ≥800 KB'
+              : `${storageStats.customerCount} ${storageStats.customerCount === 1 ? 'Client' : 'Clients'} · Healthy`}
           </span>
         </div>
 
         <div
           className="w-full h-2 rounded-full bg-[var(--bg)] border border-[var(--border)] overflow-hidden"
           role="progressbar"
-          aria-label="Cloud sync storage usage"
-          aria-valuenow={usagePercent}
+          aria-label="Master cloud storage usage"
+          aria-valuenow={Math.round(totalUsagePercent)}
           aria-valuemin={0}
           aria-valuemax={100}
         >
           <div
             className={`h-full rounded-full transition-all duration-300 ${
-              isCriticalLimit
+              isCriticalSingleCustomer
                 ? 'bg-gradient-to-r from-red-500 to-rose-500'
-                : isWarningLimit
+                : hasSingleCustomerWarning
                   ? 'bg-gradient-to-r from-amber-500 to-red-500'
                   : 'bg-gradient-to-r from-emerald-500 to-sky-500'
             }`}
@@ -193,22 +210,23 @@ export const CloudSyncAccountCard: React.FC<CloudSyncAccountProps> = ({
           />
         </div>
 
-        {isWarningLimit && (
+        {/* Alert ONLY if any single customer record approaches 800 KB */}
+        {topOversized && (
           <div
             role="alert"
             className={`flex items-start gap-2 rounded-lg p-2 text-[10.5px] font-semibold leading-snug border ${
-              isCriticalLimit
+              isCriticalSingleCustomer
                 ? 'bg-red-950/50 border-red-500/45 text-red-200'
                 : 'bg-amber-950/45 border-amber-500/45 text-amber-200'
             }`}
           >
             <AlertTriangle
               className={`w-3.5 h-3.5 shrink-0 mt-0.5 ${
-                isCriticalLimit ? 'text-red-400' : 'text-amber-400'
+                isCriticalSingleCustomer ? 'text-red-400' : 'text-amber-400'
               }`}
             />
             <span>
-              Approaching 1 MB cloud sync limit ({sizeKbLabel} KB / {FIRESTORE_DOC_LIMIT_KB.toLocaleString()} KB) — archive old projects or export a backup.
+              Customer record &ldquo;{topOversized.name}&rdquo; is approaching the 1 MB single-document limit ({formatKbOnly(topOversized.bytes)} KB / {FIRESTORE_DOC_LIMIT_KB.toLocaleString()} KB) — split extra projects into a separate customer folder or export a backup.
             </span>
           </div>
         )}
@@ -226,12 +244,12 @@ export const CloudSyncAccountCard: React.FC<CloudSyncAccountProps> = ({
             </div>
             <div className="text-[10px] text-[var(--text-muted)] pl-5">
               {isSyncing
-                ? 'Syncing latest changes with cloud...'
+                ? 'Syncing updated customer folders with cloud...'
                 : syncState === 'offline'
                   ? 'Offline — changes saved locally & queued for sync'
                   : lastSyncLabel
-                    ? `Last synced ${lastSyncLabel} • Auto-syncs across your phone & tablet`
-                    : 'Auto-syncs customers, estimates, final bills, notes & mileage'}
+                    ? `Last synced ${lastSyncLabel} • Per-customer sync across phone, tablet & PC`
+                    : 'Each customer folder syncs independently across all devices'}
             </div>
           </div>
 

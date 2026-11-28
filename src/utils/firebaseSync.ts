@@ -20,7 +20,6 @@ import {
   getDocsFromServer,
   deleteDoc,
   writeBatch,
-  onSnapshot,
 } from 'firebase/firestore';
 import firebaseConfig from '../../firebase-applet-config.json';
 import {
@@ -42,7 +41,7 @@ export const CUSTOMERS_CLOUD_COLLECTION = 'customers';
 export const META_CLOUD_COLLECTION = 'meta';
 export const META_APP_STATE_DOC = 'appState';
 
-// Legacy single-document path (used only for automatic one-time migration)
+// Legacy single-document path (used only for automatic one-time migration on first manual sync)
 export const LEGACY_ESTIMATOR_CLOUD_COLLECTION = 'estimatorData';
 export const LEGACY_ESTIMATOR_CLOUD_DOC = 'main';
 
@@ -50,6 +49,7 @@ export const LOCAL_LAST_UPDATED_KEY = 'KMaster_LocalLastUpdated';
 export const LOCAL_META_LAST_UPDATED_KEY = 'KMaster_MetaLastUpdated';
 export const LOCAL_CUSTOMER_UPDATED_MAP_KEY = 'KMaster_CustomerUpdatedMap';
 export const LOCAL_DELETED_CUSTOMERS_KEY = 'KMaster_DeletedCustomerIds';
+export const LOCAL_PENDING_SYNC_STATE_KEY = 'KMaster_PendingSyncState';
 export const LAST_CLOUD_SYNC_LABEL_KEY = 'KMaster_LastCloudSync';
 export const DEVICE_ID_KEY = 'KMaster_DeviceId';
 
@@ -188,6 +188,43 @@ export function setLocalDeletedCustomerMap(map: Record<string, number>): void {
   } catch {
     // Ignore storage quota errors
   }
+}
+
+export interface PendingSyncState {
+  customerIds: number[];
+  deletedIds: number[];
+  metaDirty: boolean;
+}
+
+export function loadPendingSyncState(): PendingSyncState {
+  try {
+    const raw = localStorage.getItem(LOCAL_PENDING_SYNC_STATE_KEY);
+    if (!raw) return { customerIds: [], deletedIds: [], metaDirty: false };
+    const parsed = JSON.parse(raw);
+    return {
+      customerIds: Array.isArray(parsed?.customerIds)
+        ? parsed.customerIds.filter((n: any) => typeof n === 'number' && Number.isFinite(n))
+        : [],
+      deletedIds: Array.isArray(parsed?.deletedIds)
+        ? parsed.deletedIds.filter((n: any) => typeof n === 'number' && Number.isFinite(n))
+        : [],
+      metaDirty: Boolean(parsed?.metaDirty),
+    };
+  } catch {
+    return { customerIds: [], deletedIds: [], metaDirty: false };
+  }
+}
+
+export function savePendingSyncState(state: PendingSyncState): void {
+  try {
+    localStorage.setItem(LOCAL_PENDING_SYNC_STATE_KEY, JSON.stringify(state));
+  } catch {
+    // Ignore storage quota errors
+  }
+}
+
+export function clearPendingSyncState(): void {
+  savePendingSyncState({ customerIds: [], deletedIds: [], metaDirty: false });
 }
 
 export function getOrCreateDeviceId(): string {
@@ -904,31 +941,6 @@ export async function loadWorkspaceFromCloud(
     deviceLabel: master.meta?.deviceLabel || 'Cloud Remote',
     deviceId: master.meta?.deviceId,
   };
-}
-
-export function subscribeToCloudWorkspace(
-  userId: string,
-  onRemoteChange: (payload: CloudWorkspacePayload) => void
-): () => void {
-  const activeUser = firebaseAuth.currentUser;
-  if (!userId || !isAuthorizedAdminUser(activeUser) || activeUser?.uid !== userId) {
-    return () => {};
-  }
-
-  return onSnapshot(
-    getAppMetaDocRef(userId),
-    async () => {
-      try {
-        const full = await loadWorkspaceFromCloud(userId, false);
-        if (full) onRemoteChange(full);
-      } catch (err) {
-        console.warn('Cloud sync snapshot warning:', err);
-      }
-    },
-    (err) => {
-      console.warn('Cloud sync snapshot warning:', err.message);
-    }
-  );
 }
 
 export async function testFirestoreConnection(): Promise<boolean> {

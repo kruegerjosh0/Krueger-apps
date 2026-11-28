@@ -1,12 +1,19 @@
 import React from 'react';
 import { PrintSettings } from '../types';
 import { User } from 'firebase/auth';
+import { RefreshCw } from 'lucide-react';
 import { TabType } from './Navigation';
+import { CloudSyncState } from './CloudSyncAccountCard';
 
 interface HeaderProps {
   settings: PrintSettings;
   isBackupDue: boolean;
   currentUser?: User | null;
+  isAuthorizedCloudAdmin?: boolean;
+  cloudSyncState?: CloudSyncState;
+  hasUnsyncedChanges?: boolean;
+  lastSyncLabel?: string | null;
+  onManualSync?: () => void;
   onBackup: () => void;
   onRestore: (file: File) => void;
   onOpenNewCustomer: () => void;
@@ -19,8 +26,15 @@ interface HeaderProps {
 export const Header: React.FC<HeaderProps> = ({
   settings,
   currentUser,
+  isAuthorizedCloudAdmin = false,
+  cloudSyncState = 'idle',
+  hasUnsyncedChanges = false,
+  lastSyncLabel = null,
+  onManualSync,
   onOpenAccountModal,
 }) => {
+  const isSyncing = cloudSyncState === 'syncing';
+
   return (
     <header className="sticky top-0 z-40 bg-[var(--surface)] backdrop-blur-md border-b-2 border-[var(--accent)] px-2 sm:px-4 py-2 sm:py-2.5 shadow-lg w-full max-w-full overflow-hidden">
       <div className="max-w-4xl mx-auto flex items-center justify-between gap-1.5 sm:gap-3">
@@ -64,10 +78,45 @@ export const Header: React.FC<HeaderProps> = ({
           </div>
         </div>
 
-        {/* Center / Right: Actions */}
-        <div className="flex items-center gap-1 sm:gap-2 shrink-0">
-          {/* Account Login Button */}
-          {onOpenAccountModal && (
+        {/* Right: Manual Cloud Sync / Refresh Button & Unsynced Badge */}
+        <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
+          {isAuthorizedCloudAdmin && onManualSync && (
+            <div className="flex flex-col items-end gap-0.5">
+              <button
+                type="button"
+                onClick={onManualSync}
+                disabled={isSyncing}
+                title={
+                  hasUnsyncedChanges
+                    ? 'You have unsynced local changes — tap to sync with cloud'
+                    : lastSyncLabel
+                      ? `Last synced: ${lastSyncLabel} — tap to sync or pull updates`
+                      : 'Tap to manually sync with cloud'
+                }
+                className={`px-2.5 sm:px-3 py-1.5 rounded-xl text-[10.5px] sm:text-xs font-extrabold border transition-all active:scale-95 disabled:opacity-60 cursor-pointer flex items-center gap-1.5 shadow-sm ${
+                  hasUnsyncedChanges
+                    ? 'border-amber-400/70 bg-amber-500/15 text-amber-200 hover:bg-amber-500/25'
+                    : 'border-emerald-500/45 bg-emerald-950/40 text-emerald-200 hover:bg-emerald-900/50'
+                }`}
+              >
+                <RefreshCw className={`w-3.5 h-3.5 shrink-0 ${isSyncing ? 'animate-spin' : ''}`} />
+                <span>{isSyncing ? 'Syncing...' : 'Sync / Refresh'}</span>
+                {hasUnsyncedChanges && !isSyncing && (
+                  <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full bg-amber-400 text-[#111111] text-[8.5px] font-black uppercase tracking-wide leading-none">
+                    Unsynced
+                  </span>
+                )}
+              </button>
+              {lastSyncLabel && !isSyncing && (
+                <span className="text-[8.5px] font-semibold text-[var(--text-muted)] leading-none pr-0.5">
+                  Last synced: {lastSyncLabel}
+                </span>
+              )}
+            </div>
+          )}
+
+          {/* Optional legacy account button */}
+          {onOpenAccountModal && !isAuthorizedCloudAdmin && (
             <button
               type="button"
               onClick={onOpenAccountModal}

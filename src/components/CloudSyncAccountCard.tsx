@@ -18,6 +18,8 @@ export interface CloudSyncAccountProps {
   syncState: CloudSyncState;
   lastSyncLabel: string | null;
   syncError: string | null;
+  hasUnsyncedChanges: boolean;
+  unsyncedCount: number;
   storageStats: MasterCloudStorageStats;
   onSignIn: (email: string, password: string) => Promise<void>;
   onPasswordReset: (email: string) => Promise<void>;
@@ -50,6 +52,8 @@ export const CloudSyncAccountCard: React.FC<CloudSyncAccountProps> = ({
   syncState,
   lastSyncLabel,
   syncError,
+  hasUnsyncedChanges,
+  unsyncedCount,
   storageStats,
   onSignIn,
   onPasswordReset,
@@ -150,7 +154,7 @@ export const CloudSyncAccountCard: React.FC<CloudSyncAccountProps> = ({
               {!authReady
                 ? 'Checking saved session...'
                 : isAuthorizedAdmin
-                  ? 'Per-customer Firestore master sync enabled'
+                  ? 'Manual two-way sync • Zero background reads/writes'
                   : 'Local device storage only'}
             </p>
           </div>
@@ -159,13 +163,21 @@ export const CloudSyncAccountCard: React.FC<CloudSyncAccountProps> = ({
         <span
           className={`text-[9.5px] font-extrabold uppercase tracking-wide px-2 py-0.5 rounded-full border shrink-0 ${
             isAuthorizedAdmin
-              ? syncState === 'offline'
-                ? 'bg-amber-500/15 text-amber-300 border-amber-500/30'
-                : 'bg-emerald-500/15 text-emerald-300 border-emerald-500/30'
+              ? hasUnsyncedChanges
+                ? 'bg-amber-500/15 text-amber-300 border-amber-500/40'
+                : syncState === 'offline'
+                  ? 'bg-amber-500/15 text-amber-300 border-amber-500/30'
+                  : 'bg-emerald-500/15 text-emerald-300 border-emerald-500/30'
               : 'bg-[var(--surface-subtle)] text-[var(--text-muted)] border-[var(--border)]'
           }`}
         >
-          {isAuthorizedAdmin ? (syncState === 'offline' ? 'Offline' : 'Active') : 'Local Only'}
+          {isAuthorizedAdmin
+            ? hasUnsyncedChanges
+              ? 'Unsynced'
+              : syncState === 'offline'
+                ? 'Offline'
+                : 'Synced'
+            : 'Local Only'}
         </span>
       </div>
 
@@ -245,11 +257,11 @@ export const CloudSyncAccountCard: React.FC<CloudSyncAccountProps> = ({
             <div className="text-[10px] text-[var(--text-muted)] pl-5">
               {isSyncing
                 ? 'Syncing updated customer folders with cloud...'
-                : syncState === 'offline'
-                  ? 'Offline — changes saved locally & queued for sync'
+                : hasUnsyncedChanges
+                  ? `${unsyncedCount > 0 ? `${unsyncedCount} unsynced change${unsyncedCount === 1 ? '' : 's'}` : 'Unsynced local edits'} • Tap Sync / Refresh or Force Sync Now`
                   : lastSyncLabel
-                    ? `Last synced ${lastSyncLabel} • Per-customer sync across phone, tablet & PC`
-                    : 'Each customer folder syncs independently across all devices'}
+                    ? `Last synced: ${lastSyncLabel} • Manual sync only (saves Firestore quota)`
+                    : 'Manual sync only — tap Force Sync Now or Sync / Refresh in the top bar'}
             </div>
           </div>
 

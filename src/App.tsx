@@ -87,7 +87,6 @@ import {
   signInAdminWithEmail,
   sendAdminPasswordReset,
   signOutCloudAdmin,
-  saveCustomerToCloud,
   saveCustomersBatchToCloud,
   saveAppMetaToCloud,
   deleteCustomerFromCloud,
@@ -103,6 +102,9 @@ import {
   setLocalCustomerUpdatedMap,
   getLocalDeletedCustomerMap,
   setLocalDeletedCustomerMap,
+  loadPendingSyncState,
+  savePendingSyncState,
+  clearPendingSyncState,
 } from './utils/firebaseSync';
 import {
   hasCalendarRelevantChanges,
@@ -194,7 +196,8 @@ export default function App() {
   );
   const [customLogo, setCustomLogo] = useState<string | null>(null);
 
-  // Firebase Auth & Per-Customer Master Cloud Sync State (shared kpwebsite-83a6b project)
+  // Firebase Auth & Manual Per-Customer Master Cloud Sync State (shared kpwebsite-83a6b project)
+  const initialPendingSync = useRef(loadPendingSyncState()).current;
   const [isLocalHydrated, setIsLocalHydrated] = useState(false);
   const [cloudUser, setCloudUser] = useState<User | null>(firebaseAuth.currentUser);
   const [cloudAuthReady, setCloudAuthReady] = useState(false);
@@ -209,8 +212,15 @@ export default function App() {
     }
   });
   const [cloudSyncError, setCloudSyncError] = useState<string | null>(null);
+  const [unsyncedCount, setUnsyncedCount] = useState<number>(
+    () =>
+      initialPendingSync.customerIds.length +
+      initialPendingSync.deletedIds.length +
+      (initialPendingSync.metaDirty ? 1 : 0)
+  );
 
   const isAuthorizedCloudAdmin = isAuthorizedAdminUser(cloudUser);
+  const hasUnsyncedChanges = unsyncedCount > 0;
 
   const localLastUpdatedRef = useRef<number>(getLocalLastUpdated());
   const localMetaLastUpdatedRef = useRef<number>(getLocalMetaLastUpdated());
@@ -219,14 +229,12 @@ export default function App() {
 
   const customerFingerprintsRef = useRef<Map<number, string> | null>(null);
   const metaFingerprintRef = useRef<string | null>(null);
-  const pendingCustomerIdsRef = useRef<Set<number>>(new Set());
-  const pendingDeletedIdsRef = useRef<Set<number>>(new Set());
-  const pendingMetaPushRef = useRef<boolean>(false);
+  const pendingCustomerIdsRef = useRef<Set<number>>(new Set(initialPendingSync.customerIds));
+  const pendingDeletedIdsRef = useRef<Set<number>>(new Set(initialPendingSync.deletedIds));
+  const pendingMetaPushRef = useRef<boolean>(initialPendingSync.metaDirty);
 
   const isApplyingRemoteRef = useRef<boolean>(false);
   const isSyncInFlightRef = useRef<boolean>(false);
-  const lastFocusSyncAtRef = useRef<number>(0);
-  const pushDebounceTimerRef = useRef<number | null>(null);
 
   const workspaceSnapshotRef = useRef({
     customers,
@@ -713,70 +721,212 @@ export default function App() {
     [recordCloudSyncTime]
   );
 
-  const flushPendingCloudChanges = useCallback(async (): Promise<boolean> => {
-    const activeUser = firebaseAuth.currentUser;
-    if (!isAuthorizedAdminUser(activeUser) || !activeUser?.uid) {
-      return false;
-    }
-
-    const dirtyIds = Array.from(pendingCustomerIdsRef.current);
+  const persistPendingSyncState = useCallback(() => {
+    const customerIds = Array.from(pendingCustomerIdsRef.current);
     const deletedIds = Array.from(pendingDeletedIdsRef.current);
     const metaDirty = pendingMetaPushRef.current;
+    savePendingSyncState({ customerIds, deletedIds, metaDirty });
+    setUnsyncedCount(customerIds.length + deletedIds.length + (metaDirty ? 1 : 0));
+  }, []);
 
-    if (dirtyIds.length === 0 && deletedIds.length === 0 && !metaDirty) {
-      return true;
+  /**
+   * Manual Two-Way Master Sync (ONLY invoked when user taps "Sync / Refresh" or "Force Sync Now").
+   * Never runs automatically on keystroke, focus, or startup—preserving Firestore daily read/write quota.
+   */
+  const syncWithCloud = useCallback(async () => {
+    const activeUser = firebaseAuth.currentUser;
+    if (!isAuthorizedAdminUser(activeUser) || !activeUser?.uid) {
+      showToast('Sign in with krueptg@gmail.com in Tools → Cloud Sync Account to sync');
+      return;
     }
 
     if (typeof navigator !== 'undefined' && !navigator.onLine) {
       setCloudSyncState('offline');
-      return false;
+      showToast('Offline — changes are saved locally. Tap Sync / Refresh once back online.');
+      return;
     }
 
+    if (isSyncInFlightRef.current) return;
+    isSyncInFlightRef.current = true;
     setCloudSyncState('syncing');
     setCloudSyncError(null);
 
     try {
-      const snap = workspaceSnapshotRef.current;
-
-      // 1. Delete explicitly deleted customers from users/${uid}/customers/${id}
-      for (const delId of deletedIds) {
+      // 1. Flush any explicitly deleted customer docs first so they do not reappear
+      const queuedDeletes = Array.from(pendingDeletedIdsRef.current);
+      for (const delId of queuedDeletes) {
         await deleteCustomerFromCloud(activeUser.uid, delId);
         pendingDeletedIdsRef.current.delete(delId);
       }
 
-      // 2. Push ONLY modified/added customer documents
-      for (const cId of dirtyIds) {
-        const customer = snap.customers.find((c) => c.id === cId);
-        if (!customer) {
+      // 2. Load master per-customer collection + meta/appState
+      //    (automatically migrates legacy users/${uid}/estimatorData/main on first manual sync if needed)
+      const master = await loadMasterCloudWorkspace(activeUser.uid, true);
+      if (!master) return;
+
+      const snap = workspaceSnapshotRef.current;
+      const localCustTsMap: Record<string, number> = { ...customerUpdatedMapRef.current };
+      const mergedDeletedMap: Record<string, number> = {
+        ...(master.meta?.deletedCustomerIds || {}),
+        ...deletedCustomerMapRef.current,
+      };
+      for (const [k, v] of Object.entries(master.meta?.deletedCustomerIds || {})) {
+        mergedDeletedMap[k] = Math.max(mergedDeletedMap[k] || 0, v || 0);
+      }
+
+      const localById = new Map<number, Customer>();
+      snap.customers.forEach((c) => localById.set(c.id, c));
+
+      const cloudById = new Map<number, { customer: Customer; lastUpdated: number }>();
+      master.customerRecords.forEach((rec) => {
+        cloudById.set(rec.customer.id, {
+          customer: rec.customer,
+          lastUpdated: rec.lastUpdated,
+        });
+      });
+
+      const mergedCustomers: Customer[] = [];
+      const customersToPush: Array<{ customer: Customer; lastUpdated: number }> = [];
+      const cloudIdsToDelete: number[] = [];
+      let localCustomersChanged = false;
+
+      // 3. Reconcile all cloud customers against local state & tombstones
+      for (const [cId, cloudEntry] of cloudById.entries()) {
+        const key = String(cId);
+        const delTs = mergedDeletedMap[key] || 0;
+        if (delTs > 0 && delTs >= cloudEntry.lastUpdated) {
+          cloudIdsToDelete.push(cId);
+          if (localById.has(cId)) {
+            localCustomersChanged = true;
+          }
+          continue;
+        }
+
+        const localCustomer = localById.get(cId);
+        const localTs = localCustTsMap[key] ?? (localCustomer ? localLastUpdatedRef.current : 0);
+        const isLocallyDirty = pendingCustomerIdsRef.current.has(cId);
+
+        if (!localCustomer) {
+          mergedCustomers.push(cloudEntry.customer);
+          localCustTsMap[key] = cloudEntry.lastUpdated;
+          localCustomersChanged = true;
+        } else if (cloudEntry.lastUpdated > localTs) {
+          mergedCustomers.push(cloudEntry.customer);
+          localCustTsMap[key] = cloudEntry.lastUpdated;
+          pendingCustomerIdsRef.current.delete(cId);
+          localCustomersChanged = true;
+        } else if (localTs > cloudEntry.lastUpdated || isLocallyDirty) {
+          const pushTs = Math.max(localTs, cloudEntry.lastUpdated + 1, Date.now());
+          mergedCustomers.push(localCustomer);
+          localCustTsMap[key] = pushTs;
+          customersToPush.push({ customer: localCustomer, lastUpdated: pushTs });
+        } else {
+          // Identical timestamps and untouched locally: zero Firestore writes!
+          mergedCustomers.push(localCustomer);
+          localCustTsMap[key] = Math.max(localTs, cloudEntry.lastUpdated);
+        }
+      }
+
+      // 4. Reconcile local-only customers (newly created locally or first-time cloud seed)
+      for (const [cId, localCustomer] of localById.entries()) {
+        if (cloudById.has(cId)) continue;
+        const key = String(cId);
+        const localTs = localCustTsMap[key] ?? localCustomer.lastActive ?? localLastUpdatedRef.current ?? 0;
+        const delTs = mergedDeletedMap[key] || 0;
+
+        if (delTs > 0 && delTs >= localTs) {
+          localCustomersChanged = true;
           pendingCustomerIdsRef.current.delete(cId);
           continue;
         }
-        const ts = customerUpdatedMapRef.current[String(cId)] || Date.now();
-        const res = await saveCustomerToCloud(activeUser.uid, customer, ts);
-        if (res.saved) {
-          customerUpdatedMapRef.current[String(cId)] = res.lastUpdated;
-          pendingCustomerIdsRef.current.delete(cId);
-        }
-      }
-      setLocalCustomerUpdatedMap(customerUpdatedMapRef.current);
 
-      // 3. Push global meta/appState only if global data or tombstones changed
-      if (metaDirty || deletedIds.length > 0) {
-        const metaTs = localMetaLastUpdatedRef.current || Date.now();
+        const pushTs = Math.max(localTs || Date.now(), 1);
+        mergedCustomers.push(localCustomer);
+        localCustTsMap[key] = pushTs;
+        customersToPush.push({ customer: localCustomer, lastUpdated: pushTs });
+      }
+
+      mergedCustomers.sort((a, b) => (b.lastActive || b.id) - (a.lastActive || a.id));
+
+      // 5. Reconcile global appState meta document (settings, Price Book, notes, mileage, expenses)
+      const cloudMeta = master.meta;
+      const localMetaTs = localMetaLastUpdatedRef.current;
+      const hasLocalMetaData =
+        snap.notes.length > 0 ||
+        snap.mileage.length > 0 ||
+        snap.expenses.length > 0 ||
+        snap.shoppingList.length > 0 ||
+        snap.priceBook.length > 0 ||
+        snap.customSupplyPins.length > 0 ||
+        Object.keys(mergedDeletedMap).length > 0;
+
+      let applyCloudMeta = false;
+      let pushLocalMeta = false;
+
+      if (cloudMeta && cloudMeta.lastUpdated > localMetaTs) {
+        applyCloudMeta = true;
+        pendingMetaPushRef.current = false;
+      } else if (
+        (!cloudMeta && hasLocalMetaData) ||
+        (cloudMeta && localMetaTs > cloudMeta.lastUpdated) ||
+        pendingMetaPushRef.current ||
+        queuedDeletes.length > 0 ||
+        cloudIdsToDelete.length > 0
+      ) {
+        pushLocalMeta = true;
+      }
+
+      // Apply any remote updates locally first
+      if (localCustomersChanged || applyCloudMeta) {
+        await applyMergedCloudState({
+          customers: localCustomersChanged ? mergedCustomers : undefined,
+          customerTimestamps: localCustTsMap,
+          meta: applyCloudMeta ? cloudMeta : null,
+          applyMeta: applyCloudMeta,
+          mergedDeletedMap,
+        });
+      } else {
+        customerUpdatedMapRef.current = localCustTsMap;
+        setLocalCustomerUpdatedMap(localCustTsMap);
+        deletedCustomerMapRef.current = mergedDeletedMap;
+        setLocalDeletedCustomerMap(mergedDeletedMap);
+      }
+
+      // Delete any tombstoned cloud customer docs
+      for (const delId of cloudIdsToDelete) {
+        await deleteCustomerFromCloud(activeUser.uid, delId);
+      }
+
+      // Push ONLY modified/added customer documents to users/${uid}/customers/${id}
+      if (customersToPush.length > 0) {
+        await saveCustomersBatchToCloud(activeUser.uid, customersToPush);
+        customersToPush.forEach((item) => {
+          pendingCustomerIdsRef.current.delete(item.customer.id);
+        });
+      }
+
+      // Push global meta/appState only if modified
+      if (pushLocalMeta) {
+        const nextMetaTs = Math.max(
+          Date.now(),
+          localMetaTs,
+          (cloudMeta?.lastUpdated || 0) + 1
+        );
+        const latestSnap = workspaceSnapshotRef.current;
         const res = await saveAppMetaToCloud(
           activeUser.uid,
           {
-            notes: snap.notes,
-            expenses: snap.expenses,
-            mileage: snap.mileage,
-            shoppingList: snap.shoppingList,
-            priceBook: snap.priceBook,
-            customSupplyPins: snap.customSupplyPins,
-            settings: snap.settings,
-            constants: snap.constants,
-            deletedCustomerIds: deletedCustomerMapRef.current,
+            notes: latestSnap.notes,
+            expenses: latestSnap.expenses,
+            mileage: latestSnap.mileage,
+            shoppingList: latestSnap.shoppingList,
+            priceBook: latestSnap.priceBook,
+            customSupplyPins: latestSnap.customSupplyPins,
+            settings: latestSnap.settings,
+            constants: latestSnap.constants,
+            deletedCustomerIds: mergedDeletedMap,
           },
-          metaTs
+          nextMetaTs
         );
         if (res.saved) {
           localMetaLastUpdatedRef.current = res.lastUpdated;
@@ -785,287 +935,54 @@ export default function App() {
         }
       }
 
-      const nowTs = Date.now();
-      localLastUpdatedRef.current = nowTs;
-      setLocalLastUpdated(nowTs);
+      // Clear unsynced badges & persist clean state
+      pendingCustomerIdsRef.current.clear();
+      pendingDeletedIdsRef.current.clear();
+      pendingMetaPushRef.current = false;
+      clearPendingSyncState();
+      setUnsyncedCount(0);
+
       recordCloudSyncTime();
       setCloudSyncState('synced');
-      return true;
+
+      const timeNow = new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+      if (master.migratedFromLegacy) {
+        showToast(
+          `✔ Migrated ${master.migratedCustomerCount} customer${
+            master.migratedCustomerCount === 1 ? '' : 's'
+          } to Master Cloud • Last synced: ${timeNow}`
+        );
+      } else if (localCustomersChanged || applyCloudMeta) {
+        showToast(`✔ Pulled updates (${mergedCustomers.length} clients) • Last synced: ${timeNow}`);
+      } else if (customersToPush.length > 0 || pushLocalMeta || queuedDeletes.length > 0) {
+        showToast(
+          `✔ Pushed ${
+            customersToPush.length > 0
+              ? `${customersToPush.length} updated client${customersToPush.length === 1 ? '' : 's'}`
+              : 'changes'
+          } • Last synced: ${timeNow}`
+        );
+      } else {
+        showToast(`✔ Up to date (${mergedCustomers.length} clients) • Last synced: ${timeNow}`);
+      }
     } catch (err: any) {
-      console.error('Per-customer Firestore push failed:', err);
-      const readableErr = formatFirestoreSyncError(err, err?.payloadBytes);
+      console.error('Manual Firestore sync error:', err);
       setCloudSyncState('error');
-      setCloudSyncError(readableErr);
-      if (
-        String(err?.code || '').toLowerCase().includes('resource-exhausted') ||
-        readableErr.toLowerCase().includes('1 mb')
-      ) {
-        showToast(`⚠️ ${readableErr}`);
-      }
-      return false;
+      const msg = formatFirestoreSyncError(err, err?.payloadBytes);
+      setCloudSyncError(msg);
+      persistPendingSyncState();
+      showToast(`⚠️ ${msg}`);
+    } finally {
+      isSyncInFlightRef.current = false;
     }
-  }, [recordCloudSyncTime, showToast]);
+  }, [applyMergedCloudState, persistPendingSyncState, recordCloudSyncTime, showToast]);
 
-  const syncWithCloud = useCallback(
-    async (options?: { force?: boolean; silent?: boolean }) => {
-      const force = Boolean(options?.force);
-      const silent = options?.silent ?? true;
-
-      const activeUser = firebaseAuth.currentUser;
-      if (!isAuthorizedAdminUser(activeUser) || !activeUser?.uid) {
-        return;
-      }
-
-      if (typeof navigator !== 'undefined' && !navigator.onLine) {
-        setCloudSyncState('offline');
-        if (!silent) {
-          showToast('Offline — changes saved locally & will sync when back online');
-        }
-        return;
-      }
-
-      if (isSyncInFlightRef.current) return;
-      isSyncInFlightRef.current = true;
-      setCloudSyncState('syncing');
-      setCloudSyncError(null);
-
-      try {
-        // Flush any queued explicit UI deletions first so deleted docs don't reappear
-        const queuedDeletes = Array.from(pendingDeletedIdsRef.current);
-        for (const delId of queuedDeletes) {
-          await deleteCustomerFromCloud(activeUser.uid, delId);
-          pendingDeletedIdsRef.current.delete(delId);
-        }
-
-        // Load full per-customer collection + meta/appState (auto-migrates legacy estimatorData/main if needed)
-        const master = await loadMasterCloudWorkspace(activeUser.uid, force);
-        if (!master) return;
-
-        const snap = workspaceSnapshotRef.current;
-        const localCustTsMap: Record<string, number> = { ...customerUpdatedMapRef.current };
-        const mergedDeletedMap: Record<string, number> = {
-          ...(master.meta?.deletedCustomerIds || {}),
-          ...deletedCustomerMapRef.current,
-        };
-        // Keep newest tombstone timestamp per ID
-        for (const [k, v] of Object.entries(master.meta?.deletedCustomerIds || {})) {
-          mergedDeletedMap[k] = Math.max(mergedDeletedMap[k] || 0, v || 0);
-        }
-
-        const localById = new Map<number, Customer>();
-        snap.customers.forEach((c) => localById.set(c.id, c));
-
-        const cloudById = new Map<number, { customer: Customer; lastUpdated: number }>();
-        master.customerRecords.forEach((rec) => {
-          cloudById.set(rec.customer.id, {
-            customer: rec.customer,
-            lastUpdated: rec.lastUpdated,
-          });
-        });
-
-        const mergedCustomers: Customer[] = [];
-        const customersToPush: Array<{ customer: Customer; lastUpdated: number }> = [];
-        const cloudIdsToDelete: number[] = [];
-        let localCustomersChanged = false;
-
-        // 1. Reconcile all cloud customers against local state & tombstones
-        for (const [cId, cloudEntry] of cloudById.entries()) {
-          const key = String(cId);
-          const delTs = mergedDeletedMap[key] || 0;
-          if (delTs > 0 && delTs >= cloudEntry.lastUpdated) {
-            cloudIdsToDelete.push(cId);
-            if (localById.has(cId)) {
-              localCustomersChanged = true;
-            }
-            continue;
-          }
-
-          const localCustomer = localById.get(cId);
-          const localTs = localCustTsMap[key] ?? (localCustomer ? localLastUpdatedRef.current : 0);
-
-          if (!localCustomer) {
-            mergedCustomers.push(cloudEntry.customer);
-            localCustTsMap[key] = cloudEntry.lastUpdated;
-            localCustomersChanged = true;
-          } else if (cloudEntry.lastUpdated > localTs) {
-            mergedCustomers.push(cloudEntry.customer);
-            localCustTsMap[key] = cloudEntry.lastUpdated;
-            pendingCustomerIdsRef.current.delete(cId);
-            localCustomersChanged = true;
-          } else if (localTs > cloudEntry.lastUpdated || pendingCustomerIdsRef.current.has(cId)) {
-            const pushTs = Math.max(localTs, cloudEntry.lastUpdated + 1, Date.now());
-            mergedCustomers.push(localCustomer);
-            localCustTsMap[key] = pushTs;
-            customersToPush.push({ customer: localCustomer, lastUpdated: pushTs });
-          } else {
-            mergedCustomers.push(localCustomer);
-            localCustTsMap[key] = Math.max(localTs, cloudEntry.lastUpdated);
-          }
-        }
-
-        // 2. Reconcile local-only customers (new offline clients or first-time cloud seed)
-        for (const [cId, localCustomer] of localById.entries()) {
-          if (cloudById.has(cId)) continue;
-          const key = String(cId);
-          const localTs = localCustTsMap[key] ?? localCustomer.lastActive ?? localLastUpdatedRef.current ?? 0;
-          const delTs = mergedDeletedMap[key] || 0;
-
-          if (delTs > 0 && delTs >= localTs) {
-            // Explicitly deleted on another device — remove locally
-            localCustomersChanged = true;
-            pendingCustomerIdsRef.current.delete(cId);
-            continue;
-          }
-
-          const pushTs = Math.max(localTs || Date.now(), 1);
-          mergedCustomers.push(localCustomer);
-          localCustTsMap[key] = pushTs;
-          customersToPush.push({ customer: localCustomer, lastUpdated: pushTs });
-        }
-
-        // Preserve consistent ordering (most recently active first)
-        mergedCustomers.sort((a, b) => (b.lastActive || b.id) - (a.lastActive || a.id));
-
-        // 3. Reconcile global appState meta document
-        const cloudMeta = master.meta;
-        const localMetaTs = localMetaLastUpdatedRef.current;
-        const hasLocalMetaData =
-          snap.notes.length > 0 ||
-          snap.mileage.length > 0 ||
-          snap.expenses.length > 0 ||
-          snap.shoppingList.length > 0 ||
-          snap.priceBook.length > 0 ||
-          snap.customSupplyPins.length > 0 ||
-          Object.keys(mergedDeletedMap).length > 0;
-
-        let applyCloudMeta = false;
-        let pushLocalMeta = false;
-
-        if (cloudMeta && cloudMeta.lastUpdated > localMetaTs) {
-          applyCloudMeta = true;
-          pendingMetaPushRef.current = false;
-        } else if (
-          (!cloudMeta && (hasLocalMetaData || force)) ||
-          (cloudMeta && localMetaTs > cloudMeta.lastUpdated) ||
-          pendingMetaPushRef.current ||
-          queuedDeletes.length > 0 ||
-          cloudIdsToDelete.length > 0 ||
-          force
-        ) {
-          pushLocalMeta = true;
-        }
-
-        // Apply any remote updates locally first (updating fingerprints so no echo push fires)
-        if (localCustomersChanged || applyCloudMeta) {
-          await applyMergedCloudState({
-            customers: localCustomersChanged ? mergedCustomers : undefined,
-            customerTimestamps: localCustTsMap,
-            meta: applyCloudMeta ? cloudMeta : null,
-            applyMeta: applyCloudMeta,
-            mergedDeletedMap,
-          });
-        } else {
-          customerUpdatedMapRef.current = localCustTsMap;
-          setLocalCustomerUpdatedMap(localCustTsMap);
-          deletedCustomerMapRef.current = mergedDeletedMap;
-          setLocalDeletedCustomerMap(mergedDeletedMap);
-        }
-
-        // Delete any tombstoned cloud customer docs
-        for (const delId of cloudIdsToDelete) {
-          await deleteCustomerFromCloud(activeUser.uid, delId);
-        }
-
-        // Push only new/modified customer docs to users/${uid}/customers/${id}
-        if (customersToPush.length > 0) {
-          await saveCustomersBatchToCloud(activeUser.uid, customersToPush);
-          customersToPush.forEach((item) => {
-            pendingCustomerIdsRef.current.delete(item.customer.id);
-          });
-        }
-
-        // Push global meta/appState if needed
-        if (pushLocalMeta) {
-          const nextMetaTs = Math.max(
-            Date.now(),
-            localMetaTs,
-            (cloudMeta?.lastUpdated || 0) + 1
-          );
-          const latestSnap = workspaceSnapshotRef.current;
-          const res = await saveAppMetaToCloud(
-            activeUser.uid,
-            {
-              notes: latestSnap.notes,
-              expenses: latestSnap.expenses,
-              mileage: latestSnap.mileage,
-              shoppingList: latestSnap.shoppingList,
-              priceBook: latestSnap.priceBook,
-              customSupplyPins: latestSnap.customSupplyPins,
-              settings: latestSnap.settings,
-              constants: latestSnap.constants,
-              deletedCustomerIds: mergedDeletedMap,
-            },
-            nextMetaTs
-          );
-          if (res.saved) {
-            localMetaLastUpdatedRef.current = res.lastUpdated;
-            setLocalMetaLastUpdated(res.lastUpdated);
-            pendingMetaPushRef.current = false;
-          }
-        }
-
-        recordCloudSyncTime();
-        setCloudSyncState('synced');
-
-        if (master.migratedFromLegacy) {
-          showToast(
-            `✔ Migrated ${master.migratedCustomerCount} customer${
-              master.migratedCustomerCount === 1 ? '' : 's'
-            } to Master Cloud Collection`
-          );
-        } else if (!silent) {
-          if (localCustomersChanged || applyCloudMeta) {
-            showToast(`✔ Synced master list (${mergedCustomers.length} clients)`);
-          } else if (customersToPush.length > 0 || pushLocalMeta) {
-            showToast(
-              `✔ Synced ${
-                customersToPush.length > 0
-                  ? `${customersToPush.length} updated client${customersToPush.length === 1 ? '' : 's'}`
-                  : 'settings & logs'
-              } to cloud`
-            );
-          } else {
-            showToast(`✔ Master cloud list up to date (${mergedCustomers.length} clients)`);
-          }
-        }
-      } catch (err: any) {
-        console.error('Master Firestore sync error:', err);
-        setCloudSyncState('error');
-        const msg = formatFirestoreSyncError(err, err?.payloadBytes);
-        setCloudSyncError(msg);
-        if (!silent || msg.toLowerCase().includes('1 mb')) {
-          showToast(`⚠️ ${msg}`);
-        }
-      } finally {
-        isSyncInFlightRef.current = false;
-      }
-    },
-    [applyMergedCloudState, recordCloudSyncTime, showToast]
-  );
-
-  // Subscribe to persistent Firebase Auth state (kpwebsite-83a6b)
+  // Subscribe to persistent Firebase Auth state only (zero Firestore reads/writes on startup)
   useEffect(() => {
     const unsubscribe = subscribeToCloudAuth((user) => {
       setCloudUser(user);
       setCloudAuthReady(true);
       if (!isAuthorizedAdminUser(user)) {
-        if (pushDebounceTimerRef.current !== null) {
-          window.clearTimeout(pushDebounceTimerRef.current);
-          pushDebounceTimerRef.current = null;
-        }
-        pendingCustomerIdsRef.current.clear();
-        pendingDeletedIdsRef.current.clear();
-        pendingMetaPushRef.current = false;
         setCloudSyncError(null);
         setCloudSyncState(typeof navigator !== 'undefined' && !navigator.onLine ? 'offline' : 'idle');
       }
@@ -1073,76 +990,21 @@ export default function App() {
     return () => unsubscribe();
   }, []);
 
-  // Automatically load full master customer collection & migrate legacy single doc on PWA open
+  // Track browser online/offline status for UI indicator only (zero automatic Firestore calls)
   useEffect(() => {
-    if (!isLocalHydrated || !cloudAuthReady || !isAuthorizedCloudAdmin) return;
-    syncWithCloud({ force: false, silent: true });
-  }, [isLocalHydrated, cloudAuthReady, isAuthorizedCloudAdmin, syncWithCloud]);
-
-  // Automatically pull newer cloud updates whenever PWA regains focus, becomes visible, or reconnects
-  useEffect(() => {
-    if (!isLocalHydrated || !isAuthorizedCloudAdmin) return;
-
-    const triggerFocusPull = () => {
-      const now = Date.now();
-      if (now - lastFocusSyncAtRef.current < 2000) return;
-      lastFocusSyncAtRef.current = now;
-      syncWithCloud({ force: false, silent: true });
-    };
-
-    const handleVisibilityChange = () => {
-      if (document.visibilityState === 'visible') {
-        triggerFocusPull();
-      } else if (
-        document.visibilityState === 'hidden' &&
-        (pendingCustomerIdsRef.current.size > 0 ||
-          pendingDeletedIdsRef.current.size > 0 ||
-          pendingMetaPushRef.current)
-      ) {
-        if (pushDebounceTimerRef.current !== null) {
-          window.clearTimeout(pushDebounceTimerRef.current);
-          pushDebounceTimerRef.current = null;
-        }
-        flushPendingCloudChanges();
-      }
-    };
-
+    const handleOffline = () => setCloudSyncState('offline');
     const handleOnline = () => {
-      triggerFocusPull();
+      setCloudSyncState((prev) => (prev === 'offline' ? 'idle' : prev));
     };
-
-    const handleOffline = () => {
-      setCloudSyncState('offline');
-    };
-
-    window.addEventListener('focus', triggerFocusPull);
-    document.addEventListener('visibilitychange', handleVisibilityChange);
-    window.addEventListener('online', handleOnline);
     window.addEventListener('offline', handleOffline);
-
+    window.addEventListener('online', handleOnline);
     return () => {
-      window.removeEventListener('focus', triggerFocusPull);
-      document.removeEventListener('visibilitychange', handleVisibilityChange);
-      window.removeEventListener('online', handleOnline);
       window.removeEventListener('offline', handleOffline);
+      window.removeEventListener('online', handleOnline);
     };
-  }, [isLocalHydrated, isAuthorizedCloudAdmin, syncWithCloud, flushPendingCloudChanges]);
+  }, []);
 
-  // Schedule a 1.5s debounced flush for ONLY modified customer docs / meta
-  const scheduleDebouncedCloudPush = useCallback(() => {
-    if (!isAuthorizedAdminUser(firebaseAuth.currentUser)) {
-      return;
-    }
-    if (pushDebounceTimerRef.current !== null) {
-      window.clearTimeout(pushDebounceTimerRef.current);
-    }
-    pushDebounceTimerRef.current = window.setTimeout(() => {
-      pushDebounceTimerRef.current = null;
-      flushPendingCloudChanges();
-    }, 1500);
-  }, [flushPendingCloudChanges]);
-
-  // Track per-customer changes so ONLY modified/added customer documents are pushed
+  // Locally track per-customer edits so ONLY modified customer docs are pushed on next manual sync
   useEffect(() => {
     if (!isLocalHydrated) return;
 
@@ -1187,11 +1049,10 @@ export default function App() {
     setLocalCustomerUpdatedMap(customerUpdatedMapRef.current);
     localLastUpdatedRef.current = now;
     setLocalLastUpdated(now);
+    persistPendingSyncState();
+  }, [isLocalHydrated, customers, persistPendingSyncState]);
 
-    scheduleDebouncedCloudPush();
-  }, [isLocalHydrated, customers, scheduleDebouncedCloudPush]);
-
-  // Track global appState changes (notes, mileage, expenses, shopping, price book, pins, settings, constants)
+  // Locally track global appState edits (notes, mileage, expenses, shopping, price book, pins, settings, constants)
   useEffect(() => {
     if (!isLocalHydrated) return;
 
@@ -1222,8 +1083,7 @@ export default function App() {
     localLastUpdatedRef.current = now;
     setLocalLastUpdated(now);
     pendingMetaPushRef.current = true;
-
-    scheduleDebouncedCloudPush();
+    persistPendingSyncState();
   }, [
     isLocalHydrated,
     notes,
@@ -1234,17 +1094,8 @@ export default function App() {
     customSupplyPins,
     settings,
     constants,
-    scheduleDebouncedCloudPush,
+    persistPendingSyncState,
   ]);
-
-  // Cleanup any pending debounce timer on unmount
-  useEffect(() => {
-    return () => {
-      if (pushDebounceTimerRef.current !== null) {
-        window.clearTimeout(pushDebounceTimerRef.current);
-      }
-    };
-  }, []);
 
   const handleCloudSignIn = useCallback(
     async (email: string, password: string) => {
@@ -1252,7 +1103,7 @@ export default function App() {
       setCloudUser(user);
       setCloudAuthReady(true);
       if (isAuthorizedAdminUser(user)) {
-        showToast(`✔ Signed in as ${ADMIN_CLOUD_EMAIL} • Cloud Sync Active`);
+        showToast(`✔ Signed in as ${ADMIN_CLOUD_EMAIL} • Tap Sync / Refresh to sync`);
       } else {
         showToast('Signed in, but cloud sync is restricted to the admin account (local-only mode)');
       }
@@ -1269,17 +1120,10 @@ export default function App() {
   );
 
   const handleCloudForceSync = useCallback(async () => {
-    await syncWithCloud({ force: true, silent: false });
+    await syncWithCloud();
   }, [syncWithCloud]);
 
   const handleCloudSignOut = useCallback(async () => {
-    if (pushDebounceTimerRef.current !== null) {
-      window.clearTimeout(pushDebounceTimerRef.current);
-      pushDebounceTimerRef.current = null;
-    }
-    pendingCustomerIdsRef.current.clear();
-    pendingDeletedIdsRef.current.clear();
-    pendingMetaPushRef.current = false;
     await signOutCloudAdmin();
     setCloudUser(null);
     setCloudSyncError(null);
@@ -1325,6 +1169,8 @@ export default function App() {
     syncState: cloudSyncState,
     lastSyncLabel: lastCloudSyncLabel,
     syncError: cloudSyncError,
+    hasUnsyncedChanges,
+    unsyncedCount,
     storageStats,
     onSignIn: handleCloudSignIn,
     onPasswordReset: handleCloudPasswordReset,
@@ -1616,10 +1462,7 @@ export default function App() {
     localLastUpdatedRef.current = now;
     setLocalLastUpdated(now);
     pendingMetaPushRef.current = true;
-
-    if (isAuthorizedAdminUser(firebaseAuth.currentUser)) {
-      flushPendingCloudChanges();
-    }
+    persistPendingSyncState();
 
     showToast('Customer Folder Deleted');
   };
@@ -2200,6 +2043,12 @@ export default function App() {
       <Header
         settings={settings}
         isBackupDue={isBackupDue}
+        currentUser={cloudUser}
+        isAuthorizedCloudAdmin={isAuthorizedCloudAdmin}
+        cloudSyncState={cloudSyncState}
+        hasUnsyncedChanges={hasUnsyncedChanges}
+        lastSyncLabel={lastCloudSyncLabel}
+        onManualSync={handleCloudForceSync}
         onBackup={handleBackup}
         onRestore={handleRestore}
         onOpenNewCustomer={() => setCustomerModalOpen(true)}

@@ -1,4 +1,5 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
+import { User } from 'firebase/auth';
 import {
   Customer,
   JobProject,
@@ -51,6 +52,7 @@ import { JobsiteMapView } from './components/JobsiteMapView';
 import { WeatherView } from './components/WeatherView';
 import { NotesView } from './components/NotesView';
 import { ToolsView } from './components/ToolsView';
+import { CloudSyncAccountProps, CloudSyncState } from './components/CloudSyncAccountCard';
 
 // Modals
 import { CustomerModal } from './components/modals/CustomerModal';
@@ -76,6 +78,22 @@ import {
   deleteGoogleCalendarEvent,
 } from './utils/googleWorkspace';
 import {
+  ADMIN_CLOUD_EMAIL,
+  LAST_CLOUD_SYNC_LABEL_KEY,
+  CloudWorkspacePayload,
+  firebaseAuth,
+  isAuthorizedAdminUser,
+  subscribeToCloudAuth,
+  signInAdminWithEmail,
+  sendAdminPasswordReset,
+  signOutCloudAdmin,
+  saveWorkspaceToCloud,
+  loadWorkspaceFromCloud,
+  mergeLocalFileBlobsIntoCloudCustomers,
+  getLocalLastUpdated,
+  setLocalLastUpdated,
+} from './utils/firebaseSync';
+import {
   hasCalendarRelevantChanges,
   buildGoogleCalendarTemplateUrl,
 } from './utils/calendarIcs';
@@ -91,21 +109,125 @@ import {
   normalizeLegacyJob,
 } from './utils/projectHelpers';
 
+function readLocalCacheSync<T>(key: string, fallback: T): T {
+  try {
+    if (typeof localStorage === 'undefined') return fallback;
+    const raw = localStorage.getItem(key);
+    if (!raw) return fallback;
+    const parsed = JSON.parse(raw);
+    return parsed === null || parsed === undefined ? fallback : (parsed as T);
+  } catch {
+    return fallback;
+  }
+}
+
+function buildSyncFingerprint(data: {
+  customers: Customer[];
+  notes: FieldNote[];
+  expenses: ExpenseEntry[];
+  mileage: MileageEntry[];
+  shoppingList: ShoppingItem[];
+  priceBook: PriceBookItem[];
+  customSupplyPins: SupplyStopPin[];
+  settings: PrintSettings;
+  constants: SystemConstants;
+}): string {
+  return JSON.stringify(data);
+}
+
 export default function App() {
   const [activeTab, setActiveTab] = useState<TabType>('dash');
 
-  // Core Data
-  const [customers, setCustomers] = useState<Customer[]>([]);
-  const [notes, setNotes] = useState<FieldNote[]>([]);
-  const [expenses, setExpenses] = useState<ExpenseEntry[]>([]);
-  const [mileage, setMileage] = useState<MileageEntry[]>([]);
-  const [shoppingList, setShoppingList] = useState<ShoppingItem[]>([]);
-  const [priceBook, setPriceBook] = useState<PriceBookItem[]>([]);
+  // Core Data (instant offline-first hydration from localStorage, reconciled with IndexedDB on mount)
+  const [customers, setCustomers] = useState<Customer[]>(() => {
+    const cached = readLocalCacheSync<Customer[]>('KMaster_C', []);
+    if (!Array.isArray(cached)) return [];
+    return cached.map((c) => ({
+      ...c,
+      jobs: Array.isArray(c.jobs) ? c.jobs.map(normalizeLegacyJob) : [],
+    }));
+  });
+  const [notes, setNotes] = useState<FieldNote[]>(() => {
+    const cached = readLocalCacheSync<FieldNote[]>('KMaster_Notes', []);
+    return Array.isArray(cached) ? cached : [];
+  });
+  const [expenses, setExpenses] = useState<ExpenseEntry[]>(() => {
+    const cached = readLocalCacheSync<ExpenseEntry[]>('KMaster_Exp', []);
+    return Array.isArray(cached) ? cached : [];
+  });
+  const [mileage, setMileage] = useState<MileageEntry[]>(() => {
+    const cached = readLocalCacheSync<MileageEntry[]>('KMaster_Mil', []);
+    return Array.isArray(cached) ? cached : [];
+  });
+  const [shoppingList, setShoppingList] = useState<ShoppingItem[]>(() => {
+    const cached = readLocalCacheSync<ShoppingItem[]>('KMaster_Shopping', []);
+    return Array.isArray(cached) ? cached : [];
+  });
+  const [priceBook, setPriceBook] = useState<PriceBookItem[]>(() => {
+    const cached = readLocalCacheSync<PriceBookItem[]>('KMaster_PriceBook', []);
+    return Array.isArray(cached) ? cached : [];
+  });
   const [webPhotos, setWebPhotos] = useState<WebPhoto[]>([]);
-  const [customSupplyPins, setCustomSupplyPins] = useState<SupplyStopPin[]>([]);
-  const [settings, setSettings] = useState<PrintSettings>(DEFAULT_PRINT_SETTINGS);
-  const [constants, setConstants] = useState<SystemConstants>(DEFAULT_SYSTEM_CONSTANTS);
+  const [customSupplyPins, setCustomSupplyPins] = useState<SupplyStopPin[]>(() => {
+    const cached = readLocalCacheSync<SupplyStopPin[]>('KMaster_MapPins', []);
+    return Array.isArray(cached) ? cached : [];
+  });
+  const [settings, setSettings] = useState<PrintSettings>(() =>
+    readLocalCacheSync<PrintSettings>('KMaster_Settings', DEFAULT_PRINT_SETTINGS)
+  );
+  const [constants, setConstants] = useState<SystemConstants>(() =>
+    readLocalCacheSync<SystemConstants>('KMaster_Constants', DEFAULT_SYSTEM_CONSTANTS)
+  );
   const [customLogo, setCustomLogo] = useState<string | null>(null);
+
+  // Firebase Auth & Two-Way Cloud Sync State (shared kpwebsite-83a6b project)
+  const [isLocalHydrated, setIsLocalHydrated] = useState(false);
+  const [cloudUser, setCloudUser] = useState<User | null>(firebaseAuth.currentUser);
+  const [cloudAuthReady, setCloudAuthReady] = useState(false);
+  const [cloudSyncState, setCloudSyncState] = useState<CloudSyncState>(() =>
+    typeof navigator !== 'undefined' && !navigator.onLine ? 'offline' : 'idle'
+  );
+  const [lastCloudSyncLabel, setLastCloudSyncLabel] = useState<string | null>(() => {
+    try {
+      return localStorage.getItem(LAST_CLOUD_SYNC_LABEL_KEY);
+    } catch {
+      return null;
+    }
+  });
+  const [cloudSyncError, setCloudSyncError] = useState<string | null>(null);
+
+  const isAuthorizedCloudAdmin = isAuthorizedAdminUser(cloudUser);
+
+  const localLastUpdatedRef = useRef<number>(getLocalLastUpdated());
+  const lastKnownFingerprintRef = useRef<string | null>(null);
+  const isApplyingRemoteRef = useRef<boolean>(false);
+  const isSyncInFlightRef = useRef<boolean>(false);
+  const lastFocusSyncAtRef = useRef<number>(0);
+  const pushDebounceTimerRef = useRef<number | null>(null);
+  const hasPendingPushRef = useRef<boolean>(false);
+
+  const workspaceSnapshotRef = useRef({
+    customers,
+    notes,
+    expenses,
+    mileage,
+    shoppingList,
+    priceBook,
+    customSupplyPins,
+    settings,
+    constants,
+  });
+  workspaceSnapshotRef.current = {
+    customers,
+    notes,
+    expenses,
+    mileage,
+    shoppingList,
+    priceBook,
+    customSupplyPins,
+    settings,
+    constants,
+  };
 
   // Theme & Accents
   const [baseTheme, setBaseTheme] = useState<'dark' | 'light'>('dark');
@@ -152,12 +274,12 @@ export default function App() {
   const [calendarSyncOpen, setCalendarSyncOpen] = useState(false);
   const [shareBusinessCardOpen, setShareBusinessCardOpen] = useState(false);
 
-  const showToast = (msg: string) => {
+  const showToast = useCallback((msg: string) => {
     setToastMsg(msg);
     setTimeout(() => {
       setToastMsg((prev) => (prev === msg ? null : prev));
     }, 2500);
-  };
+  }, []);
 
   // Handle restoring full-state or legacy JSON backup into localStorage, IndexedDB, and live React state
   const handleApplyBackup = async (payload: NormalizedRestorePayload) => {
@@ -359,6 +481,7 @@ export default function App() {
         jobs: Array.isArray(c.jobs) ? c.jobs.map(normalizeLegacyJob) : [],
       }));
 
+      const normalizedCustomPins = Array.isArray(activeCustomPins) ? activeCustomPins : [];
       setCustomers(activeCustomers);
       setNotes(activeNotes);
       setExpenses(activeExpenses);
@@ -366,9 +489,22 @@ export default function App() {
       setShoppingList(activeShopping);
       setPriceBook(activePriceBook);
       setWebPhotos(activeWebPhotos);
-      setCustomSupplyPins(Array.isArray(activeCustomPins) ? activeCustomPins : []);
+      setCustomSupplyPins(normalizedCustomPins);
       setSettings(activeSettings);
       setConstants(activeConstants);
+
+      lastKnownFingerprintRef.current = buildSyncFingerprint({
+        customers: activeCustomers,
+        notes: activeNotes,
+        expenses: activeExpenses,
+        mileage: activeMileage,
+        shoppingList: activeShopping,
+        priceBook: activePriceBook,
+        customSupplyPins: normalizedCustomPins,
+        settings: activeSettings,
+        constants: activeConstants,
+      });
+      setIsLocalHydrated(true);
 
       const loadedLogo = await loadRecord<string | null>('KMaster_Logo', null);
       if (loadedLogo) {
@@ -389,6 +525,416 @@ export default function App() {
 
     initializeData();
   }, []);
+
+  const recordCloudSyncTime = useCallback(() => {
+    const label = new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+    setLastCloudSyncLabel(label);
+    try {
+      localStorage.setItem(LAST_CLOUD_SYNC_LABEL_KEY, label);
+    } catch {
+      // Ignore storage quota errors
+    }
+  }, []);
+
+  const applyCloudWorkspace = useCallback(
+    async (remote: CloudWorkspacePayload) => {
+      isApplyingRemoteRef.current = true;
+      try {
+        const currentLocal = workspaceSnapshotRef.current;
+        const rawCloudCustomers = Array.isArray(remote.customers) ? remote.customers : [];
+        const normalizedCustomers = mergeLocalFileBlobsIntoCloudCustomers(
+          rawCloudCustomers.map((c) => ({
+            ...c,
+            jobs: Array.isArray(c.jobs) ? c.jobs.map(normalizeLegacyJob) : [],
+          })),
+          currentLocal.customers
+        );
+        const nextNotes = Array.isArray(remote.notes) ? remote.notes : currentLocal.notes;
+        const nextExpenses = Array.isArray(remote.expenses) ? remote.expenses : currentLocal.expenses;
+        const nextMileage = Array.isArray(remote.mileage) ? remote.mileage : currentLocal.mileage;
+        const nextShopping = Array.isArray(remote.shoppingList)
+          ? remote.shoppingList
+          : currentLocal.shoppingList;
+        const nextPriceBook = Array.isArray(remote.priceBook)
+          ? remote.priceBook
+          : currentLocal.priceBook;
+        const nextCustomPins = Array.isArray(remote.customSupplyPins)
+          ? remote.customSupplyPins
+          : currentLocal.customSupplyPins;
+        const nextSettings = remote.settings && remote.settings.hdr ? remote.settings : currentLocal.settings;
+        const nextConstants =
+          remote.constants && remote.constants.spreadRate ? remote.constants : currentLocal.constants;
+
+        const nextSnapshot = {
+          customers: normalizedCustomers,
+          notes: nextNotes,
+          expenses: nextExpenses,
+          mileage: nextMileage,
+          shoppingList: nextShopping,
+          priceBook: nextPriceBook,
+          customSupplyPins: nextCustomPins,
+          settings: nextSettings,
+          constants: nextConstants,
+        };
+
+        lastKnownFingerprintRef.current = buildSyncFingerprint(nextSnapshot);
+        workspaceSnapshotRef.current = nextSnapshot;
+
+        setCustomers(normalizedCustomers);
+        setNotes(nextNotes);
+        setExpenses(nextExpenses);
+        setMileage(nextMileage);
+        setShoppingList(nextShopping);
+        setPriceBook(nextPriceBook);
+        setCustomSupplyPins(nextCustomPins);
+        setSettings(nextSettings);
+        setConstants(nextConstants);
+
+        // Keep an open customer folder refreshed if remote data updated it
+        setActiveFolderCustomer((prev) => {
+          if (!prev) return null;
+          return normalizedCustomers.find((c) => c.id === prev.id) || prev;
+        });
+
+        await Promise.all([
+          saveRecord('KMaster_C', normalizedCustomers),
+          saveRecord('KMaster_Notes', nextNotes),
+          saveRecord('KMaster_Exp', nextExpenses),
+          saveRecord('KMaster_Mil', nextMileage),
+          saveRecord('KMaster_Shopping', nextShopping),
+          saveRecord('KMaster_PriceBook', nextPriceBook),
+          saveRecord('KMaster_MapPins', nextCustomPins),
+          saveRecord('KMaster_Settings', nextSettings),
+          saveRecord('KMaster_Constants', nextConstants),
+        ]);
+
+        const appliedTs = remote.lastUpdated > 0 ? remote.lastUpdated : Date.now();
+        localLastUpdatedRef.current = appliedTs;
+        setLocalLastUpdated(appliedTs);
+        hasPendingPushRef.current = false;
+        recordCloudSyncTime();
+      } finally {
+        window.setTimeout(() => {
+          isApplyingRemoteRef.current = false;
+        }, 0);
+      }
+    },
+    [recordCloudSyncTime]
+  );
+
+  const pushSnapshotToCloud = useCallback(
+    async (overrideTimestamp?: number): Promise<boolean> => {
+      const activeUser = firebaseAuth.currentUser;
+      if (!isAuthorizedAdminUser(activeUser) || !activeUser?.uid) {
+        return false;
+      }
+      if (typeof navigator !== 'undefined' && !navigator.onLine) {
+        setCloudSyncState('offline');
+        hasPendingPushRef.current = true;
+        return false;
+      }
+
+      setCloudSyncState('syncing');
+      setCloudSyncError(null);
+      try {
+        const ts = overrideTimestamp || localLastUpdatedRef.current || Date.now();
+        const result = await saveWorkspaceToCloud(activeUser.uid, workspaceSnapshotRef.current, ts);
+        if (result.saved) {
+          localLastUpdatedRef.current = result.lastUpdated;
+          setLocalLastUpdated(result.lastUpdated);
+          hasPendingPushRef.current = false;
+          recordCloudSyncTime();
+          setCloudSyncState('synced');
+          return true;
+        }
+        return false;
+      } catch (err: any) {
+        console.error('Firestore push failed:', err);
+        setCloudSyncState('error');
+        setCloudSyncError(err?.message || 'Cloud save failed. Local copy is safe.');
+        hasPendingPushRef.current = true;
+        return false;
+      }
+    },
+    [recordCloudSyncTime]
+  );
+
+  const syncWithCloud = useCallback(
+    async (options?: { force?: boolean; silent?: boolean }) => {
+      const force = Boolean(options?.force);
+      const silent = options?.silent ?? true;
+
+      const activeUser = firebaseAuth.currentUser;
+      if (!isAuthorizedAdminUser(activeUser) || !activeUser?.uid) {
+        return;
+      }
+
+      if (typeof navigator !== 'undefined' && !navigator.onLine) {
+        setCloudSyncState('offline');
+        if (!silent) {
+          showToast('Offline — changes saved locally & will sync when back online');
+        }
+        return;
+      }
+
+      if (isSyncInFlightRef.current) return;
+      isSyncInFlightRef.current = true;
+      setCloudSyncState('syncing');
+      setCloudSyncError(null);
+
+      try {
+        const cloudData = await loadWorkspaceFromCloud(activeUser.uid, force);
+        const localTs = localLastUpdatedRef.current;
+        const snap = workspaceSnapshotRef.current;
+        const hasLocalData =
+          snap.customers.length > 0 ||
+          snap.notes.length > 0 ||
+          snap.mileage.length > 0 ||
+          snap.expenses.length > 0 ||
+          snap.shoppingList.length > 0 ||
+          snap.priceBook.length > 0;
+
+        if (cloudData && cloudData.lastUpdated > localTs) {
+          await applyCloudWorkspace(cloudData);
+          setCloudSyncState('synced');
+          if (!silent) {
+            showToast(`✔ Synced newer cloud data (${cloudData.customers.length} clients)`);
+          }
+        } else if (!cloudData) {
+          if (hasLocalData || force) {
+            const nextTs = Math.max(Date.now(), localTs || 1);
+            localLastUpdatedRef.current = nextTs;
+            setLocalLastUpdated(nextTs);
+            const ok = await pushSnapshotToCloud(nextTs);
+            if (ok && !silent) {
+              showToast('✔ Synced local data to cloud');
+            }
+          } else {
+            setCloudSyncState('synced');
+            if (!silent) showToast('✔ Cloud sync active & up to date');
+          }
+        } else if (localTs > cloudData.lastUpdated || force || hasPendingPushRef.current) {
+          const nextTs = force
+            ? Math.max(Date.now(), localTs, cloudData.lastUpdated + 1)
+            : Math.max(localTs, cloudData.lastUpdated + 1);
+          localLastUpdatedRef.current = nextTs;
+          setLocalLastUpdated(nextTs);
+          const ok = await pushSnapshotToCloud(nextTs);
+          if (ok && !silent) {
+            showToast('✔ Force Sync Complete');
+          }
+        } else {
+          recordCloudSyncTime();
+          setCloudSyncState('synced');
+          if (!silent) {
+            showToast('✔ Already up to date with cloud');
+          }
+        }
+      } catch (err: any) {
+        console.error('Firestore sync error:', err);
+        setCloudSyncState('error');
+        const msg = err?.message || 'Cloud sync failed. Local storage remains active.';
+        setCloudSyncError(msg);
+        if (!silent) {
+          showToast(`❌ Cloud sync failed: ${msg}`);
+        }
+      } finally {
+        isSyncInFlightRef.current = false;
+      }
+    },
+    [applyCloudWorkspace, pushSnapshotToCloud, recordCloudSyncTime, showToast]
+  );
+
+  // Subscribe to persistent Firebase Auth state (kpwebsite-83a6b)
+  useEffect(() => {
+    const unsubscribe = subscribeToCloudAuth((user) => {
+      setCloudUser(user);
+      setCloudAuthReady(true);
+      if (!isAuthorizedAdminUser(user)) {
+        if (pushDebounceTimerRef.current !== null) {
+          window.clearTimeout(pushDebounceTimerRef.current);
+          pushDebounceTimerRef.current = null;
+        }
+        hasPendingPushRef.current = false;
+        setCloudSyncError(null);
+        setCloudSyncState(typeof navigator !== 'undefined' && !navigator.onLine ? 'offline' : 'idle');
+      }
+    });
+    return () => unsubscribe();
+  }, []);
+
+  // Automatically pull / reconcile on PWA open once local cache & Firebase Auth are ready
+  useEffect(() => {
+    if (!isLocalHydrated || !cloudAuthReady || !isAuthorizedCloudAdmin) return;
+    syncWithCloud({ force: false, silent: true });
+  }, [isLocalHydrated, cloudAuthReady, isAuthorizedCloudAdmin, syncWithCloud]);
+
+  // Automatically pull newer cloud updates whenever PWA regains focus, becomes visible, or reconnects
+  useEffect(() => {
+    if (!isLocalHydrated || !isAuthorizedCloudAdmin) return;
+
+    const triggerFocusPull = () => {
+      const now = Date.now();
+      if (now - lastFocusSyncAtRef.current < 2000) return;
+      lastFocusSyncAtRef.current = now;
+      syncWithCloud({ force: false, silent: true });
+    };
+
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        triggerFocusPull();
+      } else if (document.visibilityState === 'hidden' && hasPendingPushRef.current) {
+        if (pushDebounceTimerRef.current !== null) {
+          window.clearTimeout(pushDebounceTimerRef.current);
+          pushDebounceTimerRef.current = null;
+        }
+        pushSnapshotToCloud();
+      }
+    };
+
+    const handleOnline = () => {
+      triggerFocusPull();
+    };
+
+    const handleOffline = () => {
+      setCloudSyncState('offline');
+    };
+
+    window.addEventListener('focus', triggerFocusPull);
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    window.addEventListener('online', handleOnline);
+    window.addEventListener('offline', handleOffline);
+
+    return () => {
+      window.removeEventListener('focus', triggerFocusPull);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      window.removeEventListener('online', handleOnline);
+      window.removeEventListener('offline', handleOffline);
+    };
+  }, [isLocalHydrated, isAuthorizedCloudAdmin, syncWithCloud, pushSnapshotToCloud]);
+
+  // Automatic 1.5s debounced Firestore push on any local data change (strictly admin-only)
+  useEffect(() => {
+    if (!isLocalHydrated) return;
+
+    const currentFingerprint = buildSyncFingerprint({
+      customers,
+      notes,
+      expenses,
+      mileage,
+      shoppingList,
+      priceBook,
+      customSupplyPins,
+      settings,
+      constants,
+    });
+
+    if (isApplyingRemoteRef.current) {
+      lastKnownFingerprintRef.current = currentFingerprint;
+      return;
+    }
+
+    if (lastKnownFingerprintRef.current === null) {
+      lastKnownFingerprintRef.current = currentFingerprint;
+      return;
+    }
+
+    if (currentFingerprint === lastKnownFingerprintRef.current) {
+      return;
+    }
+
+    lastKnownFingerprintRef.current = currentFingerprint;
+    const now = Date.now();
+    localLastUpdatedRef.current = now;
+    setLocalLastUpdated(now);
+
+    if (!isAuthorizedAdminUser(firebaseAuth.currentUser)) {
+      return;
+    }
+
+    hasPendingPushRef.current = true;
+    if (pushDebounceTimerRef.current !== null) {
+      window.clearTimeout(pushDebounceTimerRef.current);
+    }
+
+    pushDebounceTimerRef.current = window.setTimeout(() => {
+      pushDebounceTimerRef.current = null;
+      pushSnapshotToCloud(localLastUpdatedRef.current);
+    }, 1500);
+  }, [
+    isLocalHydrated,
+    customers,
+    notes,
+    expenses,
+    mileage,
+    shoppingList,
+    priceBook,
+    customSupplyPins,
+    settings,
+    constants,
+    pushSnapshotToCloud,
+  ]);
+
+  // Cleanup any pending debounce timer on unmount
+  useEffect(() => {
+    return () => {
+      if (pushDebounceTimerRef.current !== null) {
+        window.clearTimeout(pushDebounceTimerRef.current);
+      }
+    };
+  }, []);
+
+  const handleCloudSignIn = useCallback(
+    async (email: string, password: string) => {
+      const user = await signInAdminWithEmail(email, password);
+      setCloudUser(user);
+      setCloudAuthReady(true);
+      if (isAuthorizedAdminUser(user)) {
+        showToast(`✔ Signed in as ${ADMIN_CLOUD_EMAIL} • Cloud Sync Active`);
+      } else {
+        showToast('Signed in, but cloud sync is restricted to the admin account (local-only mode)');
+      }
+    },
+    [showToast]
+  );
+
+  const handleCloudPasswordReset = useCallback(
+    async (email: string) => {
+      await sendAdminPasswordReset(email);
+      showToast('✔ Password reset email sent');
+    },
+    [showToast]
+  );
+
+  const handleCloudForceSync = useCallback(async () => {
+    await syncWithCloud({ force: true, silent: false });
+  }, [syncWithCloud]);
+
+  const handleCloudSignOut = useCallback(async () => {
+    if (pushDebounceTimerRef.current !== null) {
+      window.clearTimeout(pushDebounceTimerRef.current);
+      pushDebounceTimerRef.current = null;
+    }
+    hasPendingPushRef.current = false;
+    await signOutCloudAdmin();
+    setCloudUser(null);
+    setCloudSyncError(null);
+    setCloudSyncState('idle');
+    showToast('Signed out • Switched to local device storage');
+  }, [showToast]);
+
+  const cloudSyncAccountProps: CloudSyncAccountProps = {
+    currentUser: cloudUser,
+    isAuthorizedAdmin: isAuthorizedCloudAdmin,
+    authReady: cloudAuthReady,
+    syncState: cloudSyncState,
+    lastSyncLabel: lastCloudSyncLabel,
+    syncError: cloudSyncError,
+    onSignIn: handleCloudSignIn,
+    onPasswordReset: handleCloudPasswordReset,
+    onForceSync: handleCloudForceSync,
+    onSignOut: handleCloudSignOut,
+  };
 
   // Continuously watch and follow device location in real-time when enabled
   useEffect(() => {
@@ -1323,6 +1869,7 @@ export default function App() {
             onSyncCalendar={() => setCalendarSyncOpen(true)}
             onOpenSettings={() => setSettingsOpen(true)}
             onOpenCloudSync={() => setCloudSyncOpen(true)}
+            cloudSync={cloudSyncAccountProps}
           />
         )}
       </main>
@@ -1647,6 +2194,7 @@ export default function App() {
           onClose={() => setSettingsOpen(false)}
           onToast={showToast}
           onOpenDataBackup={() => setCloudSyncOpen(true)}
+          cloudSync={cloudSyncAccountProps}
         />
       )}
 

@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { PrintSettings, SystemConstants } from '../../types';
+import { CloudSyncAccountCard, CloudSyncAccountProps } from '../CloudSyncAccountCard';
 
 interface SettingsModalProps {
   settings: PrintSettings;
@@ -15,6 +16,7 @@ interface SettingsModalProps {
   onClose: () => void;
   onToast: (msg: string) => void;
   onOpenDataBackup?: () => void;
+  cloudSync?: CloudSyncAccountProps;
 }
 
 export const SettingsModal: React.FC<SettingsModalProps> = ({
@@ -31,6 +33,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   onClose,
   onToast,
   onOpenDataBackup,
+  cloudSync,
 }) => {
   const [motto, setMotto] = useState(settings.motto || '');
   const [hdr, setHdr] = useState(settings.hdr || '');
@@ -95,6 +98,9 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             ✕ Back
           </button>
         </div>
+
+        {/* Cloud Sync Account */}
+        {cloudSync && <CloudSyncAccountCard {...cloudSync} />}
 
         {/* Base Theme */}
         <div className="bg-[var(--surface-subtle)] p-3.5 rounded-xl border border-[var(--border)] space-y-2">

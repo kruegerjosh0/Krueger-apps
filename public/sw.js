@@ -1,5 +1,5 @@
 // Krueger Painting OS Service Worker
-const CACHE_NAME = 'krueger-os-cache-v18';
+const CACHE_NAME = 'krueger-os-cache-v19';
 const PRECACHE_ASSETS = [
   '/',
   '/index.html',

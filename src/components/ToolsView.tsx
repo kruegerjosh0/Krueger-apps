@@ -1,4 +1,5 @@
 import React from 'react';
+import { CloudSyncAccountCard, CloudSyncAccountProps } from './CloudSyncAccountCard';
 
 interface ToolsViewProps {
   onOpenLetterhead?: () => void;
@@ -12,6 +13,7 @@ interface ToolsViewProps {
   onSyncCalendar: () => void;
   onOpenSettings: () => void;
   onOpenCloudSync?: () => void;
+  cloudSync?: CloudSyncAccountProps;
 }
 
 export const ToolsView: React.FC<ToolsViewProps> = ({
@@ -26,6 +28,7 @@ export const ToolsView: React.FC<ToolsViewProps> = ({
   onSyncCalendar,
   onOpenSettings,
   onOpenCloudSync,
+  cloudSync,
 }) => {
   const tools = [
     { title: 'Share Business Card', icon: '💼', desc: 'Send card image or .vcf contact', action: onOpenBusinessCard || onOpenSettings },
@@ -51,6 +54,8 @@ export const ToolsView: React.FC<ToolsViewProps> = ({
           Estimating, logistics, tax bookkeeping &amp; field management
         </p>
       </div>
+
+      {cloudSync && <CloudSyncAccountCard {...cloudSync} />}
 
       <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 sm:gap-2.5">
         {tools.map((t) => (

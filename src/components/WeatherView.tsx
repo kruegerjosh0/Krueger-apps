@@ -125,39 +125,17 @@ function formatLocationLabel(loc: LocationInfo): string {
   return `${loc.name}, ${r}`;
 }
 
-function polarToCartesian(cx: number, cy: number, radius: number, angleInDegrees: number) {
-  const angleInRadians = ((angleInDegrees - 90) * Math.PI) / 180.0;
-  return {
-    x: cx + radius * Math.cos(angleInRadians),
-    y: cy + radius * Math.sin(angleInRadians),
-  };
-}
-
-function describeArc(
-  cx: number,
-  cy: number,
-  radius: number,
-  startAngle: number,
-  endAngle: number
-): string {
-  const start = polarToCartesian(cx, cy, radius, endAngle);
-  const end = polarToCartesian(cx, cy, radius, startAngle);
-  const largeArcFlag = endAngle - startAngle <= 180 ? '0' : '1';
-  return `M ${start.x.toFixed(2)} ${start.y.toFixed(2)} A ${radius} ${radius} 0 ${largeArcFlag} 0 ${end.x.toFixed(2)} ${end.y.toFixed(2)}`;
-}
-
-function getSegmentStroke(mode: PrecipMode, allDry: boolean): string {
-  if (allDry) return '#22c55e';
+function getMinuteBarSegmentClass(mode: PrecipMode, allDry: boolean): string {
+  if (allDry || mode === 'DRY') return 'bg-emerald-500';
   switch (mode) {
     case 'SNOW':
-      return '#38bdf8';
+      return 'bg-sky-400';
     case 'WINTRY_MIX':
-      return '#a855f7';
+      return 'bg-amber-400';
     case 'RAIN':
-      return '#3b82f6';
-    case 'DRY':
+      return 'bg-blue-500';
     default:
-      return '#22262e';
+      return 'bg-emerald-500';
   }
 }
 
@@ -175,10 +153,10 @@ function summarizeNextTwoHours(slots: NextTwoHoursSlot[]): MinuteCastSummary {
   if (activeSlots.length === 0) {
     return {
       allDry: true,
-      headline: 'No precipitation for the next 2 hours',
-      subline: 'Clear 120-min exterior work window',
+      headline: 'Dry for the next 2 hours • Clear exterior work window',
+      subline: 'No rain or snow expected over the next 120 minutes',
       badgeText: 'DRY',
-      badgeColor: 'bg-emerald-500/15 text-emerald-400 border border-emerald-500/40',
+      badgeColor: 'bg-emerald-500/15 text-emerald-300 border border-emerald-500/45',
       icon: '☀️',
     };
   }
@@ -188,45 +166,185 @@ function summarizeNextTwoHours(slots: NextTwoHoursSlot[]): MinuteCastSummary {
   const precipWord = hasMix ? 'Wintry mix' : hasSnow ? 'Snow' : 'Rain';
   const icon = hasMix ? '🌨️' : hasSnow ? '❄️' : '🌧️';
   const badgeColor = hasMix
-    ? 'bg-purple-500/20 text-purple-300 border border-purple-400/40'
+    ? 'bg-amber-400/20 text-amber-300 border border-amber-400/45'
     : hasSnow
-    ? 'bg-sky-500/20 text-sky-300 border border-sky-400/40'
-    : 'bg-blue-500/20 text-blue-300 border border-blue-400/40';
+    ? 'bg-sky-500/20 text-sky-300 border border-sky-400/45'
+    : 'bg-blue-500/20 text-blue-300 border border-blue-400/45';
 
   const firstWetIdx = slots.findIndex((s) => s.mode !== 'DRY');
   const lastWetIdx = slots.reduce((last, s, i) => (s.mode !== 'DRY' ? i : last), firstWetIdx);
   const totalSnow = slots.reduce((sum, s) => sum + (s.snowfallIn || 0), 0);
   const totalRain = slots.reduce((sum, s) => sum + (s.rainIn || 0), 0);
 
-  let headline = `${precipWord} expected within 2 hours`;
+  let timing = `${precipWord} expected within 2 hours`;
   if (firstWetIdx === 0) {
     const durationMin = (lastWetIdx + 1) * 15;
-    headline =
+    timing =
       durationMin >= 120
         ? `${precipWord} continuing for the next 2 hours`
         : `${precipWord} ending in ~${durationMin} min`;
   } else {
     const startMin = firstWetIdx * 15;
-    headline = `${precipWord} starting in ~${startMin} min`;
+    timing = `${precipWord} starting in ~${startMin} min`;
   }
 
   const subline =
     totalSnow > 0 && totalRain > 0
       ? `Est. ${formatSnowInches(totalSnow)} snow + ${formatRainInches(totalRain)} rain`
       : totalSnow > 0
-      ? `Est. ${formatSnowInches(totalSnow)} snow over next 2 hrs`
+      ? `Est. ${formatSnowInches(totalSnow)} snow next 2 hrs`
       : totalRain > 0
-      ? `Est. ${formatRainInches(totalRain)} rain over next 2 hrs`
-      : 'Light / scattered shower activity';
+      ? `Est. ${formatRainInches(totalRain)} rain next 2 hrs`
+      : 'Scattered shower activity';
 
   return {
     allDry: false,
-    headline,
+    headline: `${timing} • ${subline}`,
     subline,
     badgeText: precipWord.toUpperCase(),
     badgeColor,
     icon,
   };
+}
+
+type PaintReadinessStatus = 'GOOD' | 'CAUTION' | 'STOP';
+
+interface PaintReadinessItem {
+  id: 'temp' | 'wind' | 'dew';
+  title: string;
+  status: PaintReadinessStatus;
+  reading: string;
+  detail: string;
+}
+
+function getReadinessPillClass(status: PaintReadinessStatus): string {
+  if (status === 'STOP') {
+    return 'bg-red-500/20 text-red-300 border border-red-500/45';
+  }
+  if (status === 'CAUTION') {
+    return 'bg-amber-400/20 text-amber-300 border border-amber-400/45';
+  }
+  return 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/45';
+}
+
+function mapWorkabilityToReadiness(status: WorkabilityStatus): PaintReadinessStatus {
+  if (status === 'SNOW_ICE_RISK') return 'STOP';
+  if (status === 'CAUTION') return 'CAUTION';
+  return 'GOOD';
+}
+
+function evaluatePaintReadiness(
+  current: FullWeatherResponse['current'],
+  todayDaily?: DailyForecast
+): { overall: PaintReadinessStatus; items: PaintReadinessItem[] } {
+  const tonightLow = todayDaily?.tempMin ?? current.temp;
+  const dewSpread = current.temp - current.dewPoint;
+
+  // 1. Temperature & Overnight Low (35°F cold-rated min / 50°F standard min)
+  let tempStatus: PaintReadinessStatus = 'GOOD';
+  let tempDetail = 'Above 50°F safe coating range';
+  if (current.temp < 35 || tonightLow < 32) {
+    tempStatus = 'STOP';
+    tempDetail =
+      current.temp < 35
+        ? 'Below 35°F minimum safe temp'
+        : `Freeze tonight (${tonightLow}°) — cure risk`;
+  } else if (current.temp < 50 || tonightLow < 40) {
+    tempStatus = 'CAUTION';
+    tempDetail =
+      current.temp < 50
+        ? '35–49°F — cold-rated coatings only'
+        : `Cool overnight low (${tonightLow}°)`;
+  }
+
+  // 2. Wind & Spray Risk (flagging gusts >= 15-20 mph for ladder/overspray caution)
+  let windStatus: PaintReadinessStatus = 'GOOD';
+  let windDetail = 'Calm — safe for spraying & ladders';
+  if (current.windGusts >= 25 || current.windSpeed >= 20) {
+    windStatus = 'STOP';
+    windDetail = 'High wind — hold spraying & ladder work';
+  } else if (current.windGusts >= 15 || current.windSpeed >= 12) {
+    windStatus = 'CAUTION';
+    windDetail = 'Gusts ≥15 mph — overspray & ladder caution';
+  }
+
+  // 3. Dew Point Spread (warn if spread <= 5°F for condensation risk)
+  let dewStatus: PaintReadinessStatus = 'GOOD';
+  let dewDetail = 'Dry surface — safe paint adhesion';
+  if (dewSpread <= 3) {
+    dewStatus = 'STOP';
+    dewDetail = '≤3°F spread — active condensation risk';
+  } else if (dewSpread <= 5) {
+    dewStatus = 'CAUTION';
+    dewDetail = '≤5°F spread — condensation risk';
+  }
+
+  const items: PaintReadinessItem[] = [
+    {
+      id: 'temp',
+      title: 'Temp & Overnight Low',
+      status: tempStatus,
+      reading: `Now ${current.temp}° · Low ${tonightLow}°`,
+      detail: tempDetail,
+    },
+    {
+      id: 'wind',
+      title: 'Wind & Spray Risk',
+      status: windStatus,
+      reading: `${current.windSpeed} mph · Gusts ${current.windGusts}`,
+      detail: windDetail,
+    },
+    {
+      id: 'dew',
+      title: 'Dew Point Spread',
+      status: dewStatus,
+      reading: `${dewSpread >= 0 ? '+' : ''}${dewSpread}°F (DP ${current.dewPoint}°)`,
+      detail: dewDetail,
+    },
+  ];
+
+  const hasActivePrecip =
+    current.precipMode === 'SNOW' ||
+    current.precipMode === 'WINTRY_MIX' ||
+    current.rainIn > 0;
+
+  let overall: PaintReadinessStatus = 'GOOD';
+  if (hasActivePrecip || items.some((i) => i.status === 'STOP')) {
+    overall = 'STOP';
+  } else if (current.precipMode === 'RAIN' || items.some((i) => i.status === 'CAUTION')) {
+    overall = 'CAUTION';
+  }
+
+  return { overall, items };
+}
+
+function formatDaylightRemaining(sunriseIso?: string, sunsetIso?: string): string {
+  if (!sunriseIso || !sunsetIso) return '—';
+  const sunriseMs = new Date(sunriseIso).getTime();
+  const sunsetMs = new Date(sunsetIso).getTime();
+  if (!Number.isFinite(sunriseMs) || !Number.isFinite(sunsetMs)) return '—';
+
+  const nowMs = Date.now();
+  const formatHm = (ms: number) => {
+    const totalMins = Math.max(0, Math.round(ms / 60000));
+    const hrs = Math.floor(totalMins / 60);
+    const mins = totalMins % 60;
+    return hrs > 0 ? `${hrs}h ${mins}m` : `${mins}m`;
+  };
+
+  if (nowMs < sunriseMs) {
+    return `Sunrise in ${formatHm(sunriseMs - nowMs)}`;
+  }
+  if (nowMs <= sunsetMs) {
+    return `${formatHm(sunsetMs - nowMs)} daylight left`;
+  }
+  return `After sunset · ${formatHm(sunsetMs - sunriseMs)} day`;
+}
+
+function formatVisibilityMiles(visMi?: number): string {
+  if (typeof visMi !== 'number' || !Number.isFinite(visMi)) return '10+ mi';
+  if (visMi >= 10) return '10+ mi';
+  return `${visMi.toFixed(1)} mi`;
 }
 
 export const WeatherView: React.FC<WeatherViewProps> = ({
@@ -319,6 +437,8 @@ export const WeatherView: React.FC<WeatherViewProps> = ({
   const hourly48 = weather?.hourly.slice(0, 48) || [];
   const daily10 = weather?.daily.slice(0, 10) || [];
   const todayDaily = daily10[0];
+  const tomorrowDaily = daily10[1];
+  const nextSixHours = hourly36.slice(0, 6);
   const nextTwoHours = weather?.nextTwoHours || [];
   const [selectedRadarHourIdx, setSelectedRadarHourIdx] = useState<number>(0);
 
@@ -337,7 +457,25 @@ export const WeatherView: React.FC<WeatherViewProps> = ({
 
   const todayWorkBadge = guard ? getWorkBadgeMeta(guard.paintingStatus) : null;
   const minuteCast = summarizeNextTwoHours(nextTwoHours);
+  const minuteBarSlots: NextTwoHoursSlot[] =
+    nextTwoHours.length > 0
+      ? nextTwoHours.slice(0, 8)
+      : Array.from({ length: 8 }, (_, idx) => ({
+          isoTime: '',
+          minuteOffset: idx * 15,
+          timeStr: idx === 0 ? 'Now' : `+${idx * 15}m`,
+          rainIn: 0,
+          snowfallIn: 0,
+          precipIn: 0,
+          precipProb: 0,
+          mode: 'DRY' as PrecipMode,
+        }));
   const dewSpread = current ? current.temp - current.dewPoint : 10;
+  const paintReadiness = current ? evaluatePaintReadiness(current, todayDaily) : null;
+  const daylightRemainingLabel = formatDaylightRemaining(
+    todayDaily?.sunriseIso,
+    todayDaily?.sunsetIso
+  );
 
   // Group 36-hour forecast under day headers (TODAY, TOMORROW, etc.)
   const hourlyGroups: Array<{
@@ -522,12 +660,12 @@ export const WeatherView: React.FC<WeatherViewProps> = ({
       )}
 
       {/* ============================================================
-          TAB 1: NOW — ACCUWEATHER HERO + MINUTECAST RING + DETAIL GRID
+          TAB 1: NOW — HERO + COMPACT MINUTECAST + PAINT READINESS + 6H + 2x3 GRID + TONIGHT/TOMORROW
          ============================================================ */}
       {weather && current && guard && activeTab === 'NOW' && (
         <section role="tabpanel" aria-label="Now weather" className="flex flex-col gap-3">
-          {/* 1. Current Weather Hero Card */}
-          <div className="bg-[#121418] border border-[#22262e] rounded-2xl p-4 shadow-md flex flex-col gap-3.5">
+          {/* 1. Compact Current Weather Hero Header */}
+          <div className="bg-[#121418] border border-[#22262e] rounded-2xl p-4 shadow-md">
             <div className="flex items-center justify-between gap-3">
               {/* Left: Crisp Icon + Bold XX° + RealFeel® XX° */}
               <div className="flex items-center gap-3 shrink-0">
@@ -545,7 +683,7 @@ export const WeatherView: React.FC<WeatherViewProps> = ({
                 </div>
               </div>
 
-              {/* Right: Condition + High/Low + Compact Exterior Workability Pill */}
+              {/* Right: Condition + High/Low + Overall Exterior Pill */}
               <div className="min-w-0 text-right flex flex-col items-end gap-1.5">
                 <div className="text-sm sm:text-base font-extrabold text-white leading-tight">
                   {getShortConditionLabel(current.weatherCode, {
@@ -568,217 +706,395 @@ export const WeatherView: React.FC<WeatherViewProps> = ({
                 )}
               </div>
             </div>
+          </div>
 
-            {/* Subtle 1-Line Exterior Painting Guidance */}
-            <div className="pt-3 border-t border-[#22262e] flex items-center gap-2 text-xs text-[#cbd5e1]">
+          {/* 2. Compact Horizontal MinuteCast® 120-Minute Timeline Card */}
+          <div className="bg-[#121418] border border-[#22262e] rounded-2xl px-3.5 py-3 shadow-md flex flex-col gap-2">
+            <div className="flex items-center justify-between gap-2">
+              <div className="flex items-center gap-1.5 min-w-0">
+                <span className="w-1.5 h-3.5 rounded-full bg-[#F05514] shrink-0" aria-hidden="true" />
+                <h3 className="text-[10.5px] font-black uppercase tracking-widest text-[#cbd5e1]">
+                  MinuteCast®
+                </h3>
+                <span className="text-[10px] text-[#64748b] font-semibold hidden sm:inline">
+                  Next 120 min
+                </span>
+              </div>
               <span
-                className={`w-2 h-2 rounded-full shrink-0 ${todayWorkBadge?.dot || 'bg-[#F05514]'}`}
-                aria-hidden="true"
-              />
-              <p className="leading-snug">{guard.paintingSummary}</p>
+                className={`text-[9.5px] font-black uppercase px-2.5 py-0.5 rounded-full tracking-wider shrink-0 ${minuteCast.badgeColor}`}
+              >
+                {minuteCast.badgeText} • 2 HR
+              </span>
+            </div>
+
+            {/* 8 x 15-Minute Segmented Horizontal Bar */}
+            <div className="space-y-1">
+              <div
+                className="grid grid-cols-8 gap-1"
+                role="img"
+                aria-label={minuteCast.headline}
+              >
+                {minuteBarSlots.map((slot, idx) => (
+                  <div
+                    key={slot.minuteOffset ?? idx}
+                    title={`${slot.timeStr}: ${slot.mode}`}
+                    className={`h-2.5 rounded-full transition-colors ${getMinuteBarSegmentClass(
+                      slot.mode,
+                      minuteCast.allDry
+                    )} ${slot.mode === 'DRY' && !minuteCast.allDry ? 'opacity-45' : 'opacity-95'}`}
+                  />
+                ))}
+              </div>
+              <div className="flex items-center justify-between text-[9px] font-bold text-[#64748b] tabular-nums">
+                <span className="text-[#F05514] font-black">NOW</span>
+                <span>30m</span>
+                <span>60m</span>
+                <span>90m</span>
+                <span>120m</span>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-1.5 text-[11.5px] font-semibold text-[#e2e8f0] leading-snug">
+              <span className="text-sm leading-none shrink-0" aria-hidden="true">
+                {minuteCast.icon}
+              </span>
+              <span>{minuteCast.headline}</span>
             </div>
           </div>
 
-          {/* 2. MinuteCast®-Style Circular Precip / Next-2-Hours Outlook Ring */}
-          <div className="bg-[#121418] border border-[#22262e] rounded-2xl p-4 shadow-md flex flex-col gap-3">
+          {/* 3. Structured Exterior Paint Readiness Grid */}
+          {paintReadiness && (
+            <div className="bg-[#121418] border border-[#22262e] rounded-2xl p-3.5 shadow-md flex flex-col gap-2.5">
+              <div className="flex items-center justify-between gap-2">
+                <div className="flex items-center gap-1.5">
+                  <span className="w-1.5 h-3.5 rounded-full bg-[#F05514]" aria-hidden="true" />
+                  <h3 className="text-[10.5px] font-black uppercase tracking-widest text-[#cbd5e1]">
+                    Exterior Paint Readiness
+                  </h3>
+                </div>
+                <span
+                  className={`text-[9.5px] font-black uppercase px-2.5 py-0.5 rounded-full tracking-wider ${getReadinessPillClass(
+                    paintReadiness.overall
+                  )}`}
+                >
+                  {paintReadiness.overall}
+                </span>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                {paintReadiness.items.map((item) => (
+                  <div
+                    key={item.id}
+                    className="bg-[#0b0d11] border border-[#22262e] rounded-xl p-2.5 flex flex-col gap-1"
+                  >
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-[10px] font-extrabold uppercase tracking-wide text-[#9ca3af]">
+                        {item.title}
+                      </span>
+                      <span
+                        className={`text-[9px] font-black uppercase px-2 py-0.5 rounded-full tracking-wider shrink-0 ${getReadinessPillClass(
+                          item.status
+                        )}`}
+                      >
+                        {item.status}
+                      </span>
+                    </div>
+                    <div className="text-xs font-black text-white tabular-nums">
+                      {item.reading}
+                    </div>
+                    <div className="text-[10.5px] text-[#94a3b8] leading-snug">
+                      {item.detail}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* 4. Today's Next-6-Hours Strip */}
+          {nextSixHours.length > 0 && (
+            <div className="bg-[#121418] border border-[#22262e] rounded-2xl p-3.5 shadow-md flex flex-col gap-2.5">
+              <div className="flex items-center justify-between gap-2">
+                <div className="flex items-center gap-1.5">
+                  <span className="w-1.5 h-3.5 rounded-full bg-[#F05514]" aria-hidden="true" />
+                  <h3 className="text-[10.5px] font-black uppercase tracking-widest text-[#cbd5e1]">
+                    Next 6 Hours
+                  </h3>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setActiveTab('HOURLY')}
+                  className="text-[10px] font-extrabold text-[#f58a58] hover:text-[#F05514] cursor-pointer"
+                >
+                  Full Hourly →
+                </button>
+              </div>
+
+              <div className="grid grid-cols-6 gap-1 sm:gap-2">
+                {nextSixHours.map((h, idx) => {
+                  const icon = h.snowfallIn > 0 ? '❄️' : h.precipIcon;
+                  const isWet = h.snowfallIn > 0 || h.rainIn > 0 || h.rainProb >= 20;
+                  return (
+                    <div
+                      key={h.isoTime}
+                      className={`rounded-xl border px-1 py-2 flex flex-col items-center justify-between gap-1 text-center ${
+                        idx === 0
+                          ? 'bg-[#F05514]/15 border-[#F05514]/45'
+                          : 'bg-[#0b0d11] border-[#22262e]'
+                      }`}
+                    >
+                      <span
+                        className={`text-[9.5px] sm:text-[10px] font-extrabold truncate max-w-full ${
+                          idx === 0 ? 'text-[#f58a58]' : 'text-[#9ca3af]'
+                        }`}
+                      >
+                        {h.timeStr}
+                      </span>
+                      <span className="text-base sm:text-lg leading-none" aria-hidden="true">
+                        {icon}
+                      </span>
+                      <span className="text-xs sm:text-sm font-black text-white tabular-nums">
+                        {h.temp}°
+                      </span>
+                      <span
+                        className={`text-[9px] sm:text-[9.5px] font-bold tabular-nums ${
+                          isWet ? 'text-sky-300' : 'text-[#64748b]'
+                        }`}
+                      >
+                        💧{h.rainProb}%
+                      </span>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          {/* 5. 2x3 Current Conditions Metric Cards Grid */}
+          <div className="bg-[#121418] border border-[#22262e] rounded-2xl p-3.5 shadow-md flex flex-col gap-2.5">
             <div className="flex items-center justify-between gap-2">
               <div className="flex items-center gap-1.5">
                 <span className="w-1.5 h-3.5 rounded-full bg-[#F05514]" aria-hidden="true" />
                 <h3 className="text-[10.5px] font-black uppercase tracking-widest text-[#cbd5e1]">
-                  MinuteCast® Outlook
+                  Current Conditions
                 </h3>
               </div>
-              <span
-                className={`text-[9.5px] font-black uppercase px-2 py-0.5 rounded-full tracking-wider ${minuteCast.badgeColor}`}
-              >
-                {minuteCast.badgeText} · 2 HR
-              </span>
-            </div>
-
-            <div className="flex flex-col items-center justify-center py-1">
-              <div className="relative w-[204px] h-[204px] flex items-center justify-center">
-                <svg
-                  viewBox="0 0 210 210"
-                  className="w-full h-full"
-                  role="img"
-                  aria-label={minuteCast.headline}
-                >
-                  {/* Subtle inner ring guide */}
-                  <circle
-                    cx="105"
-                    cy="105"
-                    r="72"
-                    fill="#0a0c0f"
-                    stroke="#1c2028"
-                    strokeWidth="1.5"
-                  />
-
-                  {/* 8 x 15-Minute Arc Segments (0m -> 120m) */}
-                  {(nextTwoHours.length > 0
-                    ? nextTwoHours
-                    : Array.from({ length: 8 }, (_, idx) => ({
-                        isoTime: '',
-                        minuteOffset: idx * 15,
-                        timeStr: idx === 0 ? 'Now' : `+${idx * 15}m`,
-                        rainIn: 0,
-                        snowfallIn: 0,
-                        precipIn: 0,
-                        precipProb: 0,
-                        mode: 'DRY' as PrecipMode,
-                      }))
-                  ).map((slot, idx) => {
-                    const startDeg = idx * 45 + 3.5;
-                    const endDeg = (idx + 1) * 45 - 3.5;
-                    const stroke = getSegmentStroke(slot.mode, minuteCast.allDry);
-                    return (
-                      <path
-                        key={slot.minuteOffset}
-                        d={describeArc(105, 105, 84, startDeg, endDeg)}
-                        fill="none"
-                        stroke={stroke}
-                        strokeWidth="10"
-                        strokeLinecap="round"
-                        opacity={minuteCast.allDry ? 0.9 : slot.mode === 'DRY' ? 0.65 : 1}
-                      />
-                    );
-                  })}
-
-                  {/* AccuWeather Orange "NOW" Indicator Dot at 12 o'clock */}
-                  <circle cx="105" cy="21" r="4.5" fill="#F05514" stroke="#000000" strokeWidth="1.5" />
-
-                  {/* Compass Minute Labels */}
-                  <text
-                    x="105"
-                    y="11"
-                    textAnchor="middle"
-                    fill="#F05514"
-                    fontSize="8.5"
-                    fontWeight="900"
-                    letterSpacing="0.08em"
-                  >
-                    NOW
-                  </text>
-                  <text
-                    x="200"
-                    y="108"
-                    textAnchor="middle"
-                    fill="#64748b"
-                    fontSize="8.5"
-                    fontWeight="800"
-                  >
-                    30m
-                  </text>
-                  <text
-                    x="105"
-                    y="206"
-                    textAnchor="middle"
-                    fill="#64748b"
-                    fontSize="8.5"
-                    fontWeight="800"
-                  >
-                    60m
-                  </text>
-                  <text
-                    x="10"
-                    y="108"
-                    textAnchor="middle"
-                    fill="#64748b"
-                    fontSize="8.5"
-                    fontWeight="800"
-                  >
-                    90m
-                  </text>
-                </svg>
-
-                {/* Center Readout Inside Ring */}
-                <div className="absolute inset-0 flex flex-col items-center justify-center px-9 text-center pointer-events-none">
-                  <span className="text-xl leading-none mb-1" aria-hidden="true">
-                    {minuteCast.icon}
-                  </span>
-                  <div className="text-[11.5px] font-extrabold text-white leading-snug">
-                    {minuteCast.headline}
-                  </div>
-                  <div className="text-[9.5px] font-semibold text-[#9ca3af] mt-1 leading-tight">
-                    {minuteCast.subline}
-                  </div>
-                </div>
-              </div>
-            </div>
-          </div>
-
-          {/* 3. Current Conditions Detail Grid (AccuWeather 2-Column Hairline List) */}
-          <div className="bg-[#121418] border border-[#22262e] rounded-2xl overflow-hidden shadow-md">
-            <div className="px-4 py-2.5 border-b border-[#22262e] flex items-center justify-between">
-              <h3 className="text-[10.5px] font-black uppercase tracking-widest text-[#9ca3af]">
-                Current Conditions
-              </h3>
               <span className="text-[10px] font-semibold text-[#64748b]">
                 Updated {weather.fetchedAt}
               </span>
             </div>
 
-            <div className="grid grid-cols-2">
-              {/* Row 1: RealFeel® | Wind */}
-              <div className="px-3.5 py-2.5 border-b border-r border-[#22262e] flex items-center justify-between gap-2">
-                <span className="text-[11px] font-semibold text-[#9ca3af]">RealFeel®</span>
-                <span className="text-xs font-black text-[#f58a58] tabular-nums">
-                  {current.feelsLike}°
+            <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+              {/* 1. RealFeel */}
+              <div className="bg-[#0b0d11] border border-[#22262e] rounded-xl p-3 flex flex-col justify-between gap-1">
+                <span className="text-[10px] font-extrabold uppercase tracking-wider text-[#9ca3af]">
+                  RealFeel®
                 </span>
-              </div>
-              <div className="px-3.5 py-2.5 border-b border-[#22262e] flex items-center justify-between gap-2">
-                <span className="text-[11px] font-semibold text-[#9ca3af]">Wind</span>
-                <span className="text-xs font-black text-white tabular-nums">
-                  {current.windSpeed} mph
+                <div className="text-xl font-black text-[#f58a58] tabular-nums leading-tight">
+                  {current.feelsLike}°
+                </div>
+                <span className="text-[10px] text-[#64748b] font-semibold">
+                  {current.feelsLike === current.temp
+                    ? 'Matches air temp'
+                    : current.feelsLike < current.temp
+                    ? `${current.temp - current.feelsLike}° cooler w/ wind`
+                    : `${current.feelsLike - current.temp}° warmer feel`}
                 </span>
               </div>
 
-              {/* Row 2: Wind Gusts | Humidity */}
-              <div className="px-3.5 py-2.5 border-b border-r border-[#22262e] flex items-center justify-between gap-2">
-                <span className="text-[11px] font-semibold text-[#9ca3af]">Wind Gusts</span>
+              {/* 2. Wind & Gusts */}
+              <div className="bg-[#0b0d11] border border-[#22262e] rounded-xl p-3 flex flex-col justify-between gap-1">
+                <span className="text-[10px] font-extrabold uppercase tracking-wider text-[#9ca3af]">
+                  Wind &amp; Gusts
+                </span>
+                <div className="text-xl font-black text-white tabular-nums leading-tight">
+                  {current.windSpeed} <span className="text-xs font-bold text-[#9ca3af]">mph</span>
+                </div>
                 <span
-                  className={`text-xs font-black tabular-nums ${
-                    current.windGusts > 20 ? 'text-[#F05514]' : 'text-white'
+                  className={`text-[10px] font-bold tabular-nums ${
+                    current.windGusts >= 25
+                      ? 'text-red-400'
+                      : current.windGusts >= 15
+                      ? 'text-amber-400'
+                      : 'text-[#64748b]'
                   }`}
                 >
-                  {current.windGusts} mph
-                </span>
-              </div>
-              <div className="px-3.5 py-2.5 border-b border-[#22262e] flex items-center justify-between gap-2">
-                <span className="text-[11px] font-semibold text-[#9ca3af]">Humidity</span>
-                <span className="text-xs font-black text-white tabular-nums">
-                  {current.humidity}%
+                  Gusts {current.windGusts} mph
+                  {current.windGusts >= 15 ? ' ⚠️' : ''}
                 </span>
               </div>
 
-              {/* Row 3: Dew Point | Cloud Cover */}
-              <div className="px-3.5 py-2.5 border-b border-r border-[#22262e] flex items-center justify-between gap-2">
-                <span className="text-[11px] font-semibold text-[#9ca3af]">Dew Point</span>
+              {/* 3. Humidity */}
+              <div className="bg-[#0b0d11] border border-[#22262e] rounded-xl p-3 flex flex-col justify-between gap-1">
+                <span className="text-[10px] font-extrabold uppercase tracking-wider text-[#9ca3af]">
+                  Humidity
+                </span>
+                <div className="text-xl font-black text-white tabular-nums leading-tight">
+                  {current.humidity}%
+                </div>
                 <span
-                  className={`text-xs font-black tabular-nums ${
-                    dewSpread <= 4 ? 'text-red-400' : 'text-white'
+                  className={`text-[10px] font-semibold ${
+                    current.humidity > 80 ? 'text-amber-400' : 'text-[#64748b]'
+                  }`}
+                >
+                  {current.humidity > 80
+                    ? 'High — slower cure'
+                    : current.humidity >= 45
+                    ? 'Moderate humidity'
+                    : 'Dry air • fast dry'}
+                </span>
+              </div>
+
+              {/* 4. Dew Point (with spread °F) */}
+              <div className="bg-[#0b0d11] border border-[#22262e] rounded-xl p-3 flex flex-col justify-between gap-1">
+                <span className="text-[10px] font-extrabold uppercase tracking-wider text-[#9ca3af]">
+                  Dew Point
+                </span>
+                <div
+                  className={`text-xl font-black tabular-nums leading-tight ${
+                    dewSpread <= 3
+                      ? 'text-red-400'
+                      : dewSpread <= 5
+                      ? 'text-amber-400'
+                      : 'text-white'
                   }`}
                 >
                   {current.dewPoint}°
-                </span>
-              </div>
-              <div className="px-3.5 py-2.5 border-b border-[#22262e] flex items-center justify-between gap-2">
-                <span className="text-[11px] font-semibold text-[#9ca3af]">Cloud Cover</span>
-                <span className="text-xs font-black text-white tabular-nums">
-                  {current.cloudCover ?? 0}%
+                </div>
+                <span
+                  className={`text-[10px] font-bold tabular-nums ${
+                    dewSpread <= 5 ? 'text-amber-300' : 'text-emerald-400'
+                  }`}
+                >
+                  Spread {dewSpread >= 0 ? '+' : ''}
+                  {dewSpread}°F {dewSpread <= 5 ? '· Dew risk' : '· Dry'}
                 </span>
               </div>
 
-              {/* Row 4 (Full Width): Sunrise / Sunset */}
-              <div className="col-span-2 px-3.5 py-2.5 flex items-center justify-between gap-2 bg-[#0e1014]/60">
-                <span className="text-[11px] font-semibold text-[#9ca3af]">Sunrise / Sunset</span>
-                <span className="text-xs font-black text-white tabular-nums">
-                  <span className="text-[#f58a58]">🌅</span> {todayDaily?.sunrise || '—'}
-                  <span className="mx-2 text-[#475569]">/</span>
-                  <span className="text-[#F05514]">🌇</span> {todayDaily?.sunset || '—'}
+              {/* 5. Cloud Cover & Visibility */}
+              <div className="bg-[#0b0d11] border border-[#22262e] rounded-xl p-3 flex flex-col justify-between gap-1">
+                <span className="text-[10px] font-extrabold uppercase tracking-wider text-[#9ca3af]">
+                  Clouds &amp; Vis
+                </span>
+                <div className="text-xl font-black text-white tabular-nums leading-tight">
+                  {current.cloudCover ?? 0}%
+                </div>
+                <span className="text-[10px] text-[#94a3b8] font-semibold tabular-nums">
+                  Visibility {formatVisibilityMiles(current.visibilityMi)}
+                </span>
+              </div>
+
+              {/* 6. Sunrise & Sunset (+ daylight remaining) */}
+              <div className="bg-[#0b0d11] border border-[#22262e] rounded-xl p-3 flex flex-col justify-between gap-1">
+                <span className="text-[10px] font-extrabold uppercase tracking-wider text-[#9ca3af]">
+                  Sunrise &amp; Sunset
+                </span>
+                <div className="text-[11.5px] font-black text-white tabular-nums leading-snug space-y-0.5">
+                  <div>
+                    <span className="text-[#f58a58]">🌅</span> {todayDaily?.sunrise || '—'}
+                  </div>
+                  <div>
+                    <span className="text-[#F05514]">🌇</span> {todayDaily?.sunset || '—'}
+                  </div>
+                </div>
+                <span className="text-[9.5px] text-[#94a3b8] font-semibold truncate">
+                  {daylightRemainingLabel}
                 </span>
               </div>
             </div>
           </div>
+
+          {/* 6. Tonight & Tomorrow 2-Column Outlook Card */}
+          {(todayDaily || tomorrowDaily) && (
+            <div className="bg-[#121418] border border-[#22262e] rounded-2xl p-3.5 shadow-md flex flex-col gap-2.5">
+              <div className="flex items-center justify-between gap-2">
+                <div className="flex items-center gap-1.5">
+                  <span className="w-1.5 h-3.5 rounded-full bg-[#F05514]" aria-hidden="true" />
+                  <h3 className="text-[10.5px] font-black uppercase tracking-widest text-[#cbd5e1]">
+                    Tonight &amp; Tomorrow
+                  </h3>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setActiveTab('DAILY')}
+                  className="text-[10px] font-extrabold text-[#f58a58] hover:text-[#F05514] cursor-pointer"
+                >
+                  10-Day Outlook →
+                </button>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                {/* Tonight's Forecast */}
+                {todayDaily && (
+                  <div className="bg-[#0b0d11] border border-[#22262e] rounded-xl p-3 flex flex-col gap-1.5">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-[10px] font-black uppercase tracking-wider text-sky-300">
+                        🌙 Tonight&apos;s Forecast
+                      </span>
+                      <span className="text-base leading-none" aria-hidden="true">
+                        {todayDaily.nightIcon}
+                      </span>
+                    </div>
+                    <div className="flex items-baseline justify-between gap-2">
+                      <span className="text-lg font-black text-white tabular-nums">
+                        Low {todayDaily.tempMin}°
+                      </span>
+                      <span className="text-[11px] font-bold text-[#cbd5e1] truncate">
+                        {todayDaily.nightCondition}
+                      </span>
+                    </div>
+                    <div className="flex items-center justify-between gap-2 text-[10.5px] text-[#94a3b8] font-semibold tabular-nums pt-1 border-t border-[#1c2028]">
+                      <span>
+                        💨 {todayDaily.nightWindSpeed} mph (G{todayDaily.nightWindGusts})
+                      </span>
+                      <span
+                        className={
+                          todayDaily.nightPrecipProb >= 25 ? 'text-sky-300 font-bold' : ''
+                        }
+                      >
+                        💧 {todayDaily.nightPrecipProb}% precip
+                      </span>
+                    </div>
+                  </div>
+                )}
+
+                {/* Tomorrow's Outlook */}
+                {tomorrowDaily && (() => {
+                  const tomorrowReadiness = mapWorkabilityToReadiness(tomorrowDaily.workability);
+                  return (
+                    <div className="bg-[#0b0d11] border border-[#22262e] rounded-xl p-3 flex flex-col gap-1.5">
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="text-[10px] font-black uppercase tracking-wider text-[#f58a58]">
+                          {tomorrowDaily.precipIcon} Tomorrow ({tomorrowDaily.dayName})
+                        </span>
+                        <span
+                          className={`text-[9px] font-black uppercase px-2 py-0.5 rounded-full tracking-wider shrink-0 ${getReadinessPillClass(
+                            tomorrowReadiness
+                          )}`}
+                        >
+                          {tomorrowReadiness}
+                        </span>
+                      </div>
+                      <div className="flex items-baseline justify-between gap-2">
+                        <span className="text-lg font-black text-white tabular-nums">
+                          {tomorrowDaily.tempMax}°{' '}
+                          <span className="text-xs font-bold text-[#9ca3af]">
+                            / {tomorrowDaily.tempMin}°
+                          </span>
+                        </span>
+                        <span className="text-[11px] font-bold text-[#cbd5e1] truncate">
+                          {tomorrowDaily.dayCondition}
+                        </span>
+                      </div>
+                      <div className="text-[10.5px] text-[#94a3b8] leading-snug pt-1 border-t border-[#1c2028]">
+                        {tomorrowDaily.workabilityHint || tomorrowDaily.workabilityLabel}
+                      </div>
+                    </div>
+                  );
+                })()}
+              </div>
+            </div>
+          )}
 
           {/* Conditional Snow/Freeze Banner — ONLY rendered when snowfall > 0 in 48h OR temp < 32°F today */}
           {showSnowOrFreezeBanner && (

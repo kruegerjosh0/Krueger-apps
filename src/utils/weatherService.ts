@@ -812,7 +812,7 @@ export async function fetchFullWeather(lat: number, lng: number): Promise<FullWe
     `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lng}` +
     `&current=temperature_2m,apparent_temperature,relative_humidity_2m,dew_point_2m,cloud_cover,wind_speed_10m,wind_gusts_10m,precipitation,rain,snowfall,weather_code` +
     `&minutely_15=precipitation,rain,snowfall,weather_code` +
-    `&hourly=weather_code,temperature_2m,apparent_temperature,precipitation_probability,rain,snowfall,relative_humidity_2m,dew_point_2m,cloud_cover,wind_speed_10m,wind_gusts_10m` +
+    `&hourly=weather_code,temperature_2m,apparent_temperature,precipitation_probability,rain,snowfall,relative_humidity_2m,dew_point_2m,cloud_cover,visibility,wind_speed_10m,wind_gusts_10m` +
     `&daily=weather_code,sunrise,sunset,precipitation_probability_max,rain_sum,snowfall_sum,temperature_2m_max,temperature_2m_min,apparent_temperature_max,apparent_temperature_min,wind_speed_10m_max,wind_gusts_10m_max` +
     `&temperature_unit=fahrenheit&wind_speed_unit=mph&precipitation_unit=inch&timezone=auto&forecast_days=10`;
 
@@ -928,6 +928,11 @@ export async function fetchFullWeather(lat: number, lng: number): Promise<FullWe
       const hHum = Math.round(data.hourly.relative_humidity_2m?.[i] ?? 0);
       const hDew = Math.round(data.hourly.dew_point_2m?.[i] ?? hTemp - 10);
       const hCloud = Math.round(data.hourly.cloud_cover?.[i] ?? 0);
+      const rawVisMeters = data.hourly.visibility?.[i];
+      const hVisibilityMi =
+        typeof rawVisMeters === 'number' && Number.isFinite(rawVisMeters)
+          ? Math.round((rawVisMeters / 1609.34) * 10) / 10
+          : undefined;
       const hProb = Math.round(data.hourly.precipitation_probability?.[i] ?? 0);
       const hWind = Math.round(data.hourly.wind_speed_10m?.[i] ?? 0);
       const hGust = Math.round(data.hourly.wind_gusts_10m?.[i] ?? hWind);
@@ -954,6 +959,7 @@ export async function fetchFullWeather(lat: number, lng: number): Promise<FullWe
         humidity: hHum,
         dewPoint: hDew,
         cloudCover: hCloud,
+        visibilityMi: hVisibilityMi,
         rainProb: hProb,
         windSpeed: hWind,
         windGusts: hGust,
@@ -1067,8 +1073,10 @@ export async function fetchFullWeather(lat: number, lng: number): Promise<FullWe
       const dewPointMean = bucket && bucket.count > 0
         ? Math.round(bucket.dewSum / bucket.count)
         : Math.round(tempMin - 5);
-      const sunrise = formatSunTime(data.daily.sunrise?.[d]);
-      const sunset = formatSunTime(data.daily.sunset?.[d]);
+      const sunriseIso = data.daily.sunrise?.[d];
+      const sunsetIso = data.daily.sunset?.[d];
+      const sunrise = formatSunTime(sunriseIso);
+      const sunset = formatSunTime(sunsetIso);
       const rainProb = Math.round(data.daily.precipitation_probability_max?.[d] ?? 0);
       const snowfallIn = roundInches2(normalizeToInches(data.daily.snowfall_sum?.[d], dailySnowUnit));
       const rainSumIn = roundInches2(normalizeToInches(data.daily.rain_sum?.[d], dailyRainUnit));
@@ -1131,6 +1139,8 @@ export async function fetchFullWeather(lat: number, lng: number): Promise<FullWe
         dewPointMean,
         sunrise,
         sunset,
+        sunriseIso,
+        sunsetIso,
         rainProb,
         rainSumIn,
         snowfallIn,
@@ -1250,6 +1260,7 @@ export async function fetchFullWeather(lat: number, lng: number): Promise<FullWe
     humidity: curHum,
     dewPoint: curDewPoint,
     cloudCover: curCloudCover,
+    visibilityMi: hourlyList[0]?.visibilityMi,
     windSpeed: curWind,
     windGusts: curGusts,
     precipitation: curPrecip,

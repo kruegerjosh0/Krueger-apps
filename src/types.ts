@@ -217,6 +217,7 @@ export interface WeatherCondition {
   humidity: number;
   dewPoint: number;
   cloudCover: number;
+  visibilityMi?: number;
   windSpeed: number;
   windGusts: number;
   precipitation: number;
@@ -248,6 +249,7 @@ export interface HourlyForecast {
   humidity: number;
   dewPoint: number;
   cloudCover?: number;
+  visibilityMi?: number;
   rainProb: number;
   windSpeed: number;
   windGusts: number;
@@ -274,6 +276,8 @@ export interface DailyForecast {
   dewPointMean: number;
   sunrise?: string;
   sunset?: string;
+  sunriseIso?: string;
+  sunsetIso?: string;
   rainProb: number;
   rainSumIn: number;
   snowfallIn: number;

@@ -133,6 +133,10 @@ export const JobsiteMapView: React.FC<JobsiteMapViewProps> = ({
   const hasAutoCenteredRef = useRef<boolean>(false);
   const searchBoxRef = useRef<HTMLDivElement | null>(null);
   const storeSearchAbortRef = useRef<AbortController | null>(null);
+  const gpsWatchIdRef = useRef<number | null>(null);
+  const followMeRef = useRef<boolean>(true);
+  const userGpsRef = useRef<UserGpsLocation | null>(null);
+  const hasGpsLockedOnceRef = useRef<boolean>(false);
 
   // Map UI Controls (Completed gray pins OFF by default via ALL_ACTIVE)
   const [moneyView, setMoneyView] = useState<boolean>(false);
@@ -142,8 +146,12 @@ export const JobsiteMapView: React.FC<JobsiteMapViewProps> = ({
   const [selectedPin, setSelectedPin] = useState<SelectedPin | null>(null);
   const [callTextMenuOpen, setCallTextMenuOpen] = useState<boolean>(false);
 
-  // Live GPS Location ("You Are Here") state
+  // Continuous Live GPS Tracking ("Follow Me" / "You Are Here") state
   const [userGps, setUserGps] = useState<UserGpsLocation | null>(null);
+  const [gpsStatus, setGpsStatus] = useState<'REQUESTING' | 'ACTIVE' | 'DENIED' | 'UNAVAILABLE'>(
+    'REQUESTING'
+  );
+  const [followMe, setFollowMe] = useState<boolean>(true);
   const [isLocatingGps, setIsLocatingGps] = useState<boolean>(false);
 
   // Nearest Store Finder (Overpass API + Nominatim fallback, 25-mile radius)
@@ -152,10 +160,10 @@ export const JobsiteMapView: React.FC<JobsiteMapViewProps> = ({
   const [storeSearchSummary, setStoreSearchSummary] = useState<string>('');
   const [isFindingStores, setIsFindingStores] = useState<boolean>(false);
 
-  // Multi-Stop "Plan Day Route" Mode state (supports Jobs AND/OR Stores, starting from GPS or Home Base)
+  // Multi-Stop "Plan Day Route" Mode state (defaults to starting from My Current GPS Location)
   const [planRouteMode, setPlanRouteMode] = useState<boolean>(false);
   const [plannedStops, setPlannedStops] = useState<RouteStopItem[]>([]);
-  const [routeStartMode, setRouteStartMode] = useState<'GPS' | 'HOME'>('HOME');
+  const [routeStartMode, setRouteStartMode] = useState<'GPS' | 'HOME'>('GPS');
   const [routeEstimate, setRouteEstimate] = useState<RouteMileageEstimate | null>(null);
   const [isRouting, setIsRouting] = useState<boolean>(false);
 
@@ -465,7 +473,126 @@ export const JobsiteMapView: React.FC<JobsiteMapViewProps> = ({
     };
   }, [customers, onUpdateCustomer]);
 
-  // Initialize Leaflet Map once (fallback centered on 2119 Barton Ave Home Base)
+  // Keep refs synced for geolocation callbacks & map event listeners
+  useEffect(() => {
+    followMeRef.current = followMe;
+  }, [followMe]);
+
+  useEffect(() => {
+    userGpsRef.current = userGps;
+  }, [userGps]);
+
+  // Apply an incoming live GPS fix, update pulsing blue dot, and follow user if Follow Me is active
+  const applyGpsPosition = (pos: GeolocationPosition, forceCenter = false) => {
+    const nextGps: UserGpsLocation = {
+      lat: pos.coords.latitude,
+      lng: pos.coords.longitude,
+      accuracyMeters: pos.coords.accuracy || 35,
+      updatedAt: Date.now(),
+    };
+    const isFirstFix = !hasGpsLockedOnceRef.current;
+    hasGpsLockedOnceRef.current = true;
+    userGpsRef.current = nextGps;
+    setUserGps(nextGps);
+    setGpsStatus('ACTIVE');
+    setIsLocatingGps(false);
+
+    const map = mapInstanceRef.current;
+    if (map && (forceCenter || isFirstFix || followMeRef.current)) {
+      const targetZoom = Math.max(map.getZoom(), 13);
+      if (isFirstFix && !forceCenter) {
+        map.setView([nextGps.lat, nextGps.lng], targetZoom, { animate: true });
+      } else {
+        map.flyTo([nextGps.lat, nextGps.lng], targetZoom, { duration: 0.65 });
+      }
+    }
+  };
+
+  // Start (or restart) continuous high-accuracy live GPS tracking (getCurrentPosition + watchPosition)
+  const startLiveGpsTracking = (opts?: {
+    forceCenter?: boolean;
+    switchRouteStartToGps?: boolean;
+    showToast?: boolean;
+  }) => {
+    if (typeof navigator === 'undefined' || !navigator.geolocation) {
+      setGpsStatus('UNAVAILABLE');
+      setFollowMe(false);
+      setIsLocatingGps(false);
+      if (opts?.showToast) {
+        onToast('Device GPS is unavailable in this browser — showing Home Base');
+      }
+      return;
+    }
+
+    if (gpsWatchIdRef.current !== null) {
+      navigator.geolocation.clearWatch(gpsWatchIdRef.current);
+      gpsWatchIdRef.current = null;
+    }
+
+    setIsLocatingGps(true);
+    if (!userGpsRef.current) {
+      setGpsStatus('REQUESTING');
+    }
+    setFollowMe(true);
+    followMeRef.current = true;
+    if (opts?.switchRouteStartToGps) {
+      setRouteStartMode('GPS');
+    }
+
+    const handleGpsError = (err: GeolocationPositionError, fromWatch: boolean) => {
+      setIsLocatingGps(false);
+      if (err.code === err.PERMISSION_DENIED) {
+        setGpsStatus('DENIED');
+        setFollowMe(false);
+        followMeRef.current = false;
+        if (gpsWatchIdRef.current !== null) {
+          navigator.geolocation.clearWatch(gpsWatchIdRef.current);
+          gpsWatchIdRef.current = null;
+        }
+        if (opts?.showToast && !fromWatch) {
+          onToast('GPS permission denied — showing Home Base. Tap Enable GPS to retry.');
+        }
+      } else if (!userGpsRef.current) {
+        setGpsStatus('UNAVAILABLE');
+        setFollowMe(false);
+        followMeRef.current = false;
+        if (opts?.showToast && !fromWatch) {
+          onToast('GPS unavailable right now — showing Home Base');
+        }
+      }
+    };
+
+    // 1. Immediate high-accuracy fix on open / tap
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        applyGpsPosition(pos, Boolean(opts?.forceCenter));
+        if (opts?.showToast) {
+          onToast('📍 Live GPS active — Following your location');
+        }
+      },
+      (err) => handleGpsError(err, false),
+      {
+        enableHighAccuracy: true,
+        timeout: 10000,
+        maximumAge: 5000,
+      }
+    );
+
+    // 2. Continuous real-time tracking as user drives or walks
+    gpsWatchIdRef.current = navigator.geolocation.watchPosition(
+      (pos) => {
+        applyGpsPosition(pos, false);
+      },
+      (err) => handleGpsError(err, true),
+      {
+        enableHighAccuracy: true,
+        timeout: 15000,
+        maximumAge: 5000,
+      }
+    );
+  };
+
+  // Initialize Leaflet Map once & immediately start continuous live GPS tracking
   useEffect(() => {
     if (!mapContainerRef.current || mapInstanceRef.current) return;
 
@@ -489,14 +616,29 @@ export const JobsiteMapView: React.FC<JobsiteMapViewProps> = ({
     gpsLayerRef.current = gpsLayer;
     markersLayerRef.current = markersLayer;
 
+    // Pause Follow Me when the user manually pans the map so it doesn't fight their finger
+    map.on('dragstart', () => {
+      if (followMeRef.current) {
+        followMeRef.current = false;
+        setFollowMe(false);
+      }
+    });
+
     const handleResize = () => map.invalidateSize();
     window.addEventListener('resize', handleResize);
     const timer = setTimeout(() => map.invalidateSize(), 180);
+
+    // Auto-request high-accuracy live GPS + continuous watchPosition as soon as Map tab opens
+    startLiveGpsTracking({ forceCenter: true, showToast: false });
 
     return () => {
       clearTimeout(timer);
       window.removeEventListener('resize', handleResize);
       storeSearchAbortRef.current?.abort();
+      if (gpsWatchIdRef.current !== null && typeof navigator !== 'undefined' && navigator.geolocation) {
+        navigator.geolocation.clearWatch(gpsWatchIdRef.current);
+        gpsWatchIdRef.current = null;
+      }
       map.remove();
       mapInstanceRef.current = null;
       tileLayerRef.current = null;
@@ -551,10 +693,11 @@ export const JobsiteMapView: React.FC<JobsiteMapViewProps> = ({
     }).addTo(gpsLayer);
   }, [userGps]);
 
-  // Auto-center initial map view on active jobs/leads (falling back to 2119 Barton Ave Home Base)
+  // Fallback map framing ONLY if GPS is denied or unavailable (never silently overrides live GPS)
   useEffect(() => {
     const map = mapInstanceRef.current;
-    if (!map || hasAutoCenteredRef.current) return;
+    if (!map || hasAutoCenteredRef.current || hasGpsLockedOnceRef.current) return;
+    if (gpsStatus !== 'DENIED' && gpsStatus !== 'UNAVAILABLE') return;
     hasAutoCenteredRef.current = true;
 
     const activePins = customerSummaries.filter((s) => s.mapStatus !== 'COMPLETED');
@@ -568,7 +711,7 @@ export const JobsiteMapView: React.FC<JobsiteMapViewProps> = ({
       ...activePins.map((p): [number, number] => [p.lat, p.lng]),
     ];
     map.fitBounds(L.latLngBounds(pts), { padding: [38, 38], maxZoom: 13 });
-  }, [customerSummaries]);
+  }, [gpsStatus, customerSummaries]);
 
   // Compute live OSRM road route & draw polyline when in Plan Route mode (supports Jobs & Stores from GPS or Home Base)
   useEffect(() => {
@@ -1144,55 +1287,85 @@ export const JobsiteMapView: React.FC<JobsiteMapViewProps> = ({
     };
   }, [selectedCustomerItem?.customer.id, selectedCustomerItem?.lat, selectedCustomerItem?.lng]);
 
-  // Locate Me (high-accuracy browser Geolocation API — zero paid keys)
-  const handleLocateMe = (opts?: { switchRouteStartToGps?: boolean; silentToast?: boolean }) => {
+  // Grab a fresh live GPS fix on demand (e.g., right when tapping a Nearest Store chip or Search)
+  const requestFreshLiveGps = (): Promise<UserGpsLocation | null> => {
     if (typeof navigator === 'undefined' || !navigator.geolocation) {
-      onToast('GPS geolocation is not supported by this browser');
-      return;
+      setGpsStatus('UNAVAILABLE');
+      setFollowMe(false);
+      followMeRef.current = false;
+      return Promise.resolve(null);
     }
-    setIsLocatingGps(true);
-    navigator.geolocation.getCurrentPosition(
-      (pos) => {
-        const nextGps: UserGpsLocation = {
-          lat: pos.coords.latitude,
-          lng: pos.coords.longitude,
-          accuracyMeters: pos.coords.accuracy || 40,
-          updatedAt: Date.now(),
-        };
-        setUserGps(nextGps);
-        setIsLocatingGps(false);
-        if (opts?.switchRouteStartToGps) {
-          setRouteStartMode('GPS');
+
+    return new Promise((resolve) => {
+      navigator.geolocation.getCurrentPosition(
+        (pos) => {
+          const fresh: UserGpsLocation = {
+            lat: pos.coords.latitude,
+            lng: pos.coords.longitude,
+            accuracyMeters: pos.coords.accuracy || 35,
+            updatedAt: Date.now(),
+          };
+          hasGpsLockedOnceRef.current = true;
+          userGpsRef.current = fresh;
+          setUserGps(fresh);
+          setGpsStatus('ACTIVE');
+          setIsLocatingGps(false);
+          resolve(fresh);
+        },
+        (err) => {
+          setIsLocatingGps(false);
+          if (err.code === err.PERMISSION_DENIED) {
+            setGpsStatus('DENIED');
+            setFollowMe(false);
+            followMeRef.current = false;
+            resolve(null);
+            return;
+          }
+          // Transient timeout while watchPosition already has a live fix -> reuse live GPS
+          if (userGpsRef.current) {
+            resolve(userGpsRef.current);
+            return;
+          }
+          setGpsStatus('UNAVAILABLE');
+          setFollowMe(false);
+          followMeRef.current = false;
+          resolve(null);
+        },
+        {
+          enableHighAccuracy: true,
+          timeout: 7000,
+          maximumAge: 5000,
         }
-        const map = mapInstanceRef.current;
-        if (map) {
-          map.flyTo([nextGps.lat, nextGps.lng], Math.max(map.getZoom(), 13), {
-            duration: 0.7,
-          });
-        }
-        if (!opts?.silentToast) {
-          onToast('📍 Live GPS locked — showing distances from your location');
-        }
-      },
-      (err) => {
-        setIsLocatingGps(false);
-        if (err.code === err.PERMISSION_DENIED) {
-          onToast('Location permission denied — enable GPS in browser settings');
-        } else if (err.code === err.TIMEOUT) {
-          onToast('GPS request timed out — try again outdoors');
-        } else {
-          onToast('Unable to read GPS position right now');
-        }
-      },
-      {
-        enableHighAccuracy: true,
-        timeout: 12000,
-        maximumAge: 15000,
-      }
-    );
+      );
+    });
   };
 
-  // Query free OpenStreetMap Overpass API (+ Nominatim fallback) within 25 miles of GPS or Home Base
+  // Toggle Follow Me / Locate Me floating GPS button
+  const handleToggleFollowMe = () => {
+    if (userGpsRef.current && gpsStatus === 'ACTIVE') {
+      if (followMe) {
+        followMeRef.current = false;
+        setFollowMe(false);
+        return;
+      }
+      followMeRef.current = true;
+      setFollowMe(true);
+      const map = mapInstanceRef.current;
+      if (map) {
+        map.flyTo([userGpsRef.current.lat, userGpsRef.current.lng], Math.max(map.getZoom(), 13), {
+          duration: 0.65,
+        });
+      }
+      // Also pull a fresh high-accuracy fix in the background
+      requestFreshLiveGps();
+      return;
+    }
+
+    // GPS not active yet or previously denied -> request live GPS + start continuous watch
+    startLiveGpsTracking({ forceCenter: true, showToast: true });
+  };
+
+  // Query free OpenStreetMap Overpass API (+ Nominatim fallback) strictly around fresh live GPS
   const handleFindNearestStores = async (queryText: string, presetId?: string | null) => {
     const q = queryText.trim();
     if (q.length < 2) {
@@ -1209,9 +1382,14 @@ export const JobsiteMapView: React.FC<JobsiteMapViewProps> = ({
     setActiveStorePreset(presetId ?? null);
     setIsFindingStores(true);
 
-    const centerLat = userGps ? userGps.lat : HOME_BASE.lat;
-    const centerLng = userGps ? userGps.lng : HOME_BASE.lng;
-    const originLabel = userGps ? 'your GPS' : '2119 Barton Ave';
+    // Always grab a fresh live GPS fix at the moment the user taps a store chip or Search
+    const freshGps = await requestFreshLiveGps();
+    if (controller.signal.aborted) return;
+
+    const usingLiveGps = Boolean(freshGps);
+    const centerLat = freshGps ? freshGps.lat : HOME_BASE.lat;
+    const centerLng = freshGps ? freshGps.lng : HOME_BASE.lng;
+    const originLabel = usingLiveGps ? 'My Current Location' : 'Home Base (GPS Off)';
 
     const results = await searchNearestStoresOverpass(
       q,
@@ -1226,17 +1404,25 @@ export const JobsiteMapView: React.FC<JobsiteMapViewProps> = ({
 
     if (results.length === 0) {
       setNearbyStores([]);
-      setStoreSearchSummary(`No "${q}" stores found within ${STORE_SEARCH_RADIUS_MILES} mi of ${originLabel}`);
+      setStoreSearchSummary(
+        usingLiveGps
+          ? `No "${q}" stores found within ${STORE_SEARCH_RADIUS_MILES} mi of My Current Location`
+          : `GPS Off — no "${q}" stores found within ${STORE_SEARCH_RADIUS_MILES} mi of Home Base`
+      );
       onToast(`No "${q}" stores found within ${STORE_SEARCH_RADIUS_MILES} mi`);
       return;
     }
 
     setNearbyStores(results);
     setStoreSearchSummary(
-      `${results.length} nearest "${q}" within ${STORE_SEARCH_RADIUS_MILES} mi of ${originLabel}`
+      usingLiveGps
+        ? `${results.length} nearest "${q}" from My Current Location (closest: ${results[0].distanceMiles.toFixed(1)} mi)`
+        : `GPS Off — ${results.length} nearest "${q}" from ${originLabel}`
     );
 
-    // Smoothly frame the origin + closest store pins on the map
+    // Pause Follow Me momentarily so the map frames both your position and the closest store pins cleanly
+    followMeRef.current = false;
+    setFollowMe(false);
     const map = mapInstanceRef.current;
     if (map) {
       const topStores = results.slice(0, 6);
@@ -1263,6 +1449,8 @@ export const JobsiteMapView: React.FC<JobsiteMapViewProps> = ({
   const handleSelectSearchResult = (res: PlaceSearchResult) => {
     setSearchDropdownOpen(false);
     setSearchQuery(res.name);
+    followMeRef.current = false;
+    setFollowMe(false);
 
     if (res.source === 'CUSTOMER' && typeof res.refId === 'number') {
       setDroppedSearchPin(null);
@@ -1312,6 +1500,8 @@ export const JobsiteMapView: React.FC<JobsiteMapViewProps> = ({
 
   // Map navigation actions
   const handleCenterHomeBase = () => {
+    followMeRef.current = false;
+    setFollowMe(false);
     mapInstanceRef.current?.setView([HOME_BASE.lat, HOME_BASE.lng], 12, { animate: true });
     setSelectedPin({ kind: 'HOME' });
   };
@@ -1319,6 +1509,8 @@ export const JobsiteMapView: React.FC<JobsiteMapViewProps> = ({
   const handleFitAllPins = () => {
     const map = mapInstanceRef.current;
     if (!map) return;
+    followMeRef.current = false;
+    setFollowMe(false);
     const pts: [number, number][] = [[HOME_BASE.lat, HOME_BASE.lng]];
     if (userGps) {
       pts.push([userGps.lat, userGps.lng]);
@@ -1428,10 +1620,16 @@ export const JobsiteMapView: React.FC<JobsiteMapViewProps> = ({
               <span>Jobsite Map &amp; Dispatch</span>
             </h2>
             <p className="text-[10px] text-[var(--text-muted)]">
-              Base: {HOME_BASE.address}
-              {userGps && (
-                <span className="ml-2 text-sky-400 font-bold">• 📍 Live GPS Active</span>
+              {gpsStatus === 'ACTIVE' && userGps ? (
+                <span className="text-sky-400 font-bold">
+                  📍 Live GPS Tracking {followMe ? '• Following' : '• Ready'}
+                </span>
+              ) : gpsStatus === 'REQUESTING' ? (
+                <span className="text-sky-300 font-bold">📍 Acquiring Live GPS…</span>
+              ) : (
+                <span className="text-amber-400 font-bold">⚠️ GPS Off — Showing Home Base</span>
               )}
+              <span className="ml-2">• Home: {HOME_BASE.address}</span>
               {isGeocodingCount > 0 && (
                 <span className="ml-2 text-amber-400 font-bold">
                   • Locating {isGeocodingCount} address{isGeocodingCount > 1 ? 'es' : ''}…
@@ -1775,6 +1973,34 @@ export const JobsiteMapView: React.FC<JobsiteMapViewProps> = ({
         )}
       </div>
 
+      {/* Clear "GPS Off — Showing Home Base" Banner with One-Tap Enable GPS Retry (Never silent!) */}
+      {(gpsStatus === 'DENIED' || gpsStatus === 'UNAVAILABLE') && (
+        <div
+          data-gps-off-banner="true"
+          className="bg-amber-500/15 border border-amber-400/60 rounded-2xl px-3.5 py-2.5 flex items-center justify-between gap-2.5 shadow-md"
+        >
+          <div className="min-w-0">
+            <div className="text-xs font-black text-amber-200 flex items-center gap-1.5">
+              <span>⚠️</span>
+              <span>GPS Off — Showing Home Base</span>
+            </div>
+            <p className="text-[10px] text-amber-100/80 mt-0.5">
+              {gpsStatus === 'DENIED'
+                ? 'Location permission was blocked. Enable GPS so distances and store searches use where you are right now.'
+                : 'Device GPS signal is unavailable right now. Tap Enable GPS to retry.'}
+            </p>
+          </div>
+          <button
+            type="button"
+            data-enable-gps-btn="true"
+            onClick={() => startLiveGpsTracking({ forceCenter: true, showToast: true })}
+            className="px-3 py-2 rounded-xl bg-amber-400 hover:bg-amber-300 text-slate-950 text-[11px] font-black whitespace-nowrap shadow cursor-pointer transition-all active:scale-95 shrink-0"
+          >
+            📍 Enable GPS
+          </button>
+        </div>
+      )}
+
       {/* Interactive Dark-Mode Map Container */}
       <div className="relative rounded-2xl overflow-hidden border border-[var(--border)] shadow-2xl bg-[#0b0d12]">
         <div
@@ -1789,25 +2015,32 @@ export const JobsiteMapView: React.FC<JobsiteMapViewProps> = ({
           </div>
         )}
 
-        {/* Empty state hint overlay when zero customers are saved yet */}
-        {!planRouteMode && customers.length === 0 && nearbyStores.length === 0 && !selectedPin && (
-          <div className="pointer-events-none absolute top-3 left-1/2 -translate-x-1/2 z-[450] bg-slate-950/90 border border-amber-400/50 text-amber-200 px-3 py-1.5 rounded-full text-[10px] font-bold shadow-lg whitespace-nowrap">
-            Tap Locate Me or pick a Nearest Store chip above
+        {/* Acquiring GPS status pill while first fix locks */}
+        {!planRouteMode && gpsStatus === 'REQUESTING' && !userGps && (
+          <div className="pointer-events-none absolute top-3 left-1/2 -translate-x-1/2 z-[450] bg-slate-950/90 border border-sky-400/50 text-sky-200 px-3 py-1.5 rounded-full text-[10px] font-bold shadow-lg whitespace-nowrap animate-pulse">
+            📍 Locking live device GPS…
           </div>
         )}
 
-        {/* Floating "Locate Me" Live GPS Crosshair Button */}
+        {/* Floating "Follow Me" / "Locate Me" Live GPS Toggle Button */}
         <button
           type="button"
           data-locate-me-btn="true"
-          onClick={() => handleLocateMe()}
-          disabled={isLocatingGps}
-          title="Locate Me (Live GPS)"
-          aria-label="Locate Me"
+          data-follow-me={followMe && gpsStatus === 'ACTIVE' ? 'true' : 'false'}
+          onClick={handleToggleFollowMe}
+          disabled={isLocatingGps && gpsStatus === 'REQUESTING'}
+          title={
+            gpsStatus === 'ACTIVE' && followMe
+              ? 'Follow Me Active (tap to unlock map pan)'
+              : 'Center on My Live GPS & Follow Me'
+          }
+          aria-label={gpsStatus === 'ACTIVE' && followMe ? 'Follow Me' : 'Locate Me'}
           className={`absolute bottom-7 right-3 z-[450] flex items-center gap-1.5 px-3 py-2 rounded-full border text-[11px] font-black shadow-2xl cursor-pointer transition-all active:scale-95 ${
-            userGps
-              ? 'bg-sky-500 text-slate-950 border-white shadow-sky-500/40'
-              : 'bg-slate-950/92 text-sky-300 border-sky-400/70 hover:bg-slate-900'
+            gpsStatus === 'ACTIVE' && followMe
+              ? 'bg-sky-500 text-slate-950 border-white shadow-sky-500/50'
+              : gpsStatus === 'ACTIVE'
+              ? 'bg-slate-950/92 text-sky-300 border-sky-400 hover:bg-slate-900'
+              : 'bg-slate-950/92 text-amber-300 border-amber-400/70 hover:bg-slate-900'
           }`}
         >
           <svg
@@ -1826,11 +2059,17 @@ export const JobsiteMapView: React.FC<JobsiteMapViewProps> = ({
             <line x1="2" y1="12" x2="6" y2="12" />
             <line x1="18" y1="12" x2="22" y2="12" />
           </svg>
-          <span>{isLocatingGps ? 'Locating…' : 'Locate Me'}</span>
+          <span>
+            {isLocatingGps && !userGps
+              ? 'Locating…'
+              : gpsStatus === 'ACTIVE' && followMe
+              ? 'Follow Me'
+              : 'Locate Me'}
+          </span>
         </button>
       </div>
 
-      {/* Multi-Stop "Plan Day Route" Card (Supports Jobs AND/OR Stores, starting from GPS or Home Base) */}
+      {/* Multi-Stop "Plan Day Route" Card (Defaults to starting from My Current GPS Location) */}
       {planRouteMode && (
         <div
           data-plan-route-card="true"
@@ -1868,7 +2107,7 @@ export const JobsiteMapView: React.FC<JobsiteMapViewProps> = ({
             </div>
           </div>
 
-          {/* Start Origin Switcher: My Current GPS vs 2119 Barton Ave Home Base */}
+          {/* Start Origin Switcher: My Current GPS (Default) vs 2119 Barton Ave Home Base */}
           <div className="flex items-center gap-1.5 flex-wrap">
             <span className="text-[10px] font-bold uppercase text-slate-400">Start from:</span>
             <button
@@ -1877,7 +2116,11 @@ export const JobsiteMapView: React.FC<JobsiteMapViewProps> = ({
                 if (userGps) {
                   setRouteStartMode('GPS');
                 } else {
-                  handleLocateMe({ switchRouteStartToGps: true });
+                  startLiveGpsTracking({
+                    forceCenter: false,
+                    switchRouteStartToGps: true,
+                    showToast: true,
+                  });
                 }
               }}
               className={`px-2.5 py-1 rounded-full text-[10px] font-extrabold border cursor-pointer transition-all ${
@@ -1886,7 +2129,7 @@ export const JobsiteMapView: React.FC<JobsiteMapViewProps> = ({
                   : 'bg-slate-900 text-sky-300 border-sky-500/40 hover:border-sky-400'
               }`}
             >
-              📍 My GPS {userGps ? '' : '(Locate)'}
+              📍 My GPS {userGps ? '' : '(Enable)'}
             </button>
             <button
               type="button"

@@ -3,6 +3,7 @@ import L from 'leaflet';
 import {
   Customer,
   JobMapStatus,
+  RouteStopItem,
   SupplyPinCategory,
   SupplyStopPin,
   SystemConstants,
@@ -19,14 +20,19 @@ import {
   DriveFromBaseEstimate,
   PinWeatherSummary,
   PlaceSearchResult,
+  RouteMileageEstimate,
+  buildGoogleMapsMultiStopUrl,
   buildSingleStopMapsUrl,
   estimateDriveFromBase,
+  estimateFallbackRoute,
   fetchDriveFromBase,
+  fetchOsrmRoadRoute,
   fetchPinWeatherSummary,
   geocodeAddressWithNominatim,
   getCustomerMapSummary,
   haversineMiles,
   resolveApproxWisconsinCoords,
+  sanitizeSmsHref,
   sanitizeTelHref,
   searchPlacesWithNominatim,
 } from '../utils/mapHelpers';
@@ -72,6 +78,8 @@ type SelectedPin =
   | { kind: 'SEARCH'; pin: SearchedPin }
   | { kind: 'HOME' };
 
+type MapStatusFilter = 'ALL_ACTIVE' | JobMapStatus;
+
 function escapeHtml(raw: string): string {
   return String(raw || '')
     .replace(/&/g, '&amp;')
@@ -103,17 +111,26 @@ export const JobsiteMapView: React.FC<JobsiteMapViewProps> = ({
   const mapContainerRef = useRef<HTMLDivElement | null>(null);
   const mapInstanceRef = useRef<L.Map | null>(null);
   const tileLayerRef = useRef<L.TileLayer | null>(null);
+  const routeLayerRef = useRef<L.LayerGroup | null>(null);
   const radiusLayerRef = useRef<L.LayerGroup | null>(null);
   const markersLayerRef = useRef<L.LayerGroup | null>(null);
   const geocodedAttemptedRef = useRef<Set<string>>(new Set());
+  const hasAutoCenteredRef = useRef<boolean>(false);
   const searchBoxRef = useRef<HTMLDivElement | null>(null);
 
-  // Map UI Controls
+  // Map UI Controls (Completed gray pins OFF by default via ALL_ACTIVE)
   const [moneyView, setMoneyView] = useState<boolean>(false);
   const [showSupplyLayer, setShowSupplyLayer] = useState<boolean>(true);
   const [mapStyle, setMapStyle] = useState<'dark' | 'street'>('dark');
-  const [statusFilter, setStatusFilter] = useState<'ALL' | JobMapStatus>('ALL');
+  const [statusFilter, setStatusFilter] = useState<MapStatusFilter>('ALL_ACTIVE');
   const [selectedPin, setSelectedPin] = useState<SelectedPin | null>(null);
+  const [callTextMenuOpen, setCallTextMenuOpen] = useState<boolean>(false);
+
+  // Multi-Stop "Plan Day Route" Mode state
+  const [planRouteMode, setPlanRouteMode] = useState<boolean>(false);
+  const [plannedCustomerIds, setPlannedCustomerIds] = useState<number[]>([]);
+  const [routeEstimate, setRouteEstimate] = useState<RouteMileageEstimate | null>(null);
+  const [isRouting, setIsRouting] = useState<boolean>(false);
 
   // Universal Search Bar state (Wisconsin-biased Nominatim + local customers/stores)
   const [searchQuery, setSearchQuery] = useState<string>('');
@@ -147,6 +164,11 @@ export const JobsiteMapView: React.FC<JobsiteMapViewProps> = ({
   const [newPinNotes, setNewPinNotes] = useState<string>('');
   const [useMapCenterCoords, setUseMapCenterCoords] = useState<boolean>(false);
   const [savingPin, setSavingPin] = useState<boolean>(false);
+
+  // Reset inline Call/Text tray when switching selected pins
+  useEffect(() => {
+    setCallTextMenuOpen(false);
+  }, [selectedPin]);
 
   // Combine preset paint/hardware stores + user-saved custom pins
   const allSupplyPins = useMemo<SupplyStopPin[]>(() => {
@@ -190,11 +212,43 @@ export const JobsiteMapView: React.FC<JobsiteMapViewProps> = ({
     return counts;
   }, [customerSummaries]);
 
-  // Filtered customers currently plotted on the map
+  const activeJobsCount =
+    statusCounts.UNQUOTED + statusCounts.QUOTED + statusCounts.SCHEDULED;
+
+  // Filtered customers currently plotted on the map (ALL_ACTIVE hides Completed by default)
   const visibleCustomerPins = useMemo(() => {
-    if (statusFilter === 'ALL') return customerSummaries;
+    if (statusFilter === 'ALL_ACTIVE') {
+      return customerSummaries.filter((s) => s.mapStatus !== 'COMPLETED');
+    }
     return customerSummaries.filter((s) => s.mapStatus === statusFilter);
   }, [customerSummaries, statusFilter]);
+
+  // Ordered multi-stop route items for "Plan Day Route" mode
+  const plannedRouteStops = useMemo<RouteStopItem[]>(() => {
+    const byId = new Map(customerSummaries.map((c) => [c.customer.id, c]));
+    const stops: RouteStopItem[] = [];
+    plannedCustomerIds.forEach((id) => {
+      const found = byId.get(id);
+      if (!found) return;
+      stops.push({
+        id: `cust-${found.customer.id}`,
+        kind: 'CUSTOMER',
+        refId: found.customer.id,
+        name: found.customer.name,
+        address: found.customer.address || '',
+        lat: found.lat,
+        lng: found.lng,
+        subtitle: JOB_MAP_STATUS_META[found.mapStatus].label,
+      });
+    });
+    return stops;
+  }, [plannedCustomerIds, customerSummaries]);
+
+  const plannedStopIndexByCustId = useMemo(() => {
+    const map = new Map<number, number>();
+    plannedCustomerIds.forEach((id, idx) => map.set(id, idx + 1));
+    return map;
+  }, [plannedCustomerIds]);
 
   // Money View aggregate metrics across visible pins
   const moneyRollup = useMemo(() => {
@@ -341,7 +395,7 @@ export const JobsiteMapView: React.FC<JobsiteMapViewProps> = ({
 
         setIsGeocodingCount((prev) => Math.max(0, prev - 1));
         if (i < toGeocode.length - 1) {
-          await new Promise((r) => setTimeout(r, 950));
+          await new Promise((r) => setTimeout(r, 1050));
         }
       }
       if (!cancelled) setIsGeocodingCount(0);
@@ -353,23 +407,25 @@ export const JobsiteMapView: React.FC<JobsiteMapViewProps> = ({
     };
   }, [customers, onUpdateCustomer]);
 
-  // Initialize Leaflet Map once
+  // Initialize Leaflet Map once (fallback centered on 2119 Barton Ave Home Base)
   useEffect(() => {
     if (!mapContainerRef.current || mapInstanceRef.current) return;
 
     const map = L.map(mapContainerRef.current, {
-      center: MAP_DEFAULT_CENTER,
-      zoom: MAP_DEFAULT_ZOOM,
+      center: [HOME_BASE.lat, HOME_BASE.lng],
+      zoom: 11,
       minZoom: 7,
       maxZoom: 18,
       zoomControl: true,
       attributionControl: true,
     });
 
+    const routeLayer = L.layerGroup().addTo(map);
     const radiusLayer = L.layerGroup().addTo(map);
     const markersLayer = L.layerGroup().addTo(map);
 
     mapInstanceRef.current = map;
+    routeLayerRef.current = routeLayer;
     radiusLayerRef.current = radiusLayer;
     markersLayerRef.current = markersLayer;
 
@@ -383,10 +439,77 @@ export const JobsiteMapView: React.FC<JobsiteMapViewProps> = ({
       map.remove();
       mapInstanceRef.current = null;
       tileLayerRef.current = null;
+      routeLayerRef.current = null;
       radiusLayerRef.current = null;
       markersLayerRef.current = null;
     };
   }, []);
+
+  // Auto-center initial map view on active jobs/leads (falling back to 2119 Barton Ave Home Base)
+  useEffect(() => {
+    const map = mapInstanceRef.current;
+    if (!map || hasAutoCenteredRef.current) return;
+    hasAutoCenteredRef.current = true;
+
+    const activePins = customerSummaries.filter((s) => s.mapStatus !== 'COMPLETED');
+    if (activePins.length === 0) {
+      map.setView([HOME_BASE.lat, HOME_BASE.lng], 11, { animate: false });
+      return;
+    }
+
+    const pts: [number, number][] = [
+      [HOME_BASE.lat, HOME_BASE.lng],
+      ...activePins.map((p): [number, number] => [p.lat, p.lng]),
+    ];
+    map.fitBounds(L.latLngBounds(pts), { padding: [38, 38], maxZoom: 13 });
+  }, [customerSummaries]);
+
+  // Compute live OSRM road route & draw polyline when in Plan Route mode
+  useEffect(() => {
+    const routeLayer = routeLayerRef.current;
+    if (!planRouteMode || plannedRouteStops.length === 0) {
+      setRouteEstimate(null);
+      setIsRouting(false);
+      routeLayer?.clearLayers();
+      return;
+    }
+
+    let cancelled = false;
+    const immediate = estimateFallbackRoute(plannedRouteStops, true);
+    setRouteEstimate(immediate);
+    setIsRouting(true);
+
+    fetchOsrmRoadRoute(plannedRouteStops, true).then((osrm) => {
+      if (cancelled) return;
+      setIsRouting(false);
+      if (osrm) {
+        setRouteEstimate(osrm);
+      }
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [planRouteMode, plannedRouteStops]);
+
+  useEffect(() => {
+    const routeLayer = routeLayerRef.current;
+    if (!routeLayer) return;
+    routeLayer.clearLayers();
+
+    if (!planRouteMode || !routeEstimate || routeEstimate.geometryLatLngs.length < 2) {
+      return;
+    }
+
+    L.polyline(routeEstimate.geometryLatLngs, {
+      color: '#38bdf8',
+      weight: 4,
+      opacity: 0.92,
+      dashArray: routeEstimate.isRoadGeometry ? undefined : '8 6',
+      lineJoin: 'round',
+      interactive: false,
+    }).addTo(routeLayer);
+  }, [planRouteMode, routeEstimate]);
 
   // Switch between Dark OSM (CSS-filtered OSM) and Street OSM tiles (zero API keys)
   useEffect(() => {
@@ -635,12 +758,13 @@ export const JobsiteMapView: React.FC<JobsiteMapViewProps> = ({
       });
     }
 
-    // 4. Customer & Jobsite Pins (Status Mode vs Money View)
+    // 4. Customer & Jobsite Pins (Status Mode vs Money View + Plan Route stop badges)
     visibleCustomerPins.forEach((item) => {
       const { customer, mapStatus, isActiveInProgress, isExteriorJob, financials, lat, lng } = item;
       const meta = JOB_MAP_STATUS_META[mapStatus];
       const isSelected = selectedPin?.kind === 'CUSTOMER' && selectedPin.customerId === customer.id;
       const isNearbyNeighbor = nearbyCustomerIdSet.has(customer.id);
+      const routeStopOrder = planRouteMode ? plannedStopIndexByCustId.get(customer.id) : undefined;
       const extWx = isExteriorJob ? exteriorWeatherByCustId[customer.id] : undefined;
 
       const weatherDotHtml = extWx
@@ -651,9 +775,17 @@ export const JobsiteMapView: React.FC<JobsiteMapViewProps> = ({
           })()
         : '';
 
-      const pinShadow = isNearbyNeighbor
-        ? '0 0 0 2.5px #38bdf8, 0 3px 12px rgba(0,0,0,0.85)'
-        : '0 3px 12px rgba(0,0,0,0.8)';
+      const routeBadgeHtml =
+        routeStopOrder !== undefined
+          ? `<span style="min-width:17px;height:17px;padding:0 4px;border-radius:9999px;background:#38bdf8;color:#09090b;font-size:10px;font-weight:900;display:inline-flex;align-items:center;justify-content:center;flex-shrink:0;">#${routeStopOrder}</span>`
+          : '';
+
+      const pinShadow =
+        routeStopOrder !== undefined
+          ? '0 0 0 3px rgba(56,189,248,0.55), 0 4px 14px rgba(0,0,0,0.9)'
+          : isNearbyNeighbor
+          ? '0 0 0 2.5px #38bdf8, 0 3px 12px rgba(0,0,0,0.85)'
+          : '0 3px 12px rgba(0,0,0,0.8)';
 
       let html = '';
 
@@ -675,12 +807,13 @@ export const JobsiteMapView: React.FC<JobsiteMapViewProps> = ({
           <div style="
             display:inline-flex;align-items:center;gap:4px;
             background:#0f172a;color:#f8fafc;
-            border:2px solid ${isSelected ? '#ffffff' : isNearbyNeighbor ? '#38bdf8' : moneyColor};
+            border:2px solid ${routeStopOrder !== undefined ? '#38bdf8' : isSelected ? '#ffffff' : isNearbyNeighbor ? '#38bdf8' : moneyColor};
             border-radius:9999px;padding:3px 8px;
             font-size:10px;font-weight:900;white-space:nowrap;
             box-shadow:${pinShadow};
             transform:translate(-50%,-50%);
           ">
+            ${routeBadgeHtml}
             <span style="width:7px;height:7px;border-radius:50%;background:${moneyColor};display:inline-block;flex-shrink:0;"></span>
             <span>${escapeHtml(pillText)}</span>
             ${weatherDotHtml}
@@ -689,18 +822,19 @@ export const JobsiteMapView: React.FC<JobsiteMapViewProps> = ({
       } else {
         const shortName = getShortCustomerLabel(customer.name);
         const activeDot = isActiveInProgress
-          ? `<span style="width:6px;height:6px;border-radius:50%;background:#30d158;box-shadow:0 0 6px #30d158;display:inline-block;"></span>`
+          ? `<span style="width:6px;height:6px;border-radius:50%;background:#22c55e;box-shadow:0 0 6px #22c55e;display:inline-block;"></span>`
           : '';
         html = `
           <div style="
             display:inline-flex;align-items:center;gap:4px;
             background:#111319;color:#f8fafc;
-            border:2px solid ${isSelected ? '#ffffff' : isNearbyNeighbor ? '#38bdf8' : meta.color};
+            border:2px solid ${routeStopOrder !== undefined ? '#38bdf8' : isSelected ? '#ffffff' : isNearbyNeighbor ? '#38bdf8' : meta.color};
             border-radius:9999px;padding:3px 8px;
             font-size:10.5px;font-weight:800;white-space:nowrap;
             box-shadow:${pinShadow};
             transform:translate(-50%,-50%);
           ">
+            ${routeBadgeHtml}
             <span style="width:9px;height:9px;border-radius:50%;background:${meta.color};border:1.5px solid #ffffff;display:inline-block;flex-shrink:0;"></span>
             <span>${escapeHtml(shortName)}</span>
             ${weatherDotHtml}
@@ -718,10 +852,25 @@ export const JobsiteMapView: React.FC<JobsiteMapViewProps> = ({
 
       const marker = L.marker([lat, lng], {
         icon,
-        zIndexOffset: isSelected ? 950 : isNearbyNeighbor ? 820 : 500,
+        zIndexOffset:
+          routeStopOrder !== undefined
+            ? 960
+            : isSelected
+            ? 950
+            : isNearbyNeighbor
+            ? 820
+            : 500,
       }).addTo(markersLayer);
 
       marker.on('click', () => {
+        if (planRouteMode) {
+          setPlannedCustomerIds((prev) =>
+            prev.includes(customer.id)
+              ? prev.filter((id) => id !== customer.id)
+              : [...prev, customer.id]
+          );
+          return;
+        }
         setSelectedPin({ kind: 'CUSTOMER', customerId: customer.id });
       });
     });
@@ -734,6 +883,8 @@ export const JobsiteMapView: React.FC<JobsiteMapViewProps> = ({
     nearbyCustomerIdSet,
     exteriorWeatherByCustId,
     droppedSearchPin,
+    planRouteMode,
+    plannedStopIndexByCustId,
   ]);
 
   // Fetch live Open-Meteo weather when a customer pin is tapped
@@ -1122,6 +1273,30 @@ export const JobsiteMapView: React.FC<JobsiteMapViewProps> = ({
             </button>
           </div>
 
+          {/* Plan Day Route Mode Toggle */}
+          <button
+            type="button"
+            onClick={() => {
+              setPlanRouteMode((prev) => {
+                const next = !prev;
+                if (next) {
+                  setSelectedPin(null);
+                }
+                return next;
+              });
+            }}
+            className={`px-2.5 py-1.5 rounded-xl text-[10px] sm:text-[11px] font-extrabold border transition-all cursor-pointer flex items-center gap-1.5 active:scale-95 ${
+              planRouteMode
+                ? 'bg-sky-500 text-slate-950 border-sky-400 shadow'
+                : 'bg-[var(--bg)] border-sky-500/45 text-sky-300 hover:border-sky-400'
+            }`}
+          >
+            <span>🛣️</span>
+            <span>
+              Plan Route{planRouteMode && plannedCustomerIds.length > 0 ? ` (${plannedCustomerIds.length})` : ''}
+            </span>
+          </button>
+
           {/* Supply Stops Overlay Toggle */}
           <button
             type="button"
@@ -1146,18 +1321,18 @@ export const JobsiteMapView: React.FC<JobsiteMapViewProps> = ({
           </button>
         </div>
 
-        {/* Status Filter Pills */}
-        <div className="flex items-center gap-1.5 overflow-x-auto pb-0.5">
+        {/* Status Filter Pills (All Active default; Completed Gray OFF by default) */}
+        <div className="flex items-center gap-1.5 overflow-x-auto pb-0.5" data-status-filters="true">
           <button
             type="button"
-            onClick={() => setStatusFilter('ALL')}
+            onClick={() => setStatusFilter('ALL_ACTIVE')}
             className={`px-2.5 py-1 rounded-full text-[10px] font-extrabold border whitespace-nowrap cursor-pointer transition-all ${
-              statusFilter === 'ALL'
+              statusFilter === 'ALL_ACTIVE'
                 ? 'bg-[var(--text)] text-[var(--bg)] border-[var(--text)]'
                 : 'bg-[var(--bg)] text-[var(--text-muted)] border-[var(--border)]'
             }`}
           >
-            All Jobs ({customerSummaries.length})
+            All Active ({activeJobsCount})
           </button>
           {(['UNQUOTED', 'QUOTED', 'SCHEDULED', 'COMPLETED'] as JobMapStatus[]).map((st) => {
             const meta = JOB_MAP_STATUS_META[st];
@@ -1166,11 +1341,11 @@ export const JobsiteMapView: React.FC<JobsiteMapViewProps> = ({
               <button
                 key={st}
                 type="button"
-                onClick={() => setStatusFilter(active ? 'ALL' : st)}
+                onClick={() => setStatusFilter(active ? 'ALL_ACTIVE' : st)}
                 className="px-2.5 py-1 rounded-full text-[10px] font-extrabold border whitespace-nowrap cursor-pointer flex items-center gap-1.5 transition-all"
                 style={{
                   backgroundColor: active ? meta.color : 'var(--bg)',
-                  color: active ? '#09090b' : 'var(--text)',
+                  color: active ? '#09090b' : st === 'COMPLETED' ? '#94a3b8' : 'var(--text)',
                   borderColor: active ? meta.color : 'var(--border)',
                 }}
               >
@@ -1224,16 +1399,145 @@ export const JobsiteMapView: React.FC<JobsiteMapViewProps> = ({
           className="w-full h-[52vh] sm:h-[58vh] min-h-[340px] max-h-[600px] z-0"
         />
 
+        {/* Plan Route Mode Banner Overlay */}
+        {planRouteMode && (
+          <div className="pointer-events-none absolute top-3 left-1/2 -translate-x-1/2 z-[450] bg-slate-950/90 border border-sky-400/60 text-sky-200 px-3 py-1.5 rounded-full text-[10px] font-extrabold shadow-lg whitespace-nowrap">
+            🛣️ Tap customer pins in order ({plannedRouteStops.length} selected)
+          </div>
+        )}
+
         {/* Empty state hint overlay when zero customers are saved yet */}
-        {customers.length === 0 && !selectedPin && (
+        {!planRouteMode && customers.length === 0 && !selectedPin && (
           <div className="pointer-events-none absolute top-3 left-1/2 -translate-x-1/2 z-[450] bg-slate-950/90 border border-amber-400/50 text-amber-200 px-3 py-1.5 rounded-full text-[10px] font-bold shadow-lg whitespace-nowrap">
             Search any store/address above or tap a Frequent Stop chip to dispatch
           </div>
         )}
       </div>
 
-      {/* Clean One-Tap Google Maps Handoff Action Card (rendered cleanly below map) */}
-      {selectedPin && (
+      {/* Multi-Stop "Plan Day Route" Card */}
+      {planRouteMode && (
+        <div
+          data-plan-route-card="true"
+          className="bg-[#101218] border border-sky-500/45 rounded-2xl p-3.5 shadow-xl space-y-2.5"
+        >
+          <div className="flex items-center justify-between gap-2">
+            <div className="min-w-0">
+              <h3 className="text-xs sm:text-sm font-black uppercase tracking-wide text-sky-300 flex items-center gap-1.5">
+                <span>🛣️</span>
+                <span>Plan Day Route</span>
+              </h3>
+              <p className="text-[10px] text-slate-400 truncate">
+                Starts &amp; ends at {HOME_BASE.address}
+              </p>
+            </div>
+            <div className="flex items-center gap-1.5 shrink-0">
+              {plannedCustomerIds.length > 0 && (
+                <button
+                  type="button"
+                  onClick={() => setPlannedCustomerIds([])}
+                  className="px-2.5 py-1 rounded-lg bg-slate-800 border border-slate-700 text-[10px] font-bold text-slate-300 hover:text-white cursor-pointer"
+                >
+                  Clear
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={() => setPlanRouteMode(false)}
+                className="px-2.5 py-1 rounded-lg bg-slate-800 border border-slate-700 text-[10px] font-bold text-slate-300 hover:text-white cursor-pointer"
+              >
+                Done
+              </button>
+            </div>
+          </div>
+
+          {plannedRouteStops.length === 0 ? (
+            <div className="bg-slate-900/90 border border-slate-800 rounded-xl px-3 py-2.5 text-[11px] text-slate-300">
+              Tap customer pins on the map in the order you want to visit them. Estimated round-trip mileage and drive time will calculate automatically via OSRM.
+            </div>
+          ) : (
+            <>
+              {/* Ordered Stops Chips */}
+              <div className="flex flex-wrap items-center gap-1.5">
+                <span className="inline-flex items-center gap-1 px-2 py-1 rounded-full bg-amber-500/15 border border-amber-400/40 text-[10px] font-extrabold text-amber-300">
+                  🏠 Base
+                </span>
+                {plannedRouteStops.map((stop, idx) => (
+                  <span
+                    key={stop.id}
+                    className="inline-flex items-center gap-1.5 px-2 py-1 rounded-full bg-sky-500/15 border border-sky-400/50 text-[10.5px] font-bold text-white"
+                  >
+                    <span className="w-4 h-4 rounded-full bg-sky-400 text-slate-950 text-[9.5px] font-black inline-flex items-center justify-center">
+                      {idx + 1}
+                    </span>
+                    <span className="truncate max-w-[130px]">{stop.name}</span>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setPlannedCustomerIds((prev) =>
+                          prev.filter((id) => id !== Number(stop.refId))
+                        )
+                      }
+                      aria-label={`Remove ${stop.name} from route`}
+                      className="text-slate-300 hover:text-white text-[10px] font-black cursor-pointer"
+                    >
+                      ✕
+                    </button>
+                  </span>
+                ))}
+                <span className="inline-flex items-center gap-1 px-2 py-1 rounded-full bg-amber-500/15 border border-amber-400/40 text-[10px] font-extrabold text-amber-300">
+                  ↩ Base
+                </span>
+              </div>
+
+              {/* OSRM Round-Trip Mileage & Drive Time Summary */}
+              {routeEstimate && (
+                <div className="grid grid-cols-2 gap-2">
+                  <div className="bg-slate-900/90 border border-slate-800 rounded-xl px-3 py-2">
+                    <div className="text-[9px] uppercase font-bold text-slate-400">
+                      Est. Round-Trip Miles
+                    </div>
+                    <div className="text-sm font-black text-sky-300 tabular-nums">
+                      {routeEstimate.roundTripMiles.toFixed(1)} mi
+                    </div>
+                  </div>
+                  <div className="bg-slate-900/90 border border-slate-800 rounded-xl px-3 py-2">
+                    <div className="text-[9px] uppercase font-bold text-slate-400">
+                      Est. Drive Time {isRouting ? '(routing…)' : routeEstimate.isRoadGeometry ? '(OSRM)' : ''}
+                    </div>
+                    <div className="text-sm font-black text-emerald-300 tabular-nums">
+                      ~{routeEstimate.estDriveMinutes} min
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* Primary Multi-Stop Google Maps Launch CTA */}
+              <a
+                href={buildGoogleMapsMultiStopUrl(plannedRouteStops, true)}
+                target="_blank"
+                rel="noopener noreferrer"
+                onClick={() => {
+                  if (routeEstimate && routeEstimate.roundTripMiles > 0) {
+                    const stopNames = plannedRouteStops.map((s) => s.name).join(' → ');
+                    onSilentLogDispatchMileage({
+                      destKey: `route:${plannedRouteStops.map((s) => s.refId).join('-')}`,
+                      destName: `Day Route (${plannedRouteStops.length} stops: ${stopNames})`,
+                      roundTripMiles: routeEstimate.roundTripMiles,
+                    });
+                  }
+                }}
+                className="w-full py-2.5 px-3.5 rounded-xl bg-gradient-to-r from-sky-500 to-blue-600 hover:opacity-95 text-white text-xs font-black uppercase tracking-wide text-center shadow-lg transition-all active:scale-95 flex items-center justify-center gap-1.5"
+              >
+                <span>🧭</span>
+                <span>Open Multi-Stop Route in Maps</span>
+              </a>
+            </>
+          )}
+        </div>
+      )}
+
+      {/* Clean Action Bottom Card (rendered cleanly below map when not in Plan Route mode) */}
+      {!planRouteMode && selectedPin && (
         <div
           data-selected-pin-card="true"
           className="bg-[#101218] border border-[var(--border)] rounded-2xl p-3.5 shadow-xl"
@@ -1242,6 +1546,7 @@ export const JobsiteMapView: React.FC<JobsiteMapViewProps> = ({
           {selectedCustomerItem && (() => {
             const {
               customer,
+              primaryJob,
               mapStatus,
               isActiveInProgress,
               isExteriorJob,
@@ -1254,8 +1559,10 @@ export const JobsiteMapView: React.FC<JobsiteMapViewProps> = ({
             } = selectedCustomerItem;
             const meta = JOB_MAP_STATUS_META[mapStatus];
             const telHref = sanitizeTelHref(customer.phone);
+            const smsHref = sanitizeSmsHref(customer.phone);
             const activeWeather = pinWeather || exteriorWeatherByCustId[customer.id] || null;
             const drive = activeDriveEstimate || estimateDriveFromBase(lat, lng);
+            const projectTitle = primaryJob?.title?.trim() || scopeSummary;
 
             return (
               <div className="space-y-2.5">
@@ -1331,27 +1638,25 @@ export const JobsiteMapView: React.FC<JobsiteMapViewProps> = ({
                   </button>
                 </div>
 
-                {/* Scope & Schedule Summary */}
+                {/* Project Title & Scheduled Date */}
                 <div className="bg-slate-900/90 border border-slate-800 rounded-xl px-2.5 py-2 text-[11px] text-slate-200 space-y-1">
                   <div className="flex items-center justify-between gap-2">
                     <span className="text-[9px] font-extrabold uppercase tracking-wider text-slate-400">
-                      Job Scope
+                      Project &amp; Schedule
                     </span>
-                    {schedDate && (
-                      <span className="text-[9.5px] font-bold text-sky-300">
-                        📅 {formatScheduledDate(schedDate)}
-                      </span>
-                    )}
+                    <span className="text-[9.5px] font-bold text-sky-300">
+                      {schedDate ? `📅 ${formatScheduledDate(schedDate)}` : 'Not scheduled'}
+                    </span>
                   </div>
-                  <p className="leading-snug line-clamp-2">{scopeSummary}</p>
+                  <p className="font-bold text-white leading-snug line-clamp-1">{projectTitle}</p>
                 </div>
 
-                {/* Money + Live Open-Meteo Weather Row */}
+                {/* Estimate / Bill Total + Live Open-Meteo Weather Row */}
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5">
                   <div className="bg-slate-900/90 border border-slate-800 rounded-xl px-2.5 py-1.5 flex items-center justify-between gap-2">
                     <div>
                       <div className="text-[9px] uppercase font-bold text-slate-400">
-                        Quote / Payment
+                        Estimate / Bill Total
                       </div>
                       <div className="text-xs font-black text-white">
                         {financials.grossTotal > 0
@@ -1415,51 +1720,8 @@ export const JobsiteMapView: React.FC<JobsiteMapViewProps> = ({
                   </div>
                 </div>
 
-                {/* Nearby (Within 3 mi) Neighbor Chips */}
-                <div className="bg-sky-950/35 border border-sky-500/30 rounded-xl px-2.5 py-1.5 space-y-1.5">
-                  <div className="flex items-center justify-between gap-2">
-                    <span className="text-[9px] font-extrabold uppercase tracking-wider text-sky-300 flex items-center gap-1">
-                      <span>📡</span>
-                      <span>Nearby (Within 3 mi)</span>
-                    </span>
-                    <span className="text-[9px] font-bold text-sky-300/80">
-                      {nearbyCustomers.length > 0
-                        ? `${nearbyCustomers.length} lead${nearbyCustomers.length === 1 ? '' : 's'} / client${nearbyCustomers.length === 1 ? '' : 's'}`
-                        : 'None within 3 mi'}
-                    </span>
-                  </div>
-                  {nearbyCustomers.length > 0 && (
-                    <div className="flex flex-wrap items-center gap-1.5">
-                      {nearbyCustomers.map((nb) => {
-                        const nbMeta = JOB_MAP_STATUS_META[nb.mapStatus];
-                        return (
-                          <button
-                            key={nb.customer.id}
-                            type="button"
-                            onClick={() => {
-                              setSelectedPin({ kind: 'CUSTOMER', customerId: nb.customer.id });
-                              mapInstanceRef.current?.panTo([nb.lat, nb.lng], { animate: true });
-                            }}
-                            className="inline-flex items-center gap-1.5 px-2 py-1 rounded-full bg-slate-900/90 hover:bg-slate-800 border border-sky-400/40 text-[10px] font-bold text-slate-100 cursor-pointer transition-all active:scale-95"
-                            title={`Focus ${nb.customer.name} (${nb.distanceMiles.toFixed(1)} mi away)`}
-                          >
-                            <span
-                              className="w-2 h-2 rounded-full inline-block shrink-0"
-                              style={{ backgroundColor: nbMeta.color }}
-                            />
-                            <span className="truncate max-w-[110px]">{nb.customer.name}</span>
-                            <span className="text-[9px] font-extrabold text-sky-300">
-                              {nb.distanceMiles.toFixed(1)} mi
-                            </span>
-                          </button>
-                        );
-                      })}
-                    </div>
-                  )}
-                </div>
-
-                {/* Primary Google Maps Handoff + Quick Actions */}
-                <div className="flex flex-wrap items-center gap-1.5 pt-0.5">
+                {/* 3 Quick Action Buttons: Navigate | Call / Text | Open Folder */}
+                <div className="grid grid-cols-3 gap-1.5 pt-0.5">
                   <a
                     href={buildSingleStopMapsUrl(customer.address, lat, lng)}
                     target="_blank"
@@ -1472,28 +1734,58 @@ export const JobsiteMapView: React.FC<JobsiteMapViewProps> = ({
                         lng
                       )
                     }
-                    className="flex-1 min-w-[175px] py-2.5 px-3.5 rounded-xl bg-gradient-to-r from-sky-500 to-blue-600 hover:opacity-95 text-white text-xs font-black uppercase tracking-wide text-center shadow-lg transition-all active:scale-95 flex items-center justify-center gap-1.5"
+                    className="py-2.5 px-2 rounded-xl bg-gradient-to-r from-sky-500 to-blue-600 hover:opacity-95 text-white text-[11px] font-black text-center shadow-lg transition-all active:scale-95 flex items-center justify-center gap-1"
                   >
                     <span>🧭</span>
-                    <span>Open in Google Maps</span>
+                    <span>Navigate</span>
                   </a>
+
+                  <button
+                    type="button"
+                    disabled={!telHref}
+                    onClick={() => setCallTextMenuOpen((prev) => !prev)}
+                    className={`py-2.5 px-2 rounded-xl border text-[11px] font-extrabold transition-all active:scale-95 flex items-center justify-center gap-1 ${
+                      telHref
+                        ? callTextMenuOpen
+                          ? 'bg-emerald-500/20 border-emerald-400 text-emerald-200 cursor-pointer'
+                          : 'bg-slate-800 border-slate-700 text-emerald-300 hover:border-emerald-400 cursor-pointer'
+                        : 'bg-slate-900 border-slate-800 text-slate-500 opacity-60 cursor-not-allowed'
+                    }`}
+                    title={telHref ? `Call or text ${customer.phone}` : 'No phone number saved'}
+                  >
+                    <span>📞</span>
+                    <span>Call / Text</span>
+                  </button>
+
                   <button
                     type="button"
                     onClick={() => onOpenFolder(customer.id)}
-                    className="py-2.5 px-3 rounded-xl bg-[var(--accent)] text-white text-[11px] font-extrabold shadow hover:opacity-95 active:scale-95 transition-all cursor-pointer"
+                    className="py-2.5 px-2 rounded-xl bg-[var(--accent)] text-white text-[11px] font-extrabold shadow hover:opacity-95 active:scale-95 transition-all cursor-pointer flex items-center justify-center gap-1"
                   >
-                    📁 Folder
+                    <span>📁</span>
+                    <span>Open Folder</span>
                   </button>
-                  {telHref && (
+                </div>
+
+                {/* Expandable 1-Tap Native Call & Text Actions */}
+                {callTextMenuOpen && telHref && (
+                  <div className="grid grid-cols-2 gap-1.5 bg-slate-900/90 border border-emerald-500/35 rounded-xl p-2">
                     <a
                       href={telHref}
-                      className="py-2.5 px-3 rounded-xl bg-slate-800 border border-slate-700 text-emerald-300 text-[11px] font-extrabold hover:border-emerald-400"
-                      title={`Call ${customer.name}`}
+                      className="py-2 px-3 rounded-lg bg-emerald-500/20 hover:bg-emerald-500/30 border border-emerald-500/40 text-emerald-200 text-xs font-extrabold text-center flex items-center justify-center gap-1.5"
                     >
-                      📞
+                      <span>📞</span>
+                      <span>Call {customer.phone}</span>
                     </a>
-                  )}
-                </div>
+                    <a
+                      href={smsHref}
+                      className="py-2 px-3 rounded-lg bg-sky-500/20 hover:bg-sky-500/30 border border-sky-500/40 text-sky-200 text-xs font-extrabold text-center flex items-center justify-center gap-1.5"
+                    >
+                      <span>💬</span>
+                      <span>Text Message</span>
+                    </a>
+                  </div>
+                )}
               </div>
             );
           })()}

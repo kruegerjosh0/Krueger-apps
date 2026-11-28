@@ -113,6 +113,7 @@ import {
 import {
   estimateDriveFromBase,
   fetchDriveFromBase,
+  geocodeAddressWithNominatim,
   resolveApproxWisconsinCoords,
 } from './utils/mapHelpers';
 import {
@@ -1269,8 +1270,56 @@ export default function App() {
     }
   };
 
+  const geocodeTimersRef = useRef<Map<number, number>>(new Map());
+
+  const scheduleCustomerAddressGeocode = useCallback(
+    (customerId: number, rawAddress: string, immediate = false) => {
+      const trimmed = (rawAddress || '').trim();
+      const existingTimer = geocodeTimersRef.current.get(customerId);
+      if (existingTimer !== undefined) {
+        window.clearTimeout(existingTimer);
+        geocodeTimersRef.current.delete(customerId);
+      }
+      if (trimmed.length < 5) return;
+
+      const delayMs = immediate ? 50 : 900;
+      const timerId = window.setTimeout(async () => {
+        geocodeTimersRef.current.delete(customerId);
+        const geo = await geocodeAddressWithNominatim(trimmed);
+        if (!geo) return;
+
+        setCustomers((prev) => {
+          const idx = prev.findIndex((c) => c.id === customerId);
+          if (idx === -1) return prev;
+          const target = prev[idx];
+          // Only apply if the customer's address still matches what we geocoded
+          if ((target.address || '').trim().toLowerCase() !== trimmed.toLowerCase()) {
+            return prev;
+          }
+          if (target.lat === geo.lat && target.lng === geo.lng) {
+            return prev;
+          }
+          const patched: Customer = { ...target, lat: geo.lat, lng: geo.lng };
+          const updated = prev.map((c, i) => (i === idx ? patched : c));
+          saveRecord('KMaster_C', updated);
+          setActiveFolderCustomer((cur) => (cur?.id === customerId ? patched : cur));
+          return updated;
+        });
+      }, delayMs);
+
+      geocodeTimersRef.current.set(customerId, timerId);
+    },
+    []
+  );
+
   // Customers Management
   const handleSaveCustomer = (partial: Partial<Customer>) => {
+    const hasCoords =
+      typeof partial.lat === 'number' &&
+      typeof partial.lng === 'number' &&
+      Number.isFinite(partial.lat) &&
+      Number.isFinite(partial.lng);
+
     const newCust: Customer = {
       id: partial.id || Date.now(),
       name: partial.name || 'Valued Customer',
@@ -1286,12 +1335,18 @@ export default function App() {
       calendarSequence: partial.calendarSequence ?? 0,
       calendarUpdatedAt: partial.calendarUpdatedAt ?? Date.now(),
       lastActive: Date.now(),
+      ...(hasCoords ? { lat: partial.lat, lng: partial.lng } : {}),
     };
     const updated = [newCust, ...customers];
     setCustomers(updated);
     saveRecord('KMaster_C', updated);
     setCustomerModalOpen(false);
     showToast('✔ Customer Folder Created');
+
+    // Geocode once on creation and cache lat/lng directly onto the customer record
+    if (!hasCoords && newCust.address.trim().length >= 5) {
+      scheduleCustomerAddressGeocode(newCust.id, newCust.address, true);
+    }
   };
 
   // Silent Background Mileage Auto-Logger (zero popups / zero UI clutter)
@@ -1356,11 +1411,28 @@ export default function App() {
       };
     }
 
+    const prevAddrNorm = (prevCust?.address || '').trim().toLowerCase();
+    const nextAddrNorm = (nextCust.address || '').trim().toLowerCase();
+    const addressChanged = Boolean(prevCust && prevAddrNorm !== nextAddrNorm);
+    const coordsExplicitlyUpdated =
+      typeof updatedCust.lat === 'number' &&
+      typeof updatedCust.lng === 'number' &&
+      (updatedCust.lat !== prevCust?.lat || updatedCust.lng !== prevCust?.lng);
+
+    if (addressChanged && !coordsExplicitlyUpdated) {
+      // Clear stale cached coordinates so pin updates once Nominatim resolves the new address
+      nextCust = { ...nextCust, lat: undefined, lng: undefined };
+    }
+
     const updatedList = customers.map((c) => (c.id === nextCust.id ? nextCust : c));
     setCustomers(updatedList);
     saveRecord('KMaster_C', updatedList);
     if (activeFolderCustomer?.id === nextCust.id) {
       setActiveFolderCustomer(nextCust);
+    }
+
+    if (addressChanged && !coordsExplicitlyUpdated && nextCust.address.trim().length >= 5) {
+      scheduleCustomerAddressGeocode(nextCust.id, nextCust.address, false);
     }
 
     // Silent background mileage calculation whenever a customer job (or folder stage) is marked Completed

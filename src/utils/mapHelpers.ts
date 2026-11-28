@@ -151,32 +151,32 @@ export const JOB_MAP_STATUS_META: Record<
   { label: string; shortLabel: string; color: string; bgTint: string; textColor: string }
 > = {
   UNQUOTED: {
-    label: 'Unquoted Lead',
-    shortLabel: 'Unquoted',
-    color: '#f59e0b',
-    bgTint: 'rgba(245, 158, 11, 0.16)',
-    textColor: '#fbbf24',
+    label: 'Leads',
+    shortLabel: 'Leads',
+    color: '#facc15',
+    bgTint: 'rgba(250, 204, 21, 0.18)',
+    textColor: '#fde047',
   },
   QUOTED: {
-    label: 'Quoted / Pending',
+    label: 'Quoted',
     shortLabel: 'Quoted',
-    color: '#bf5af2',
-    bgTint: 'rgba(191, 90, 242, 0.18)',
-    textColor: '#d8b4fe',
+    color: '#3b82f6',
+    bgTint: 'rgba(59, 130, 246, 0.18)',
+    textColor: '#60a5fa',
   },
   SCHEDULED: {
     label: 'Scheduled',
     shortLabel: 'Scheduled',
-    color: '#0a84ff',
-    bgTint: 'rgba(10, 132, 255, 0.18)',
-    textColor: '#60a5fa',
+    color: '#22c55e',
+    bgTint: 'rgba(34, 197, 94, 0.18)',
+    textColor: '#4ade80',
   },
   COMPLETED: {
     label: 'Completed',
     shortLabel: 'Completed',
-    color: '#30d158',
-    bgTint: 'rgba(48, 209, 88, 0.16)',
-    textColor: '#4ade80',
+    color: '#94a3b8',
+    bgTint: 'rgba(148, 163, 184, 0.16)',
+    textColor: '#cbd5e1',
   },
 };
 
@@ -1088,4 +1088,9 @@ export function buildSingleStopMapsUrl(address: string, lat: number, lng: number
 export function sanitizeTelHref(phone?: string): string {
   const digits = (phone || '').replace(/[^\d+]/g, '');
   return digits ? `tel:${digits}` : '';
+}
+
+export function sanitizeSmsHref(phone?: string): string {
+  const digits = (phone || '').replace(/[^\d+]/g, '');
+  return digits ? `sms:${digits}` : '';
 }

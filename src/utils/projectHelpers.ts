@@ -306,12 +306,161 @@ export function normalizePipelineStage(rawStatus?: string | null): PipelineStage
   return 'PENDING';
 }
 
-export function isJobScheduled(job: JobProject): boolean {
+/**
+ * Extracts the first valid scheduled date string across all known date field variants
+ * (`schedDate`, `scheduledDate`, `startDate`, plus nested `estimate` / `finalBill` snapshots).
+ */
+export function extractRecordScheduledDate(rec: any): string {
+  if (!rec || typeof rec !== 'object') return '';
+  const candidates: unknown[] = [
+    rec.schedDate,
+    rec.scheduledDate,
+    rec.startDate,
+    rec.estimate?.schedDate,
+    rec.estimate?.scheduledDate,
+    rec.estimate?.startDate,
+    rec.finalBill?.schedDate,
+    rec.finalBill?.scheduledDate,
+    rec.finalBill?.startDate,
+  ];
+  for (const val of candidates) {
+    if (typeof val === 'string' && val.trim() && parseLocalDateMs(val) !== null) {
+      return val.trim();
+    }
+  }
+  return '';
+}
+
+/**
+ * Resolves the effective scheduled date for a job, falling back to any
+ * customer-level scheduled date fields if the job itself has none.
+ */
+export function resolveJobScheduledDate(job: JobProject, customer?: Customer): string {
+  const fromJob = extractRecordScheduledDate(job);
+  if (fromJob) return fromJob;
+  if (customer) {
+    return extractRecordScheduledDate(customer);
+  }
+  return '';
+}
+
+/**
+ * Resolves the earliest valid scheduled date across ALL date fields on a customer
+ * (`schedDate`, `scheduledDate`, `startDate`) AND any non-completed child
+ * `jobs[]`, `projects[]`, or `estimates[]`.
+ */
+export function resolveEarliestCustomerScheduledDate(
+  customer: Customer,
+  opts?: { todayMs?: number; excludePast?: boolean }
+): { schedDate: string; sortMs: number | null; job?: JobProject } {
+  const candidates: Array<{ schedDate: string; sortMs: number; job?: JobProject }> = [];
+
+  const pushCandidate = (raw: string, job?: JobProject) => {
+    if (!raw) return;
+    const ms = parseLocalDateMs(raw);
+    if (ms === null) return;
+    if (opts?.excludePast && typeof opts.todayMs === 'number' && ms < opts.todayMs) {
+      return;
+    }
+    candidates.push({ schedDate: raw, sortMs: ms, job });
+  };
+
+  // 1. Inspect every non-completed child in customer.jobs[]
+  (customer.jobs || []).forEach((j) => {
+    if (isJobCompletedOrPaid(j.status)) return;
+    const jobDate = extractRecordScheduledDate(j);
+    if (jobDate) pushCandidate(jobDate, j);
+  });
+
+  // 2. Inspect any legacy child projects[] or estimates[] arrays if present
+  const legacyCust = customer as any;
+  if (Array.isArray(legacyCust.projects)) {
+    legacyCust.projects.forEach((p: any) => {
+      if (p && !isJobCompletedOrPaid(p.status)) {
+        const d = extractRecordScheduledDate(p);
+        if (d) pushCandidate(d);
+      }
+    });
+  }
+  if (Array.isArray(legacyCust.estimates)) {
+    legacyCust.estimates.forEach((est: any) => {
+      if (est && !isJobCompletedOrPaid(est.status)) {
+        const d = extractRecordScheduledDate(est);
+        if (d) pushCandidate(d);
+      }
+    });
+  }
+
+  // 3. Inspect top-level customer date fields (`schedDate`, `scheduledDate`, `startDate`)
+  const custLevelDate = extractRecordScheduledDate(customer);
+  if (custLevelDate) {
+    pushCandidate(custLevelDate);
+  }
+
+  if (candidates.length === 0) {
+    return { schedDate: '', sortMs: null };
+  }
+
+  candidates.sort((a, b) => a.sortMs - b.sortMs);
+  return candidates[0];
+}
+
+/**
+ * Keeps scheduled dates synchronized across both the customer object
+ * (`customer.schedDate` / `customer.scheduledDate`) and child `jobs[]`
+ * (`job.schedDate` / `job.scheduledDate`) whenever saved or edited.
+ */
+export function syncCustomerScheduledDates(customer: Customer): Customer {
+  const custLevelDate = extractRecordScheduledDate(customer);
+
+  const syncedJobs = (customer.jobs || []).map((j) => {
+    const jobDate = extractRecordScheduledDate(j);
+    if (jobDate) {
+      return {
+        ...j,
+        schedDate: jobDate,
+        scheduledDate: jobDate,
+      };
+    }
+    // If a non-completed job is marked SCHEDULED with no date, inherit customer-level scheduled date if available
+    if (!isJobCompletedOrPaid(j.status) && normalizePipelineStage(j.status) === 'SCHEDULED' && custLevelDate) {
+      return {
+        ...j,
+        schedDate: custLevelDate,
+        scheduledDate: custLevelDate,
+      };
+    }
+    return j;
+  });
+
+  // Compute earliest valid scheduled date across non-completed jobs (or retain customer-level date if no jobs have one)
+  const datedJobDates: Array<{ date: string; ms: number }> = [];
+  syncedJobs.forEach((j) => {
+    if (isJobCompletedOrPaid(j.status)) return;
+    const d = extractRecordScheduledDate(j);
+    const ms = parseLocalDateMs(d);
+    if (d && ms !== null) datedJobDates.push({ date: d, ms });
+  });
+  datedJobDates.sort((a, b) => a.ms - b.ms);
+
+  const earliestJobDate = datedJobDates[0]?.date || '';
+  const effectiveCustomerDate = earliestJobDate || custLevelDate || '';
+
+  return {
+    ...customer,
+    jobs: syncedJobs,
+    ...(effectiveCustomerDate
+      ? { schedDate: effectiveCustomerDate, scheduledDate: effectiveCustomerDate }
+      : { schedDate: undefined, scheduledDate: undefined }),
+  };
+}
+
+export function isJobScheduled(job: JobProject, customer?: Customer): boolean {
   if (isJobCompletedOrPaid(job.status)) return false;
   const stage = normalizePipelineStage(job.status);
   if (stage === 'COMPLETED') return false;
   if (stage === 'SCHEDULED') return true;
-  if (stage === 'ACTIVE' && Boolean(job.schedDate && job.schedDate.trim())) return true;
+  if (stage === 'ACTIVE' && Boolean(resolveJobScheduledDate(job, customer))) return true;
   return false;
 }
 
@@ -330,8 +479,17 @@ export function isJobEligibleForScheduledList(customer: Customer, job: JobProjec
   }
   const jobStage = normalizePipelineStage(job.status);
   if (jobStage === 'COMPLETED') return false;
+  const resolvedDate = extractRecordScheduledDate(job);
   if (jobStage === 'SCHEDULED') return true;
-  if (jobStage === 'ACTIVE' && Boolean(job.schedDate && job.schedDate.trim())) return true;
+  if (jobStage === 'ACTIVE' && Boolean(resolvedDate)) return true;
+  // Also include a dated non-completed job when the customer folder itself is set to SCHEDULED
+  if (
+    customer.statusOverride &&
+    normalizePipelineStage(customer.statusOverride) === 'SCHEDULED' &&
+    Boolean(resolvedDate)
+  ) {
+    return true;
+  }
   return false;
 }
 
@@ -349,7 +507,7 @@ export function getCustomerPipelineStage(customer: Customer): PipelineStage {
     return 'ACTIVE';
   }
 
-  if (jobs.some((j) => isJobScheduled(j))) {
+  if (jobs.some((j) => isJobScheduled(j, customer))) {
     return 'SCHEDULED';
   }
 
@@ -380,7 +538,7 @@ export function parseLocalDateMs(dateStr?: string | null): number | null {
 }
 
 /**
- * Formats YYYY-MM-DD as a clear human-readable date such as "Mon, Nov 24, 2026".
+ * Formats YYYY-MM-DD as a clear human-readable date such as "Thu, Apr 1, 2027".
  */
 export function formatScheduledDate(dateStr?: string | null): string {
   const ms = parseLocalDateMs(dateStr);

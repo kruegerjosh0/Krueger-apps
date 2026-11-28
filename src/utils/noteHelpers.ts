@@ -299,3 +299,106 @@ export function downloadNoteReminderIcs(note: FieldNote, folderName?: string): b
   setTimeout(() => URL.revokeObjectURL(url), 1500);
   return true;
 }
+
+export interface ChecklistItem {
+  lineIndex: number;
+  text: string;
+  checked: boolean;
+}
+
+const CHECKED_PREFIX_RE = /^\s*(?:[-*•]\s*)?\[[xX]\]\s*/;
+const UNCHECKED_PREFIX_RE = /^\s*(?:[-*•]\s*)?\[\s?\]\s*/;
+const BULLET_PREFIX_RE = /^\s*[-*•]\s+/;
+
+export function parseChecklistItems(body?: string): ChecklistItem[] {
+  const lines = String(body || '').split(/\r?\n/);
+  const items: ChecklistItem[] = [];
+
+  lines.forEach((raw, idx) => {
+    const trimmed = raw.trim();
+    if (!trimmed) return;
+    if (CHECKED_PREFIX_RE.test(raw)) {
+      items.push({
+        lineIndex: idx,
+        text: raw.replace(CHECKED_PREFIX_RE, '').trim(),
+        checked: true,
+      });
+    } else if (UNCHECKED_PREFIX_RE.test(raw)) {
+      items.push({
+        lineIndex: idx,
+        text: raw.replace(UNCHECKED_PREFIX_RE, '').trim(),
+        checked: false,
+      });
+    } else {
+      items.push({
+        lineIndex: idx,
+        text: raw.replace(BULLET_PREFIX_RE, '').trim(),
+        checked: false,
+      });
+    }
+  });
+
+  return items;
+}
+
+export function toggleChecklistLine(body: string, lineIndex: number): string {
+  const lines = String(body || '').split(/\r?\n/);
+  if (lineIndex < 0 || lineIndex >= lines.length) return body;
+
+  const raw = lines[lineIndex];
+  if (CHECKED_PREFIX_RE.test(raw)) {
+    const clean = raw.replace(CHECKED_PREFIX_RE, '').trim();
+    lines[lineIndex] = `- [ ] ${clean}`;
+  } else if (UNCHECKED_PREFIX_RE.test(raw)) {
+    const clean = raw.replace(UNCHECKED_PREFIX_RE, '').trim();
+    lines[lineIndex] = `- [x] ${clean}`;
+  } else {
+    const clean = raw.replace(BULLET_PREFIX_RE, '').trim();
+    lines[lineIndex] = `- [x] ${clean}`;
+  }
+
+  return lines.join('\n');
+}
+
+export function getChecklistProgress(body?: string): { done: number; total: number } {
+  const items = parseChecklistItems(body);
+  const done = items.filter((i) => i.checked).length;
+  return { done, total: items.length };
+}
+
+export function extractLeadContactFromNote(note: FieldNote): {
+  name: string;
+  phone: string;
+  email: string;
+  address: string;
+} {
+  const combined = `${note.title || ''}\n${note.body || ''}`;
+  const phoneMatch = combined.match(
+    /(?:\+?1[-. ]?)?(?:\(\d{3}\)|\d{3})[-. ]?\d{3}[-. ]?\d{4}/
+  );
+  const emailMatch = combined.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i);
+
+  const addrRe =
+    /\b\d{1,6}[ \t]+[A-Za-z0-9. ]{2,40}\b(?:St|Street|Ave|Avenue|Rd|Road|Dr|Drive|Ln|Lane|Ct|Court|Blvd|Way|Pl|Cir|Hwy|Trl|Trail)\b(?:[, ]+[A-Za-z ]+(?:,[ ]*[A-Z]{2}(?:[ ]+\d{5})?)?)?/i;
+  let extractedAddress = '';
+  for (const rawLine of combined.split(/\r?\n/)) {
+    const lineWithoutPhone = phoneMatch ? rawLine.replace(phoneMatch[0], ' ') : rawLine;
+    const match = lineWithoutPhone.match(addrRe);
+    if (match) {
+      extractedAddress = match[0].trim();
+      break;
+    }
+  }
+
+  const cleanName = (note.title || '')
+    .replace(/^(?:lead|call|quote|estimate|follow\s*up)[:\-\s]+/i, '')
+    .trim();
+
+  return {
+    name: cleanName || 'New Lead',
+    phone: phoneMatch ? phoneMatch[0].trim() : '',
+    email: emailMatch ? emailMatch[0].trim() : '',
+    address: extractedAddress,
+  };
+}
+

@@ -1,21 +1,29 @@
 import React, { useMemo, useState } from 'react';
-import { FieldNote, NoteFolder, SystemConstants } from '../types';
+import { Customer, FieldNote, NoteFolder, SystemConstants } from '../types';
 import {
   downloadNoteReminderIcs,
   formatNoteDueLabel,
+  getChecklistProgress,
   getNoteDueState,
   inferDefaultFolderId,
   isNoteActionNeeded,
+  parseChecklistItems,
   parseNoteDueAtMs,
 } from '../utils/noteHelpers';
 
 interface NotesViewProps {
   notes: FieldNote[];
   noteFolders: NoteFolder[];
+  customers: Customer[];
   constants?: SystemConstants;
-  onOpenNoteModal: (note?: FieldNote, defaultFolderId?: string) => void;
+  onOpenNoteModal: (note?: FieldNote, defaultFolderId?: string, autoDictate?: boolean) => void;
   onTogglePinNote: (id: number) => void;
   onToggleCompleteNote: (id: number) => void;
+  onToggleChecklistMode: (id: number) => void;
+  onToggleChecklistItem: (noteId: number, lineIndex: number) => void;
+  onLinkNoteToCustomer: (note: FieldNote, customerId: number) => void;
+  onConvertNoteToNewCustomer: (note: FieldNote) => void;
+  onOpenCustomerFolder: (customerId: number) => void;
   onDeleteNote: (id: number) => void;
   onShareNote: (note: FieldNote) => void;
   onSendNoteToEstimator?: (note: FieldNote) => void;
@@ -30,9 +38,15 @@ type FolderFilter = 'ALL' | 'DUE' | string;
 export const NotesView: React.FC<NotesViewProps> = ({
   notes,
   noteFolders,
+  customers,
   onOpenNoteModal,
   onTogglePinNote,
   onToggleCompleteNote,
+  onToggleChecklistMode,
+  onToggleChecklistItem,
+  onLinkNoteToCustomer,
+  onConvertNoteToNewCustomer,
+  onOpenCustomerFolder,
   onDeleteNote,
   onShareNote,
   onSendNoteToEstimator,
@@ -58,6 +72,16 @@ export const NotesView: React.FC<NotesViewProps> = ({
     noteFolders.forEach((f) => map.set(f.id, f));
     return map;
   }, [noteFolders]);
+
+  const customerById = useMemo(() => {
+    const map = new Map<number, Customer>();
+    customers.forEach((c) => map.set(c.id, c));
+    return map;
+  }, [customers]);
+
+  const sortedCustomersForDropdown = useMemo(() => {
+    return [...customers].sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+  }, [customers]);
 
   const activeCustomFolder = useMemo(() => {
     if (selectedFolder === 'ALL' || selectedFolder === 'DUE') return null;
@@ -99,6 +123,9 @@ export const NotesView: React.FC<NotesViewProps> = ({
     const list = notes.filter((n) => {
       const fId = inferDefaultFolderId(n);
       const folderName = folderById.get(fId)?.name || '';
+      const linkedCustomerName = n.linkedCustomerId
+        ? customerById.get(n.linkedCustomerId)?.name || ''
+        : '';
 
       const matchFolder =
         selectedFolder === 'ALL'
@@ -114,6 +141,7 @@ export const NotesView: React.FC<NotesViewProps> = ({
         (n.title || '').toLowerCase().includes(q) ||
         (n.body || '').toLowerCase().includes(q) ||
         folderName.toLowerCase().includes(q) ||
+        linkedCustomerName.toLowerCase().includes(q) ||
         (n.category || '').toLowerCase().includes(q)
       );
     });
@@ -144,7 +172,7 @@ export const NotesView: React.FC<NotesViewProps> = ({
       // 4. Most recently created first
       return b.id - a.id;
     });
-  }, [notes, search, selectedFolder, folderById, nowMs]);
+  }, [notes, search, selectedFolder, folderById, customerById, nowMs]);
 
   const handleSyncToGoogleKeep = (note: FieldNote) => {
     const noteText = `${note.title}\n\n${note.body}`;
@@ -196,17 +224,29 @@ export const NotesView: React.FC<NotesViewProps> = ({
             Field Notes &amp; Reminders
           </h2>
           <p className="text-[11px] text-[var(--text-muted)]">
-            Organized by folder with due-date alerts &amp; phone calendar handoff
+            Folders, due alerts, interactive checklists &amp; hands-free voice capture
           </p>
         </div>
 
-        <button
-          type="button"
-          onClick={() => onOpenNoteModal(undefined, defaultNewNoteFolderId)}
-          className="bg-[var(--accent-tertiary)] hover:opacity-95 text-white px-3.5 py-1.5 rounded-xl text-xs font-extrabold cursor-pointer transition-transform active:scale-95 shadow-sm shrink-0"
-        >
-          + New Note
-        </button>
+        <div className="flex items-center gap-1.5 shrink-0">
+          <button
+            type="button"
+            data-quick-dictate-btn="true"
+            onClick={() => onOpenNoteModal(undefined, defaultNewNoteFolderId, true)}
+            title="Start a new note with Voice Dictation"
+            className="bg-sky-500/20 hover:bg-sky-500/30 text-sky-300 border border-sky-400/50 px-2.5 py-1.5 rounded-xl text-xs font-extrabold cursor-pointer transition-transform active:scale-95 flex items-center gap-1"
+          >
+            <span>🎤</span>
+            <span className="hidden sm:inline">Dictate</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => onOpenNoteModal(undefined, defaultNewNoteFolderId, false)}
+            className="bg-[var(--accent-tertiary)] hover:opacity-95 text-white px-3.5 py-1.5 rounded-xl text-xs font-extrabold cursor-pointer transition-transform active:scale-95 shadow-sm"
+          >
+            + New Note
+          </button>
+        </div>
       </div>
 
       {/* Top Priority Strip: Action Needed (Overdue / Due Today) */}
@@ -391,7 +431,7 @@ export const NotesView: React.FC<NotesViewProps> = ({
             type="text"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            placeholder="🔍 Search notes, folders, or reminders..."
+            placeholder="🔍 Search notes, folders, clients, or reminders..."
             aria-label="Search notes"
             className="w-full bg-[var(--surface)] border border-[var(--border)] focus:border-[var(--accent)] text-[var(--text)] rounded-xl px-3.5 py-2 text-xs outline-none shadow-sm pr-8"
           />
@@ -413,8 +453,13 @@ export const NotesView: React.FC<NotesViewProps> = ({
         {filteredNotes.map((note) => {
           const folderId = inferDefaultFolderId(note);
           const folder = folderById.get(folderId);
+          const linkedCustomer = note.linkedCustomerId
+            ? customerById.get(note.linkedCustomerId) || null
+            : null;
           const dueState = getNoteDueState(note, nowMs);
           const hasDue = parseNoteDueAtMs(note.dueAt) !== null;
+          const checklistItems = note.isChecklist ? parseChecklistItems(note.body) : [];
+          const checklistProgress = note.isChecklist ? getChecklistProgress(note.body) : null;
           const hasEstimateContent =
             /\b\d+\s*(?:x|by|\*)\s*\d+\b/i.test(note.body) ||
             /\b(?:room|bedroom|kitchen|living|repair|patch|gallon|sheen|coat)\b/i.test(note.body);
@@ -435,12 +480,13 @@ export const NotesView: React.FC<NotesViewProps> = ({
                         : 'border-[var(--border)] hover:border-[var(--accent)]'
               }`}
             >
-              {/* Top Meta Row: Done Checkbox, Folder Pill, Due Badge, Pin Button */}
+              {/* Top Meta Row: Done Checkbox, Folder Pill, Checklist Progress, Due Badge, Pin Button */}
               <div className="flex flex-wrap items-center justify-between gap-1.5 mb-2">
                 <div className="flex flex-wrap items-center gap-1.5 min-w-0">
                   <label className="inline-flex items-center gap-1.5 cursor-pointer select-none">
                     <input
                       type="checkbox"
+                      data-note-done-checkbox="true"
                       checked={Boolean(note.completed)}
                       onChange={() => onToggleCompleteNote(note.id)}
                       aria-label={`Mark ${note.title} completed`}
@@ -464,6 +510,31 @@ export const NotesView: React.FC<NotesViewProps> = ({
                     </span>
                   )}
 
+                  {checklistProgress && checklistProgress.total > 0 && (
+                    <span
+                      data-checklist-progress="true"
+                      className={`text-[9.5px] font-black px-2 py-0.5 rounded-full border ${
+                        checklistProgress.done === checklistProgress.total
+                          ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/50'
+                          : 'bg-sky-500/15 text-sky-300 border-sky-500/45'
+                      }`}
+                    >
+                      ☑️ {checklistProgress.done}/{checklistProgress.total} done
+                    </span>
+                  )}
+
+                  {linkedCustomer && (
+                    <button
+                      type="button"
+                      data-linked-customer-badge="true"
+                      onClick={() => onOpenCustomerFolder(linkedCustomer.id)}
+                      className="text-[9.5px] font-black px-2 py-0.5 rounded-full bg-emerald-500/15 hover:bg-emerald-500/25 text-emerald-300 border border-emerald-500/45 cursor-pointer"
+                      title={`Open ${linkedCustomer.name}'s Customer Folder`}
+                    >
+                      📁 {linkedCustomer.name}
+                    </button>
+                  )}
+
                   {hasDue && (
                     <span
                       className={`text-[9.5px] font-black px-2 py-0.5 rounded-full border ${
@@ -485,37 +556,116 @@ export const NotesView: React.FC<NotesViewProps> = ({
                   )}
                 </div>
 
-                <button
-                  type="button"
-                  onClick={() => onTogglePinNote(note.id)}
-                  title={note.pinned ? 'Unpin note' : 'Pin note to top'}
-                  aria-label={note.pinned ? 'Unpin note' : 'Pin note'}
-                  className={`px-2 py-1 rounded-lg text-[10px] font-extrabold border cursor-pointer transition-all ${
-                    note.pinned
-                      ? 'bg-amber-500/20 border-amber-400 text-amber-300'
-                      : 'bg-[var(--surface-subtle)] border-[var(--border)] text-[var(--text-muted)] hover:text-[var(--text)]'
-                  }`}
-                >
-                  📌 {note.pinned ? 'Unpin' : 'Pin'}
-                </button>
+                <div className="flex items-center gap-1 shrink-0">
+                  <button
+                    type="button"
+                    onClick={() => onToggleChecklistMode(note.id)}
+                    title={note.isChecklist ? 'Switch to plain note' : 'Switch to interactive checklist'}
+                    className={`px-2 py-1 rounded-lg text-[10px] font-extrabold border cursor-pointer transition-all ${
+                      note.isChecklist
+                        ? 'bg-sky-500/20 border-sky-400 text-sky-300'
+                        : 'bg-[var(--surface-subtle)] border-[var(--border)] text-[var(--text-muted)] hover:text-[var(--text)]'
+                    }`}
+                  >
+                    ☑️
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => onTogglePinNote(note.id)}
+                    title={note.pinned ? 'Unpin note' : 'Pin note to top'}
+                    aria-label={note.pinned ? 'Unpin note' : 'Pin note'}
+                    className={`px-2 py-1 rounded-lg text-[10px] font-extrabold border cursor-pointer transition-all ${
+                      note.pinned
+                        ? 'bg-amber-500/20 border-amber-400 text-amber-300'
+                        : 'bg-[var(--surface-subtle)] border-[var(--border)] text-[var(--text-muted)] hover:text-[var(--text)]'
+                    }`}
+                  >
+                    📌 {note.pinned ? 'Unpin' : 'Pin'}
+                  </button>
+                </div>
               </div>
 
-              {/* Title & Body */}
+              {/* Title */}
               <h4
-                className={`font-extrabold text-sm mb-1 ${
+                className={`font-extrabold text-sm mb-1.5 ${
                   note.completed ? 'line-through text-[var(--text-muted)]' : 'text-[var(--text)]'
                 }`}
               >
                 {note.title}
               </h4>
-              {note.body && (
-                <p className="text-xs text-[var(--text-muted)] leading-relaxed whitespace-pre-wrap">
-                  {note.body}
-                </p>
+
+              {/* Body: Interactive Checklist OR Plain Note Text */}
+              {note.isChecklist && checklistItems.length > 0 ? (
+                <div className="space-y-1.5 my-1.5" data-note-checklist="true">
+                  {checklistItems.map((item) => (
+                    <label
+                      key={`${note.id}-line-${item.lineIndex}`}
+                      className="flex items-start gap-2 bg-[var(--bg)]/80 border border-[var(--border)]/70 rounded-xl px-2.5 py-1.5 cursor-pointer hover:border-sky-400/50 transition-colors"
+                    >
+                      <input
+                        type="checkbox"
+                        checked={item.checked}
+                        onChange={() => onToggleChecklistItem(note.id, item.lineIndex)}
+                        className="w-4 h-4 mt-0.5 accent-sky-400 rounded cursor-pointer shrink-0"
+                      />
+                      <span
+                        className={`text-xs leading-snug ${
+                          item.checked
+                            ? 'line-through text-[var(--text-muted)]'
+                            : 'text-[var(--text)] font-medium'
+                        }`}
+                      >
+                        {item.text}
+                      </span>
+                    </label>
+                  ))}
+                </div>
+              ) : (
+                note.body && (
+                  <p className="text-xs text-[var(--text-muted)] leading-relaxed whitespace-pre-wrap">
+                    {note.body}
+                  </p>
+                )
               )}
 
+              {/* Link / Send to Customer Dropdown Bar */}
+              <div className="mt-2.5 flex items-center gap-1.5">
+                <select
+                  data-link-customer-select="true"
+                  aria-label="Link or send note to customer"
+                  value=""
+                  onChange={(e) => {
+                    const val = e.target.value;
+                    if (!val) return;
+                    if (val === '__NEW_CUSTOMER__') {
+                      onConvertNoteToNewCustomer(note);
+                    } else {
+                      const custId = Number(val);
+                      if (Number.isFinite(custId)) {
+                        onLinkNoteToCustomer(note, custId);
+                      }
+                    }
+                  }}
+                  className="bg-[var(--bg)] border border-[var(--border)] focus:border-emerald-400 text-[var(--text)] rounded-lg px-2.5 py-1.5 text-[10.5px] font-bold outline-none cursor-pointer max-w-full"
+                >
+                  <option value="">
+                    {linkedCustomer
+                      ? `👤 Linked: ${linkedCustomer.name} (Change / Send…)`
+                      : '👤 Link / Send to Customer…'}
+                  </option>
+                  <option value="__NEW_CUSTOMER__">
+                    ➕ Create New Customer Folder from Note
+                  </option>
+                  {sortedCustomersForDropdown.map((c) => (
+                    <option key={c.id} value={String(c.id)}>
+                      📁 Attach to {c.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
               {/* Bottom Action Bar */}
-              <div className="flex flex-wrap items-center justify-between gap-2 mt-3 pt-2 border-t border-[var(--border)]/60">
+              <div className="flex flex-wrap items-center justify-between gap-2 mt-2.5 pt-2 border-t border-[var(--border)]/60">
                 <div className="flex flex-wrap items-center gap-1.5">
                   {hasDue && (
                     <button

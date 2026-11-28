@@ -30,6 +30,8 @@ import {
   formatNoteDueLabel,
   playReminderChime,
   downloadNoteReminderIcs,
+  toggleChecklistLine,
+  extractLeadContactFromNote,
 } from './utils/noteHelpers';
 import {
   loadRecord,
@@ -134,6 +136,7 @@ import {
   getLocalTodayIso,
   isJobCompletedOrPaid,
   normalizeLegacyJob,
+  syncCustomerScheduledDates,
 } from './utils/projectHelpers';
 
 function readLocalCacheSync<T>(key: string, fallback: T): T {
@@ -325,6 +328,12 @@ export default function App() {
   const [noteModalOpen, setNoteModalOpen] = useState(false);
   const [noteModalDefaultFolderId, setNoteModalDefaultFolderId] = useState<string>('job-estimate');
   const [noteFormDueAt, setNoteFormDueAt] = useState<string>('');
+  const [noteFormBody, setNoteFormBody] = useState<string>('');
+  const [noteFormIsChecklist, setNoteFormIsChecklist] = useState<boolean>(false);
+  const [noteFormLinkedCustomerId, setNoteFormLinkedCustomerId] = useState<string>('');
+  const [isDictatingNote, setIsDictatingNote] = useState<boolean>(false);
+  const [noteDictationInterim, setNoteDictationInterim] = useState<string>('');
+  const noteSpeechRecRef = useRef<any>(null);
   const [activeReminderNoteId, setActiveReminderNoteId] = useState<number | null>(null);
   const [reminderNowMs, setReminderNowMs] = useState<number>(() => Date.now());
   const lastChimedKeyRef = useRef<string | null>(null);
@@ -1454,10 +1463,10 @@ export default function App() {
 
   const handleUpdateCustomer = (updatedCust: Customer) => {
     const prevCust = customers.find((c) => c.id === updatedCust.id);
-    let nextCust = updatedCust;
-    if (prevCust && hasCalendarRelevantChanges(prevCust, updatedCust)) {
+    let nextCust = syncCustomerScheduledDates(updatedCust);
+    if (prevCust && hasCalendarRelevantChanges(prevCust, nextCust)) {
       nextCust = {
-        ...updatedCust,
+        ...nextCust,
         calendarSequence: (prevCust.calendarSequence ?? 0) + 1,
         calendarUpdatedAt: Date.now(),
       };
@@ -2018,30 +2027,38 @@ export default function App() {
         ? noteData.dueAt.trim()
         : undefined;
 
+    const cleanLinkedCustId =
+      typeof noteData.linkedCustomerId === 'number' && Number.isFinite(noteData.linkedCustomerId)
+        ? noteData.linkedCustomerId
+        : undefined;
+
     let updated: FieldNote[];
+    let savedNoteObj: FieldNote;
     if (editingNote) {
       const dueChanged = (editingNote.dueAt || undefined) !== cleanDueAt;
-      updated = notes.map((n) =>
-        n.id === editingNote.id
-          ? ({
-              ...n,
-              ...noteData,
-              folderId: chosenFolderId,
-              category: chosenFolder?.name || noteData.category || n.category || 'Notes',
-              dueAt: cleanDueAt,
-              pinned: noteData.pinned !== undefined ? Boolean(noteData.pinned) : Boolean(n.pinned),
-              completed:
-                noteData.completed !== undefined
-                  ? Boolean(noteData.completed)
-                  : Boolean(n.completed),
-              // Reset snooze/alert markers when due date is updated so the new time chimes cleanly
-              ...(dueChanged ? { snoozedUntil: undefined, alertedAt: undefined } : {}),
-              date: dateStr,
-            } as FieldNote)
-          : n
-      );
+      savedNoteObj = {
+        ...editingNote,
+        ...noteData,
+        folderId: chosenFolderId,
+        category: chosenFolder?.name || noteData.category || editingNote.category || 'Notes',
+        dueAt: cleanDueAt,
+        pinned:
+          noteData.pinned !== undefined ? Boolean(noteData.pinned) : Boolean(editingNote.pinned),
+        completed:
+          noteData.completed !== undefined
+            ? Boolean(noteData.completed)
+            : Boolean(editingNote.completed),
+        isChecklist:
+          noteData.isChecklist !== undefined
+            ? Boolean(noteData.isChecklist)
+            : Boolean(editingNote.isChecklist),
+        linkedCustomerId: cleanLinkedCustId,
+        ...(dueChanged ? { snoozedUntil: undefined, alertedAt: undefined } : {}),
+        date: dateStr,
+      };
+      updated = notes.map((n) => (n.id === editingNote.id ? savedNoteObj : n));
     } else {
-      const newN: FieldNote = {
+      savedNoteObj = {
         id: Date.now(),
         title: noteData.title || 'Untitled Note',
         category: chosenFolder?.name || noteData.category || 'Notes',
@@ -2050,16 +2067,179 @@ export default function App() {
         pinned: Boolean(noteData.pinned),
         dueAt: cleanDueAt,
         completed: Boolean(noteData.completed),
+        isChecklist: Boolean(noteData.isChecklist),
+        linkedCustomerId: cleanLinkedCustId,
         date: dateStr,
       };
-      updated = [newN, ...notes];
+      updated = [savedNoteObj, ...notes];
     }
+    stopNoteDictation();
     setNotes(updated);
     saveRecord('KMaster_Notes', updated);
     setNoteModalOpen(false);
     setEditingNote(null);
     setNoteFormDueAt('');
+    setNoteFormBody('');
+    setNoteFormIsChecklist(false);
+    setNoteFormLinkedCustomerId('');
     showToast('✔ Note Saved');
+  };
+
+  const stopNoteDictation = () => {
+    if (noteSpeechRecRef.current) {
+      try {
+        noteSpeechRecRef.current.onresult = null;
+        noteSpeechRecRef.current.onerror = null;
+        noteSpeechRecRef.current.onend = null;
+        noteSpeechRecRef.current.stop();
+      } catch {
+        // Ignore already-stopped recognition
+      }
+      noteSpeechRecRef.current = null;
+    }
+    setIsDictatingNote(false);
+    setNoteDictationInterim('');
+  };
+
+  const startNoteDictation = () => {
+    const SpeechRec =
+      (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+    if (!SpeechRec) {
+      showToast('Voice dictation is not supported in this browser');
+      return;
+    }
+    stopNoteDictation();
+    try {
+      const rec = new SpeechRec();
+      rec.continuous = true;
+      rec.interimResults = true;
+      rec.lang = 'en-US';
+
+      rec.onresult = (event: any) => {
+        let finalChunk = '';
+        let interimChunk = '';
+        for (let i = event.resultIndex; i < event.results.length; i++) {
+          const transcript = event.results[i]?.[0]?.transcript || '';
+          if (event.results[i].isFinal) {
+            finalChunk += transcript;
+          } else {
+            interimChunk += transcript;
+          }
+        }
+        setNoteDictationInterim(interimChunk.trim());
+        const cleanedFinal = finalChunk.trim();
+        if (cleanedFinal) {
+          setNoteFormBody((prev) => {
+            const trimmedPrev = prev.trimEnd();
+            if (!trimmedPrev) return cleanedFinal;
+            return `${trimmedPrev}\n${cleanedFinal}`;
+          });
+        }
+      };
+
+      rec.onerror = (err: any) => {
+        setIsDictatingNote(false);
+        setNoteDictationInterim('');
+        if (err?.error === 'not-allowed') {
+          showToast('Microphone permission denied — allow mic access to dictate');
+        }
+      };
+
+      rec.onend = () => {
+        setIsDictatingNote(false);
+        setNoteDictationInterim('');
+        noteSpeechRecRef.current = null;
+      };
+
+      noteSpeechRecRef.current = rec;
+      setIsDictatingNote(true);
+      rec.start();
+    } catch {
+      setIsDictatingNote(false);
+      showToast('Could not start microphone dictation');
+    }
+  };
+
+  const handleToggleChecklistMode = (id: number) => {
+    const updated = notes.map((n) => (n.id === id ? { ...n, isChecklist: !n.isChecklist } : n));
+    setNotes(updated);
+    saveRecord('KMaster_Notes', updated);
+  };
+
+  const handleToggleChecklistItem = (noteId: number, lineIndex: number) => {
+    const updated = notes.map((n) =>
+      n.id === noteId
+        ? {
+            ...n,
+            isChecklist: true,
+            body: toggleChecklistLine(n.body || '', lineIndex),
+          }
+        : n
+    );
+    setNotes(updated);
+    saveRecord('KMaster_Notes', updated);
+  };
+
+  const handleLinkNoteToCustomer = (note: FieldNote, customerId: number) => {
+    const target = customers.find((c) => c.id === customerId);
+    if (!target) return;
+
+    // 1. Link note to customer
+    const updatedNotes = notes.map((n) =>
+      n.id === note.id ? { ...n, linkedCustomerId: target.id } : n
+    );
+    setNotes(updatedNotes);
+    saveRecord('KMaster_Notes', updatedNotes);
+
+    // 2. Append note cleanly into Customer Folder's Site & Customer Notes if not already attached
+    const stamp = new Date().toLocaleDateString();
+    const headerTag = `[Field Note: ${note.title}]`;
+    const existingCustNotes = (target.notes || '').trim();
+    if (!existingCustNotes.includes(headerTag)) {
+      const entry = `${headerTag} (${stamp})${note.body ? `\n${note.body.trim()}` : ''}`;
+      const mergedCustNotes = existingCustNotes ? `${existingCustNotes}\n\n${entry}` : entry;
+      handleUpdateCustomer({
+        ...target,
+        notes: mergedCustNotes,
+        lastActive: Date.now(),
+      });
+    }
+
+    showToast(`✔ Attached note to ${target.name}'s folder`);
+  };
+
+  const handleConvertNoteToNewCustomer = (note: FieldNote) => {
+    const extracted = extractLeadContactFromNote(note);
+    const newCustId = Date.now();
+    const newCust: Customer = {
+      id: newCustId,
+      name: extracted.name,
+      phone: extracted.phone,
+      email: extracted.email,
+      address: extracted.address,
+      notes: `[From Field Note: ${note.title}]\n${(note.body || '').trim()}`.trim(),
+      statusOverride: 'AUTO',
+      files: [],
+      jobs: [],
+      lastActive: Date.now(),
+    };
+
+    const updatedCustomers = [newCust, ...customers];
+    setCustomers(updatedCustomers);
+    saveRecord('KMaster_C', updatedCustomers);
+
+    if (newCust.address.trim().length >= 5) {
+      scheduleCustomerAddressGeocode(newCust.id, newCust.address, true);
+    }
+
+    const updatedNotes = notes.map((n) =>
+      n.id === note.id ? { ...n, linkedCustomerId: newCust.id } : n
+    );
+    setNotes(updatedNotes);
+    saveRecord('KMaster_Notes', updatedNotes);
+
+    setActiveFolderCustomer(newCust);
+    showToast(`✔ Created Customer Folder: ${newCust.name}`);
   };
 
   const handleTogglePinNote = (id: number) => {
@@ -2492,17 +2672,41 @@ export default function App() {
           <NotesView
             notes={notes}
             noteFolders={noteFolders}
+            customers={customers}
             constants={constants}
-            onOpenNoteModal={(note, defaultFolderId) => {
+            onOpenNoteModal={(note, defaultFolderId, autoDictate) => {
+              stopNoteDictation();
               setEditingNote(note || null);
               setNoteModalDefaultFolderId(
                 note?.folderId || defaultFolderId || noteFolders[0]?.id || 'job-estimate'
               );
               setNoteFormDueAt(note?.dueAt || '');
+              setNoteFormBody(note?.body || '');
+              setNoteFormIsChecklist(Boolean(note?.isChecklist));
+              setNoteFormLinkedCustomerId(
+                typeof note?.linkedCustomerId === 'number' ? String(note.linkedCustomerId) : ''
+              );
               setNoteModalOpen(true);
+              if (autoDictate) {
+                setTimeout(() => {
+                  startNoteDictation();
+                }, 60);
+              }
             }}
             onTogglePinNote={handleTogglePinNote}
             onToggleCompleteNote={handleToggleCompleteNote}
+            onToggleChecklistMode={handleToggleChecklistMode}
+            onToggleChecklistItem={handleToggleChecklistItem}
+            onLinkNoteToCustomer={handleLinkNoteToCustomer}
+            onConvertNoteToNewCustomer={handleConvertNoteToNewCustomer}
+            onOpenCustomerFolder={(customerId) => {
+              const target = customers.find((c) => c.id === customerId);
+              if (target) {
+                setActiveFolderCustomer(target);
+              } else {
+                showToast('Customer folder not found');
+              }
+            }}
             onDeleteNote={handleDeleteNote}
             onShareNote={handleShareNote}
             onSendNoteToEstimator={handleSendNoteToEstimator}
@@ -2612,9 +2816,13 @@ export default function App() {
               <button
                 type="button"
                 onClick={() => {
+                  stopNoteDictation();
                   setNoteModalOpen(false);
                   setEditingNote(null);
                   setNoteFormDueAt('');
+                  setNoteFormBody('');
+                  setNoteFormIsChecklist(false);
+                  setNoteFormLinkedCustomerId('');
                 }}
                 className="text-xs font-bold text-[var(--text-muted)] cursor-pointer"
               >
@@ -2630,18 +2838,25 @@ export default function App() {
                 const titleVal = (form.elements.namedItem('noteTitle') as HTMLInputElement).value;
                 const folderIdVal = (form.elements.namedItem('noteFolderId') as HTMLSelectElement)
                   .value;
-                const bodyVal = (form.elements.namedItem('noteBody') as HTMLTextAreaElement).value;
                 const pinnedVal = (form.elements.namedItem('notePinned') as HTMLInputElement)
                   .checked;
                 const completedVal = (form.elements.namedItem('noteCompleted') as HTMLInputElement)
                   .checked;
+                const parsedLinkedId = noteFormLinkedCustomerId
+                  ? Number(noteFormLinkedCustomerId)
+                  : undefined;
                 handleSaveNote({
                   title: titleVal,
                   folderId: folderIdVal,
-                  body: bodyVal,
+                  body: noteFormBody,
                   dueAt: noteFormDueAt.trim() || undefined,
                   pinned: pinnedVal,
                   completed: completedVal,
+                  isChecklist: noteFormIsChecklist,
+                  linkedCustomerId:
+                    typeof parsedLinkedId === 'number' && Number.isFinite(parsedLinkedId)
+                      ? parsedLinkedId
+                      : undefined,
                 });
               }}
               className="space-y-2.5"
@@ -2659,23 +2874,47 @@ export default function App() {
                 />
               </div>
 
-              <div>
-                <label className="text-[9px] uppercase font-extrabold text-[var(--text-muted)] block mb-1">
-                  Folder
-                </label>
-                <select
-                  name="noteFolderId"
-                  defaultValue={
-                    editingNote ? inferDefaultFolderId(editingNote) : noteModalDefaultFolderId
-                  }
-                  className="w-full bg-[var(--bg)] border border-[var(--border)] focus:border-[var(--accent)] text-[var(--text)] rounded-xl p-2.5 text-xs outline-none"
-                >
-                  {noteFolders.map((folder) => (
-                    <option key={folder.id} value={folder.id}>
-                      {folder.icon || '📂'} {folder.name}
-                    </option>
-                  ))}
-                </select>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                <div>
+                  <label className="text-[9px] uppercase font-extrabold text-[var(--text-muted)] block mb-1">
+                    Folder
+                  </label>
+                  <select
+                    name="noteFolderId"
+                    defaultValue={
+                      editingNote ? inferDefaultFolderId(editingNote) : noteModalDefaultFolderId
+                    }
+                    className="w-full bg-[var(--bg)] border border-[var(--border)] focus:border-[var(--accent)] text-[var(--text)] rounded-xl p-2.5 text-xs outline-none"
+                  >
+                    {noteFolders.map((folder) => (
+                      <option key={folder.id} value={folder.id}>
+                        {folder.icon || '📂'} {folder.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div>
+                  <label className="text-[9px] uppercase font-extrabold text-[var(--text-muted)] block mb-1">
+                    👤 Link Customer (Optional)
+                  </label>
+                  <select
+                    name="noteLinkedCustomerId"
+                    data-modal-link-customer-select="true"
+                    value={noteFormLinkedCustomerId}
+                    onChange={(e) => setNoteFormLinkedCustomerId(e.target.value)}
+                    className="w-full bg-[var(--bg)] border border-[var(--border)] focus:border-[var(--accent)] text-[var(--text)] rounded-xl p-2.5 text-xs outline-none"
+                  >
+                    <option value="">None (General Note)</option>
+                    {[...customers]
+                      .sort((a, b) => (a.name || '').localeCompare(b.name || ''))
+                      .map((c) => (
+                        <option key={c.id} value={String(c.id)}>
+                          📁 {c.name}
+                        </option>
+                      ))}
+                  </select>
+                </div>
               </div>
 
               {/* Optional Due Date & Time Reminder Picker */}
@@ -2714,11 +2953,7 @@ export default function App() {
                         (form?.elements.namedItem('noteTitle') as HTMLInputElement | null)?.value ||
                         editingNote?.title ||
                         'Krueger Painting Reminder';
-                      const bodyVal =
-                        (form?.elements.namedItem('noteBody') as HTMLTextAreaElement | null)
-                          ?.value ||
-                        editingNote?.body ||
-                        '';
+                      const bodyVal = noteFormBody || editingNote?.body || '';
                       const folderIdVal =
                         (form?.elements.namedItem('noteFolderId') as HTMLSelectElement | null)
                           ?.value || noteModalDefaultFolderId;
@@ -2746,37 +2981,87 @@ export default function App() {
                 )}
               </div>
 
-              {/* Pin & Completed Toggles */}
-              <div className="grid grid-cols-2 gap-2">
-                <label className="flex items-center gap-2 bg-[var(--bg)] border border-[var(--border)] rounded-xl px-3 py-2 text-xs font-bold text-[var(--text)] cursor-pointer">
+              {/* Pin, Checklist Mode & Completed Toggles */}
+              <div className="grid grid-cols-3 gap-1.5">
+                <label className="flex items-center gap-1.5 bg-[var(--bg)] border border-[var(--border)] rounded-xl px-2.5 py-2 text-[11px] font-bold text-[var(--text)] cursor-pointer">
                   <input
                     type="checkbox"
                     name="notePinned"
                     defaultChecked={Boolean(editingNote?.pinned)}
-                    className="w-4 h-4 accent-amber-400 cursor-pointer"
+                    className="w-3.5 h-3.5 accent-amber-400 cursor-pointer"
                   />
-                  <span>📌 Pin to top</span>
+                  <span>📌 Pin</span>
                 </label>
-                <label className="flex items-center gap-2 bg-[var(--bg)] border border-[var(--border)] rounded-xl px-3 py-2 text-xs font-bold text-[var(--text)] cursor-pointer">
+                <label className="flex items-center gap-1.5 bg-[var(--bg)] border border-[var(--border)] rounded-xl px-2.5 py-2 text-[11px] font-bold text-[var(--text)] cursor-pointer">
+                  <input
+                    type="checkbox"
+                    name="noteIsChecklist"
+                    data-modal-checklist-toggle="true"
+                    checked={noteFormIsChecklist}
+                    onChange={(e) => setNoteFormIsChecklist(e.target.checked)}
+                    className="w-3.5 h-3.5 accent-sky-400 cursor-pointer"
+                  />
+                  <span>☑️ Checklist</span>
+                </label>
+                <label className="flex items-center gap-1.5 bg-[var(--bg)] border border-[var(--border)] rounded-xl px-2.5 py-2 text-[11px] font-bold text-[var(--text)] cursor-pointer">
                   <input
                     type="checkbox"
                     name="noteCompleted"
                     defaultChecked={Boolean(editingNote?.completed)}
-                    className="w-4 h-4 accent-emerald-500 cursor-pointer"
+                    className="w-3.5 h-3.5 accent-emerald-500 cursor-pointer"
                   />
-                  <span>✓ Completed</span>
+                  <span>✓ Done</span>
                 </label>
               </div>
 
               <div>
-                <label className="text-[9px] uppercase font-extrabold text-[var(--text-muted)] block mb-1">
-                  Note Body
-                </label>
+                <div className="flex items-center justify-between gap-2 mb-1">
+                  <label className="text-[9px] uppercase font-extrabold text-[var(--text-muted)]">
+                    {noteFormIsChecklist ? 'Checklist Items (1 item per line)' : 'Note Body'}
+                  </label>
+                  <button
+                    type="button"
+                    data-voice-dictate-btn="true"
+                    onClick={() => {
+                      if (isDictatingNote) {
+                        stopNoteDictation();
+                      } else {
+                        startNoteDictation();
+                      }
+                    }}
+                    className={`px-2.5 py-1 rounded-lg text-[10px] font-extrabold border transition-all cursor-pointer flex items-center gap-1 ${
+                      isDictatingNote
+                        ? 'bg-red-500/25 border-red-400 text-red-200 animate-pulse'
+                        : 'bg-sky-500/15 hover:bg-sky-500/25 border-sky-400/40 text-sky-200'
+                    }`}
+                  >
+                    <span>{isDictatingNote ? '⏹' : '🎤'}</span>
+                    <span>{isDictatingNote ? 'Stop Dictating' : 'Voice Dictate'}</span>
+                  </button>
+                </div>
+                {isDictatingNote && (
+                  <div
+                    data-voice-dictate-status="true"
+                    className="mb-1.5 px-2.5 py-1.5 rounded-lg bg-red-950/50 border border-red-500/40 text-[11px] text-red-200 flex items-center gap-2"
+                  >
+                    <span className="w-2 h-2 rounded-full bg-red-400 animate-ping shrink-0" />
+                    <span className="truncate">
+                      {noteDictationInterim
+                        ? `Hearing: "${noteDictationInterim}"`
+                        : 'Listening... speak your note hands-free'}
+                    </span>
+                  </div>
+                )}
                 <textarea
                   name="noteBody"
-                  rows={4}
-                  defaultValue={editingNote?.body || ''}
-                  placeholder="Write details..."
+                  rows={5}
+                  value={noteFormBody}
+                  onChange={(e) => setNoteFormBody(e.target.value)}
+                  placeholder={
+                    noteFormIsChecklist
+                      ? '2 gal Sherwin-Williams Cashmere Eggshell\n3 rolls FrogTape 1.5"\nMasking paper & drop cloths'
+                      : 'Write details or tap 🎤 Voice Dictate...'
+                  }
                   className="w-full bg-[var(--bg)] border border-[var(--border)] focus:border-[var(--accent)] text-[var(--text)] rounded-xl p-2.5 text-xs outline-none"
                 />
               </div>
@@ -2785,9 +3070,13 @@ export default function App() {
                 <button
                   type="button"
                   onClick={() => {
+                    stopNoteDictation();
                     setNoteModalOpen(false);
                     setEditingNote(null);
                     setNoteFormDueAt('');
+                    setNoteFormBody('');
+                    setNoteFormIsChecklist(false);
+                    setNoteFormLinkedCustomerId('');
                   }}
                   className="flex-1 py-2 bg-[var(--surface-subtle)] text-[var(--text)] rounded-xl text-xs font-bold border border-[var(--border)] cursor-pointer"
                 >

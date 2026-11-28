@@ -9,6 +9,8 @@ import {
   parseLocalDateMs,
   formatScheduledDate,
   getLocalTodayIso,
+  resolveJobScheduledDate,
+  resolveEarliestCustomerScheduledDate,
 } from '../utils/projectHelpers';
 
 interface DashboardViewProps {
@@ -73,16 +75,14 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
     );
   }, [customers, q]);
 
-  // Helper: earliest upcoming scheduled date for a customer (strictly excludes Completed/Paid jobs)
+  // Helper: earliest valid scheduled date across customer & all non-completed child projects/estimates
   const getCustomerNextSchedDate = (c: Customer): string => {
-    const datedJobs = (c.jobs || [])
-      .filter((j) => isJobEligibleForScheduledList(c, j) && Boolean(j.schedDate?.trim()))
-      .sort((a, b) => {
-        const msA = parseLocalDateMs(a.schedDate) ?? Number.MAX_SAFE_INTEGER;
-        const msB = parseLocalDateMs(b.schedDate) ?? Number.MAX_SAFE_INTEGER;
-        return msA - msB;
-      });
-    return datedJobs.length > 0 ? datedJobs[0].schedDate : '';
+    const upcoming = resolveEarliestCustomerScheduledDate(c, {
+      todayMs,
+      excludePast: true,
+    });
+    if (upcoming.schedDate) return upcoming.schedDate;
+    return resolveEarliestCustomerScheduledDate(c).schedDate;
   };
 
   // Group filtered customers into the 4 clean pipeline stages + independent Pinned list
@@ -156,7 +156,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
   }, [customers]);
 
   // Strictly chronologically sorted Scheduled Jobs Quick List (soonest upcoming date first)
-  // Excludes Complete/Completed/Paid jobs and any scheduled dates that have already passed
+  // Resolves dates across customer.schedDate/scheduledDate/startDate AND all child jobs/projects/estimates
   const chronologicalScheduledJobs = useMemo<ScheduledQuickItem[]>(() => {
     const items: ScheduledQuickItem[] = [];
 
@@ -174,8 +174,15 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
       );
 
       if (custSchedJobs.length > 0) {
+        const earliestCustomerFallback = resolveEarliestCustomerScheduledDate(cust, {
+          todayMs,
+          excludePast: true,
+        });
+
         custSchedJobs.forEach((job) => {
-          const startMs = parseLocalDateMs(job.schedDate);
+          const resolvedDate =
+            resolveJobScheduledDate(job, cust) || earliestCustomerFallback.schedDate;
+          const startMs = parseLocalDateMs(resolvedDate);
           // Strictly remove any job whose scheduled date has already passed
           if (startMs !== null && startMs < todayMs) {
             return;
@@ -184,7 +191,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
             key: `${cust.id}-${job.id}`,
             customer: cust,
             job,
-            schedDate: job.schedDate || '',
+            schedDate: resolvedDate,
             sortMs: startMs,
           });
         });
@@ -193,11 +200,24 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
           (cust.jobs || []).length > 0 &&
           (cust.jobs || []).every((j) => isJobCompletedOrPaid(j.status));
         if (!allDone) {
+          // Resolve earliest valid scheduled date across ALL fields on customer + child jobs/projects/estimates
+          const earliestUpcoming = resolveEarliestCustomerScheduledDate(cust, {
+            todayMs,
+            excludePast: true,
+          });
+          const earliestAny = resolveEarliestCustomerScheduledDate(cust);
+
+          // If all dates on this customer have already passed, skip showing stale past items
+          if (!earliestUpcoming.schedDate && earliestAny.sortMs !== null && earliestAny.sortMs < todayMs) {
+            return;
+          }
+
           items.push({
             key: `${cust.id}-override`,
             customer: cust,
-            schedDate: '',
-            sortMs: null,
+            job: earliestUpcoming.job || (cust.jobs || []).find((j) => !isJobCompletedOrPaid(j.status)),
+            schedDate: earliestUpcoming.schedDate,
+            sortMs: earliestUpcoming.sortMs,
           });
         }
       }
@@ -729,7 +749,10 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
       </div>
 
       {/* Scheduled Jobs Quick List — Strictly Chronological with Exact Dates */}
-      <div className="mt-4 bg-[var(--surface)] border border-[#0a84ff]/40 rounded-xl p-3.5 shadow-sm">
+      <div
+        data-scheduled-quick-list="true"
+        className="mt-4 bg-[var(--surface)] border border-[#0a84ff]/40 rounded-xl p-3.5 shadow-sm"
+      >
         <div className="flex items-center justify-between gap-2 mb-2.5">
           <div className="flex items-center gap-2">
             <span className="text-sm">📅</span>

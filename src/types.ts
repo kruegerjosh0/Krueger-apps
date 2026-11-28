@@ -90,6 +90,8 @@ export interface JobProject {
   rtMiles: number;
   workDays: number;
   schedDate: string;
+  scheduledDate?: string;
+  startDate?: string;
   schedEndDate: string;
   clientSig?: string;
   googleEventId?: string;
@@ -108,6 +110,9 @@ export interface Customer {
   email: string;
   notes: string;
   statusOverride: string;
+  schedDate?: string;
+  scheduledDate?: string;
+  startDate?: string;
   isPinned?: boolean;
   files: CustomerFile[];
   jobs: JobProject[];
@@ -141,6 +146,8 @@ export interface FieldNote {
   completed?: boolean;
   snoozedUntil?: number;
   alertedAt?: number;
+  isChecklist?: boolean;
+  linkedCustomerId?: number;
 }
 
 export interface MileageEntry {

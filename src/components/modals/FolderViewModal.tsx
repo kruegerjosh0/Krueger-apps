@@ -13,6 +13,7 @@ import {
   PIPELINE_STAGE_META,
   normalizePipelineStage,
   formatScheduledDate,
+  resolveJobScheduledDate,
   getEstimateSnapshot,
   getFinalBillSnapshot,
   computeSnapshotTotals,
@@ -70,19 +71,19 @@ export const FolderViewModal: React.FC<FolderViewModalProps> = ({
       ? normalizePipelineStage(customer.statusOverride)
       : 'AUTO';
 
-  const [name, setName] = useState(customer.name);
-  const [address, setAddress] = useState(customer.address);
-  const [phone, setPhone] = useState(customer.phone);
-  const [email, setEmail] = useState(customer.email);
-  const [notes, setNotes] = useState(customer.notes);
+  const [name, setName] = useState(customer.name || '');
+  const [address, setAddress] = useState(customer.address || '');
+  const [phone, setPhone] = useState(customer.phone || '');
+  const [email, setEmail] = useState(customer.email || '');
+  const [notes, setNotes] = useState(customer.notes || '');
   const [statusOverride, setStatusOverride] = useState(normalizedOverride);
 
   useEffect(() => {
-    setName(customer.name);
-    setAddress(customer.address);
-    setPhone(customer.phone);
-    setEmail(customer.email);
-    setNotes(customer.notes);
+    setName(customer.name || '');
+    setAddress(customer.address || '');
+    setPhone(customer.phone || '');
+    setEmail(customer.email || '');
+    setNotes(customer.notes || '');
     setStatusOverride(
       customer.statusOverride && customer.statusOverride !== 'AUTO'
         ? normalizePipelineStage(customer.statusOverride)
@@ -429,10 +430,11 @@ export const FolderViewModal: React.FC<FolderViewModalProps> = ({
               const billSnap = getFinalBillSnapshot(j);
               const billTotals = billSnap ? computeSnapshotTotals(billSnap) : null;
 
-              const dateRange = j.schedDate
-                ? j.schedEndDate && j.schedEndDate !== j.schedDate
-                  ? `${formatScheduledDate(j.schedDate)} ➔ ${formatScheduledDate(j.schedEndDate)}`
-                  : formatScheduledDate(j.schedDate)
+              const resolvedJobDate = resolveJobScheduledDate(j);
+              const dateRange = resolvedJobDate
+                ? j.schedEndDate && j.schedEndDate !== resolvedJobDate
+                  ? `${formatScheduledDate(resolvedJobDate)} ➔ ${formatScheduledDate(j.schedEndDate)}`
+                  : formatScheduledDate(resolvedJobDate)
                 : 'No Date Set';
 
               const handleFinalBillPdf = (action: 'OPEN' | 'DOWNLOAD') => {

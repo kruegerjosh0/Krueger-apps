@@ -25,6 +25,7 @@ import firebaseConfig from '../../firebase-applet-config.json';
 import {
   Customer,
   FieldNote,
+  NoteFolder,
   ExpenseEntry,
   MileageEntry,
   ShoppingItem,
@@ -282,6 +283,7 @@ function getLegacySingleDocRef(userId: string) {
 
 export interface CloudAppMetaPayload {
   notes: FieldNote[];
+  noteFolders?: NoteFolder[];
   expenses: ExpenseEntry[];
   mileage: MileageEntry[];
   shoppingList: ShoppingItem[];
@@ -312,6 +314,7 @@ export interface CloudCustomerRecord {
 export interface CloudWorkspacePayload {
   customers: Customer[];
   notes: FieldNote[];
+  noteFolders?: NoteFolder[];
   expenses: ExpenseEntry[];
   mileage: MileageEntry[];
   shoppingList: ShoppingItem[];
@@ -422,6 +425,9 @@ export function buildAppMetaCloudDocData(
     deviceId: getOrCreateDeviceId(),
     deviceLabel: getDeviceLabel(),
     notesJson: JSON.stringify(meta.notes || []),
+    ...(Array.isArray(meta.noteFolders)
+      ? { noteFoldersJson: JSON.stringify(meta.noteFolders) }
+      : {}),
     expensesJson: JSON.stringify(meta.expenses || []),
     mileageJson: JSON.stringify(meta.mileage || []),
     shoppingJson: JSON.stringify(meta.shoppingList || []),
@@ -474,6 +480,7 @@ export function calculateMasterCloudStorageStats(
     userId,
     {
       notes: payload.notes || [],
+      noteFolders: payload.noteFolders,
       expenses: payload.expenses || [],
       mileage: payload.mileage || [],
       shoppingList: payload.shoppingList || [],
@@ -579,6 +586,7 @@ function parseAppMetaCloudDoc(d: Record<string, any>): CloudAppMetaPayload {
 
   return {
     notes: d.notesJson ? JSON.parse(d.notesJson) : [],
+    noteFolders: d.noteFoldersJson ? JSON.parse(d.noteFoldersJson) : undefined,
     expenses: d.expensesJson ? JSON.parse(d.expensesJson) : [],
     mileage: d.mileageJson ? JSON.parse(d.mileageJson) : [],
     shoppingList: d.shoppingJson ? JSON.parse(d.shoppingJson) : [],

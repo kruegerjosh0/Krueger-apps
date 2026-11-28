@@ -122,12 +122,25 @@ export interface Customer {
   calendarUpdatedAt?: number;
 }
 
+export interface NoteFolder {
+  id: string;
+  name: string;
+  icon?: string;
+  isBuiltIn?: boolean;
+}
+
 export interface FieldNote {
   id: number;
   title: string;
   category: string;
   body: string;
   date: string;
+  folderId?: string;
+  pinned?: boolean;
+  dueAt?: string;
+  completed?: boolean;
+  snoozedUntil?: number;
+  alertedAt?: number;
 }
 
 export interface MileageEntry {

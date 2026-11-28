@@ -7,6 +7,7 @@ import {
   RoomArea,
   RepairItem,
   FieldNote,
+  NoteFolder,
   MileageEntry,
   ExpenseEntry,
   ShoppingItem,
@@ -18,6 +19,18 @@ import {
   WeatherCondition,
   SupplyStopPin,
 } from './types';
+import {
+  DEFAULT_NOTE_FOLDERS,
+  BUILT_IN_FOLDER_IDS,
+  normalizeNoteFolders,
+  normalizeFieldNote,
+  inferDefaultFolderId,
+  isNoteActionNeeded,
+  isNoteAlertDueNow,
+  formatNoteDueLabel,
+  playReminderChime,
+  downloadNoteReminderIcs,
+} from './utils/noteHelpers';
 import {
   loadRecord,
   saveRecord,
@@ -141,6 +154,7 @@ function buildCustomerFingerprint(customer: Customer): string {
 
 function buildMetaFingerprint(data: {
   notes: FieldNote[];
+  noteFolders: NoteFolder[];
   expenses: ExpenseEntry[];
   mileage: MileageEntry[];
   shoppingList: ShoppingItem[];
@@ -164,9 +178,16 @@ export default function App() {
       jobs: Array.isArray(c.jobs) ? c.jobs.map(normalizeLegacyJob) : [],
     }));
   });
+  const [noteFolders, setNoteFolders] = useState<NoteFolder[]>(() => {
+    const cached = readLocalCacheSync<NoteFolder[]>('KMaster_NoteFolders', DEFAULT_NOTE_FOLDERS);
+    return normalizeNoteFolders(cached);
+  });
   const [notes, setNotes] = useState<FieldNote[]>(() => {
+    const cachedFolders = normalizeNoteFolders(
+      readLocalCacheSync<NoteFolder[]>('KMaster_NoteFolders', DEFAULT_NOTE_FOLDERS)
+    );
     const cached = readLocalCacheSync<FieldNote[]>('KMaster_Notes', []);
-    return Array.isArray(cached) ? cached : [];
+    return Array.isArray(cached) ? cached.map((n) => normalizeFieldNote(n, cachedFolders)) : [];
   });
   const [expenses, setExpenses] = useState<ExpenseEntry[]>(() => {
     const cached = readLocalCacheSync<ExpenseEntry[]>('KMaster_Exp', []);
@@ -240,6 +261,7 @@ export default function App() {
   const workspaceSnapshotRef = useRef({
     customers,
     notes,
+    noteFolders,
     expenses,
     mileage,
     shoppingList,
@@ -251,6 +273,7 @@ export default function App() {
   workspaceSnapshotRef.current = {
     customers,
     notes,
+    noteFolders,
     expenses,
     mileage,
     shoppingList,
@@ -300,6 +323,11 @@ export default function App() {
 
   const [editingNote, setEditingNote] = useState<FieldNote | null>(null);
   const [noteModalOpen, setNoteModalOpen] = useState(false);
+  const [noteModalDefaultFolderId, setNoteModalDefaultFolderId] = useState<string>('job-estimate');
+  const [noteFormDueAt, setNoteFormDueAt] = useState<string>('');
+  const [activeReminderNoteId, setActiveReminderNoteId] = useState<number | null>(null);
+  const [reminderNowMs, setReminderNowMs] = useState<number>(() => Date.now());
+  const lastChimedKeyRef = useRef<string | null>(null);
   const [cloudSyncOpen, setCloudSyncOpen] = useState(false);
   const [letterheadOpen, setLetterheadOpen] = useState(false);
   const [calendarSyncOpen, setCalendarSyncOpen] = useState(false);
@@ -455,6 +483,11 @@ export default function App() {
 
       let activeCustomers = await loadRecord<Customer[]>('KMaster_C', []);
       activeCustomers = await runOneTimeDemoDataPurge(activeCustomers);
+      const loadedNoteFolders = await loadRecord<NoteFolder[]>(
+        'KMaster_NoteFolders',
+        DEFAULT_NOTE_FOLDERS
+      );
+      const activeNoteFolders = normalizeNoteFolders(loadedNoteFolders);
       let activeNotes = await loadRecord<FieldNote[]>('KMaster_Notes', []);
       let activeExpenses = await loadRecord<ExpenseEntry[]>('KMaster_Exp', []);
       let activeMileage = await loadRecord<MileageEntry[]>('KMaster_Mil', []);
@@ -512,9 +545,13 @@ export default function App() {
         jobs: Array.isArray(c.jobs) ? c.jobs.map(normalizeLegacyJob) : [],
       }));
 
+      const normalizedNotes = Array.isArray(activeNotes)
+        ? activeNotes.map((n) => normalizeFieldNote(n, activeNoteFolders))
+        : [];
       const normalizedCustomPins = Array.isArray(activeCustomPins) ? activeCustomPins : [];
       setCustomers(activeCustomers);
-      setNotes(activeNotes);
+      setNoteFolders(activeNoteFolders);
+      setNotes(normalizedNotes);
       setExpenses(activeExpenses);
       setMileage(activeMileage);
       setShoppingList(activeShopping);
@@ -530,7 +567,8 @@ export default function App() {
       });
       customerFingerprintsRef.current = initCustomerFp;
       metaFingerprintRef.current = buildMetaFingerprint({
-        notes: activeNotes,
+        notes: normalizedNotes,
+        noteFolders: activeNoteFolders,
         expenses: activeExpenses,
         mileage: activeMileage,
         shoppingList: activeShopping,
@@ -590,9 +628,13 @@ export default function App() {
             }))
           : currentLocal.customers;
 
+        const nextNoteFolders =
+          params.applyMeta && params.meta && Array.isArray(params.meta.noteFolders)
+            ? normalizeNoteFolders(params.meta.noteFolders)
+            : currentLocal.noteFolders;
         const nextNotes =
           params.applyMeta && params.meta && Array.isArray(params.meta.notes)
-            ? params.meta.notes
+            ? params.meta.notes.map((n) => normalizeFieldNote(n, nextNoteFolders))
             : currentLocal.notes;
         const nextExpenses =
           params.applyMeta && params.meta && Array.isArray(params.meta.expenses)
@@ -631,6 +673,7 @@ export default function App() {
 
         metaFingerprintRef.current = buildMetaFingerprint({
           notes: nextNotes,
+          noteFolders: nextNoteFolders,
           expenses: nextExpenses,
           mileage: nextMileage,
           shoppingList: nextShopping,
@@ -643,6 +686,7 @@ export default function App() {
         workspaceSnapshotRef.current = {
           customers: nextCustomers,
           notes: nextNotes,
+          noteFolders: nextNoteFolders,
           expenses: nextExpenses,
           mileage: nextMileage,
           shoppingList: nextShopping,
@@ -661,6 +705,7 @@ export default function App() {
         }
 
         if (params.applyMeta) {
+          setNoteFolders(nextNoteFolders);
           setNotes(nextNotes);
           setExpenses(nextExpenses);
           setMileage(nextMileage);
@@ -677,6 +722,7 @@ export default function App() {
         }
         if (params.applyMeta) {
           saves.push(
+            saveRecord('KMaster_NoteFolders', nextNoteFolders),
             saveRecord('KMaster_Notes', nextNotes),
             saveRecord('KMaster_Exp', nextExpenses),
             saveRecord('KMaster_Mil', nextMileage),
@@ -854,6 +900,7 @@ export default function App() {
       const localMetaTs = localMetaLastUpdatedRef.current;
       const hasLocalMetaData =
         snap.notes.length > 0 ||
+        snap.noteFolders.some((f) => !f.isBuiltIn) ||
         snap.mileage.length > 0 ||
         snap.expenses.length > 0 ||
         snap.shoppingList.length > 0 ||
@@ -918,6 +965,7 @@ export default function App() {
           activeUser.uid,
           {
             notes: latestSnap.notes,
+            noteFolders: latestSnap.noteFolders,
             expenses: latestSnap.expenses,
             mileage: latestSnap.mileage,
             shoppingList: latestSnap.shoppingList,
@@ -1053,12 +1101,13 @@ export default function App() {
     persistPendingSyncState();
   }, [isLocalHydrated, customers, persistPendingSyncState]);
 
-  // Locally track global appState edits (notes, mileage, expenses, shopping, price book, pins, settings, constants)
+  // Locally track global appState edits (notes, noteFolders, mileage, expenses, shopping, price book, pins, settings, constants)
   useEffect(() => {
     if (!isLocalHydrated) return;
 
     const currentMetaFp = buildMetaFingerprint({
       notes,
+      noteFolders,
       expenses,
       mileage,
       shoppingList,
@@ -1088,6 +1137,7 @@ export default function App() {
   }, [
     isLocalHydrated,
     notes,
+    noteFolders,
     expenses,
     mileage,
     shoppingList,
@@ -1138,6 +1188,7 @@ export default function App() {
         {
           customers,
           notes,
+          noteFolders,
           expenses,
           mileage,
           shoppingList,
@@ -1152,6 +1203,7 @@ export default function App() {
     [
       customers,
       notes,
+      noteFolders,
       expenses,
       mileage,
       shoppingList,
@@ -1951,20 +2003,53 @@ export default function App() {
     reader.readAsText(file);
   };
 
-  // Field Notes Helpers
+  // Field Notes, Folders & Reminder Helpers
   const handleSaveNote = (noteData: Partial<FieldNote>) => {
     const dateStr = `${new Date().toLocaleDateString()} ${new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
+    const chosenFolderId =
+      noteData.folderId ||
+      editingNote?.folderId ||
+      noteModalDefaultFolderId ||
+      noteFolders[0]?.id ||
+      'job-estimate';
+    const chosenFolder = noteFolders.find((f) => f.id === chosenFolderId);
+    const cleanDueAt =
+      typeof noteData.dueAt === 'string' && noteData.dueAt.trim()
+        ? noteData.dueAt.trim()
+        : undefined;
+
     let updated: FieldNote[];
     if (editingNote) {
+      const dueChanged = (editingNote.dueAt || undefined) !== cleanDueAt;
       updated = notes.map((n) =>
-        n.id === editingNote.id ? { ...n, ...noteData, date: dateStr } as FieldNote : n
+        n.id === editingNote.id
+          ? ({
+              ...n,
+              ...noteData,
+              folderId: chosenFolderId,
+              category: chosenFolder?.name || noteData.category || n.category || 'Notes',
+              dueAt: cleanDueAt,
+              pinned: noteData.pinned !== undefined ? Boolean(noteData.pinned) : Boolean(n.pinned),
+              completed:
+                noteData.completed !== undefined
+                  ? Boolean(noteData.completed)
+                  : Boolean(n.completed),
+              // Reset snooze/alert markers when due date is updated so the new time chimes cleanly
+              ...(dueChanged ? { snoozedUntil: undefined, alertedAt: undefined } : {}),
+              date: dateStr,
+            } as FieldNote)
+          : n
       );
     } else {
       const newN: FieldNote = {
         id: Date.now(),
         title: noteData.title || 'Untitled Note',
-        category: noteData.category || 'General Reminder',
+        category: chosenFolder?.name || noteData.category || 'Notes',
+        folderId: chosenFolderId,
         body: noteData.body || '',
+        pinned: Boolean(noteData.pinned),
+        dueAt: cleanDueAt,
+        completed: Boolean(noteData.completed),
         date: dateStr,
       };
       updated = [newN, ...notes];
@@ -1973,20 +2058,182 @@ export default function App() {
     saveRecord('KMaster_Notes', updated);
     setNoteModalOpen(false);
     setEditingNote(null);
+    setNoteFormDueAt('');
     showToast('✔ Note Saved');
   };
+
+  const handleTogglePinNote = (id: number) => {
+    const updated = notes.map((n) => (n.id === id ? { ...n, pinned: !n.pinned } : n));
+    setNotes(updated);
+    saveRecord('KMaster_Notes', updated);
+  };
+
+  const handleToggleCompleteNote = (id: number) => {
+    const updated = notes.map((n) =>
+      n.id === id
+        ? {
+            ...n,
+            completed: !n.completed,
+            snoozedUntil: undefined,
+            alertedAt: !n.completed ? Date.now() : n.alertedAt,
+          }
+        : n
+    );
+    setNotes(updated);
+    saveRecord('KMaster_Notes', updated);
+    if (activeReminderNoteId === id) {
+      setActiveReminderNoteId(null);
+    }
+  };
+
+  const handleSnoozeReminder = (id: number, minutes: number) => {
+    const snoozeUntil = Date.now() + minutes * 60 * 1000;
+    const updated = notes.map((n) =>
+      n.id === id
+        ? {
+            ...n,
+            snoozedUntil: snoozeUntil,
+            alertedAt: Date.now(),
+          }
+        : n
+    );
+    setNotes(updated);
+    saveRecord('KMaster_Notes', updated);
+    setActiveReminderNoteId(null);
+    lastChimedKeyRef.current = null;
+    showToast(`⏰ Reminder snoozed +${minutes >= 60 ? '1 hr' : `${minutes} min`}`);
+  };
+
+  const handleDismissReminder = (id: number) => {
+    const updated = notes.map((n) =>
+      n.id === id ? { ...n, alertedAt: Date.now(), snoozedUntil: undefined } : n
+    );
+    setNotes(updated);
+    saveRecord('KMaster_Notes', updated);
+    setActiveReminderNoteId(null);
+  };
+
+  const handleCreateNoteFolder = (name: string): NoteFolder | null => {
+    const clean = name.trim();
+    if (!clean) return null;
+    const exists = noteFolders.find((f) => f.name.toLowerCase() === clean.toLowerCase());
+    if (exists) {
+      showToast(`Folder "${exists.name}" already exists`);
+      return exists;
+    }
+    const slug = clean
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-|-$/g, '')
+      .slice(0, 24);
+    const created: NoteFolder = {
+      id: `folder-${slug || 'custom'}-${Date.now().toString(36)}`,
+      name: clean,
+      icon: '📂',
+      isBuiltIn: false,
+    };
+    const updated = [...noteFolders, created];
+    setNoteFolders(updated);
+    saveRecord('KMaster_NoteFolders', updated);
+    showToast(`✔ Created folder "${clean}"`);
+    return created;
+  };
+
+  const handleRenameNoteFolder = (folderId: string, newName: string) => {
+    const clean = newName.trim();
+    if (!clean) return;
+    const updatedFolders = noteFolders.map((f) =>
+      f.id === folderId ? { ...f, name: clean } : f
+    );
+    setNoteFolders(updatedFolders);
+    saveRecord('KMaster_NoteFolders', updatedFolders);
+
+    const updatedNotes = notes.map((n) =>
+      n.folderId === folderId ? { ...n, category: clean } : n
+    );
+    setNotes(updatedNotes);
+    saveRecord('KMaster_Notes', updatedNotes);
+    showToast(`✔ Renamed folder to "${clean}"`);
+  };
+
+  const handleDeleteNoteFolder = (folderId: string) => {
+    if (BUILT_IN_FOLDER_IDS.has(folderId)) {
+      showToast('Built-in starter folders cannot be deleted');
+      return;
+    }
+    const target = noteFolders.find((f) => f.id === folderId);
+    if (!target) return;
+    if (!confirm(`Delete folder "${target.name}"? Notes inside will be moved to Business / Admin.`)) {
+      return;
+    }
+    const updatedFolders = noteFolders.filter((f) => f.id !== folderId);
+    setNoteFolders(updatedFolders);
+    saveRecord('KMaster_NoteFolders', updatedFolders);
+
+    const fallbackFolderId = 'business-admin';
+    const fallbackName =
+      updatedFolders.find((f) => f.id === fallbackFolderId)?.name || 'Business / Admin';
+    const updatedNotes = notes.map((n) =>
+      n.folderId === folderId ? { ...n, folderId: fallbackFolderId, category: fallbackName } : n
+    );
+    setNotes(updatedNotes);
+    saveRecord('KMaster_Notes', updatedNotes);
+    showToast(`Deleted folder "${target.name}"`);
+  };
+
+  // Global 30-second Due-Date Reminder Checker (fires audible Web Audio chime & alert banner)
+  useEffect(() => {
+    const checkDueReminders = () => {
+      const now = Date.now();
+      setReminderNowMs(now);
+      const dueNote = notes.find((n) => isNoteAlertDueNow(n, now));
+      if (dueNote) {
+        const chimeKey = `${dueNote.id}:${dueNote.dueAt || ''}:${dueNote.snoozedUntil || 0}`;
+        setActiveReminderNoteId(dueNote.id);
+        if (lastChimedKeyRef.current !== chimeKey) {
+          lastChimedKeyRef.current = chimeKey;
+          playReminderChime();
+        }
+      } else {
+        setActiveReminderNoteId((prev) => {
+          if (prev === null) return null;
+          const stillDue = notes.some((n) => n.id === prev && isNoteAlertDueNow(n, now));
+          return stillDue ? prev : null;
+        });
+      }
+    };
+
+    checkDueReminders();
+    const interval = window.setInterval(checkDueReminders, 30000);
+    return () => window.clearInterval(interval);
+  }, [notes]);
+
+  const activeReminderNote = useMemo(() => {
+    if (activeReminderNoteId === null) return null;
+    return notes.find((n) => n.id === activeReminderNoteId && !n.completed) || null;
+  }, [activeReminderNoteId, notes]);
+
+  const dueNotesBadgeCount = useMemo(() => {
+    return notes.filter((n) => isNoteActionNeeded(n, reminderNowMs)).length;
+  }, [notes, reminderNowMs]);
 
   const handleDeleteNote = (id: number) => {
     if (confirm('Delete this note?')) {
       const updated = notes.filter((n) => n.id !== id);
       setNotes(updated);
       saveRecord('KMaster_Notes', updated);
+      if (activeReminderNoteId === id) {
+        setActiveReminderNoteId(null);
+      }
       showToast('Note Deleted');
     }
   };
 
   const handleShareNote = async (note: FieldNote) => {
-    const text = `[${note.category}] ${note.title}\n\n${note.body}\n\n- Krueger Painting Field Notes`;
+    const folderName =
+      noteFolders.find((f) => f.id === inferDefaultFolderId(note))?.name || note.category;
+    const dueLine = note.dueAt ? `\nDue: ${formatNoteDueLabel(note.dueAt)}` : '';
+    const text = `[${folderName}] ${note.title}${dueLine}\n\n${note.body}\n\n- Krueger Painting Field Notes`;
     if (navigator.share) {
       try {
         await navigator.share({ title: note.title, text });
@@ -2129,6 +2376,70 @@ export default function App() {
         onOpenCloudSync={() => setCloudSyncOpen(true)}
       />
 
+      {/* Global In-App Due Reminder Alert Banner (30s checker + Web Audio chime) */}
+      {activeReminderNote && (
+        <div
+          data-reminder-alert-banner="true"
+          className="sticky top-14 z-40 mx-auto max-w-4xl px-2 sm:px-4 pt-2"
+        >
+          <div className="bg-[#1b1218] border-2 border-rose-500 rounded-2xl px-3.5 py-2.5 shadow-2xl flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
+            <div className="min-w-0">
+              <div className="flex items-center gap-1.5">
+                <span className="text-base">🔔</span>
+                <span className="text-[10px] font-black uppercase tracking-wider text-rose-300">
+                  Reminder Due Now
+                </span>
+                {activeReminderNote.dueAt && (
+                  <span className="text-[10px] font-bold text-amber-300">
+                    • {formatNoteDueLabel(activeReminderNote.dueAt, reminderNowMs)}
+                  </span>
+                )}
+              </div>
+              <div className="text-xs sm:text-sm font-black text-white truncate mt-0.5">
+                {activeReminderNote.title}
+              </div>
+              {activeReminderNote.body && (
+                <p className="text-[11px] text-slate-300 line-clamp-1">
+                  {activeReminderNote.body}
+                </p>
+              )}
+            </div>
+
+            <div className="flex flex-wrap items-center gap-1.5 shrink-0">
+              <button
+                type="button"
+                onClick={() => handleSnoozeReminder(activeReminderNote.id, 15)}
+                className="px-2.5 py-1.5 rounded-lg bg-amber-500/20 hover:bg-amber-500/30 border border-amber-400/60 text-amber-200 text-[10.5px] font-black cursor-pointer"
+              >
+                +15 min
+              </button>
+              <button
+                type="button"
+                onClick={() => handleSnoozeReminder(activeReminderNote.id, 60)}
+                className="px-2.5 py-1.5 rounded-lg bg-sky-500/20 hover:bg-sky-500/30 border border-sky-400/60 text-sky-200 text-[10.5px] font-black cursor-pointer"
+              >
+                +1 hr
+              </button>
+              <button
+                type="button"
+                onClick={() => handleToggleCompleteNote(activeReminderNote.id)}
+                className="px-2.5 py-1.5 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-[10.5px] font-black cursor-pointer"
+              >
+                ✓ Done
+              </button>
+              <button
+                type="button"
+                onClick={() => handleDismissReminder(activeReminderNote.id)}
+                aria-label="Dismiss reminder"
+                className="px-2 py-1.5 rounded-lg bg-slate-800 border border-slate-700 text-slate-300 hover:text-white text-[10.5px] font-bold cursor-pointer"
+              >
+                Dismiss
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Main Tab Content */}
       <main className="p-2 sm:p-4 max-w-4xl mx-auto w-full overflow-x-hidden">
         {activeTab === 'dash' && (
@@ -2180,15 +2491,24 @@ export default function App() {
         {activeTab === 'notes' && (
           <NotesView
             notes={notes}
+            noteFolders={noteFolders}
             constants={constants}
-            onOpenNoteModal={(note) => {
+            onOpenNoteModal={(note, defaultFolderId) => {
               setEditingNote(note || null);
+              setNoteModalDefaultFolderId(
+                note?.folderId || defaultFolderId || noteFolders[0]?.id || 'job-estimate'
+              );
+              setNoteFormDueAt(note?.dueAt || '');
               setNoteModalOpen(true);
             }}
+            onTogglePinNote={handleTogglePinNote}
+            onToggleCompleteNote={handleToggleCompleteNote}
             onDeleteNote={handleDeleteNote}
             onShareNote={handleShareNote}
             onSendNoteToEstimator={handleSendNoteToEstimator}
-            onSaveNote={handleSaveNote}
+            onCreateFolder={handleCreateNoteFolder}
+            onRenameFolder={handleRenameNoteFolder}
+            onDeleteFolder={handleDeleteNoteFolder}
             onToast={showToast}
           />
         )}
@@ -2212,7 +2532,11 @@ export default function App() {
       </main>
 
       {/* Bottom Navigation */}
-      <Navigation activeTab={activeTab} onTabChange={setActiveTab} />
+      <Navigation
+        activeTab={activeTab}
+        onTabChange={setActiveTab}
+        notesDueBadgeCount={dueNotesBadgeCount}
+      />
 
       {/* MODALS */}
 
@@ -2280,7 +2604,7 @@ export default function App() {
       {/* Note Editor Modal */}
       {noteModalOpen && (
         <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-sm flex items-center justify-center p-2.5 sm:p-4 animate-in fade-in">
-          <div className="bg-[var(--surface)] border border-[var(--border)] rounded-2xl w-full max-w-md p-3.5 sm:p-5 shadow-2xl space-y-3">
+          <div className="bg-[var(--surface)] border border-[var(--border)] rounded-2xl w-full max-w-md p-3.5 sm:p-5 shadow-2xl space-y-3 max-h-[92vh] overflow-y-auto">
             <div className="flex items-center justify-between border-b border-[var(--border)] pb-2.5">
               <h3 className="font-extrabold text-sm text-[var(--accent)]">
                 {editingNote ? 'Edit Field Note' : 'New Field Note'}
@@ -2290,26 +2614,40 @@ export default function App() {
                 onClick={() => {
                   setNoteModalOpen(false);
                   setEditingNote(null);
+                  setNoteFormDueAt('');
                 }}
-                className="text-xs font-bold text-[var(--text-muted)]"
+                className="text-xs font-bold text-[var(--text-muted)] cursor-pointer"
               >
                 ✕
               </button>
             </div>
 
             <form
+              key={editingNote ? `edit-note-${editingNote.id}` : `new-note-${noteModalDefaultFolderId}`}
               onSubmit={(e) => {
                 e.preventDefault();
                 const form = e.target as HTMLFormElement;
                 const titleVal = (form.elements.namedItem('noteTitle') as HTMLInputElement).value;
-                const catVal = (form.elements.namedItem('noteCat') as HTMLSelectElement).value;
+                const folderIdVal = (form.elements.namedItem('noteFolderId') as HTMLSelectElement)
+                  .value;
                 const bodyVal = (form.elements.namedItem('noteBody') as HTMLTextAreaElement).value;
-                handleSaveNote({ title: titleVal, category: catVal, body: bodyVal });
+                const pinnedVal = (form.elements.namedItem('notePinned') as HTMLInputElement)
+                  .checked;
+                const completedVal = (form.elements.namedItem('noteCompleted') as HTMLInputElement)
+                  .checked;
+                handleSaveNote({
+                  title: titleVal,
+                  folderId: folderIdVal,
+                  body: bodyVal,
+                  dueAt: noteFormDueAt.trim() || undefined,
+                  pinned: pinnedVal,
+                  completed: completedVal,
+                });
               }}
               className="space-y-2.5"
             >
               <div>
-                <label className="text-[8px] uppercase font-bold text-[var(--text-muted)] block mb-1">
+                <label className="text-[9px] uppercase font-extrabold text-[var(--text-muted)] block mb-1">
                   Title / Subject
                 </label>
                 <input
@@ -2317,36 +2655,129 @@ export default function App() {
                   defaultValue={editingNote?.title || ''}
                   placeholder="e.g. Paint Run for Sherwin-Williams"
                   required
-                  className="w-full bg-[var(--bg)] border border-[var(--border)] text-[var(--text)] rounded-lg p-2 text-xs outline-none"
+                  className="w-full bg-[var(--bg)] border border-[var(--border)] focus:border-[var(--accent)] text-[var(--text)] rounded-xl p-2.5 text-xs outline-none"
                 />
               </div>
 
               <div>
-                <label className="text-[8px] uppercase font-bold text-[var(--text-muted)] block mb-1">
-                  Category
+                <label className="text-[9px] uppercase font-extrabold text-[var(--text-muted)] block mb-1">
+                  Folder
                 </label>
                 <select
-                  name="noteCat"
-                  defaultValue={editingNote?.category || 'General Reminder'}
-                  className="w-full bg-[var(--bg)] border border-[var(--border)] text-[var(--text)] rounded-lg p-2 text-xs outline-none"
+                  name="noteFolderId"
+                  defaultValue={
+                    editingNote ? inferDefaultFolderId(editingNote) : noteModalDefaultFolderId
+                  }
+                  className="w-full bg-[var(--bg)] border border-[var(--border)] focus:border-[var(--accent)] text-[var(--text)] rounded-xl p-2.5 text-xs outline-none"
                 >
-                  <option value="General Reminder">General Reminder</option>
-                  <option value="Material Run">Material Run</option>
-                  <option value="Crew Instruction">Crew Instruction</option>
-                  <option value="Job Site Idea">Job Site Idea</option>
+                  {noteFolders.map((folder) => (
+                    <option key={folder.id} value={folder.id}>
+                      {folder.icon || '📂'} {folder.name}
+                    </option>
+                  ))}
                 </select>
               </div>
 
+              {/* Optional Due Date & Time Reminder Picker */}
+              <div className="bg-[var(--bg)] border border-[var(--border)] rounded-xl p-2.5 space-y-2">
+                <div className="flex items-center justify-between gap-2">
+                  <label
+                    htmlFor="note-due-at-input"
+                    className="text-[9px] uppercase font-extrabold text-amber-300"
+                  >
+                    ⏰ Needs to be taken care of by... (Optional)
+                  </label>
+                  {noteFormDueAt && (
+                    <button
+                      type="button"
+                      onClick={() => setNoteFormDueAt('')}
+                      className="text-[10px] font-bold text-slate-400 hover:text-white cursor-pointer"
+                    >
+                      Clear
+                    </button>
+                  )}
+                </div>
+                <input
+                  id="note-due-at-input"
+                  name="noteDueAt"
+                  type="datetime-local"
+                  value={noteFormDueAt}
+                  onChange={(e) => setNoteFormDueAt(e.target.value)}
+                  className="w-full bg-[var(--surface)] border border-[var(--border)] focus:border-amber-400 text-[var(--text)] rounded-lg p-2 text-xs outline-none"
+                />
+                {noteFormDueAt && (
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      const form = e.currentTarget.form;
+                      const titleVal =
+                        (form?.elements.namedItem('noteTitle') as HTMLInputElement | null)?.value ||
+                        editingNote?.title ||
+                        'Krueger Painting Reminder';
+                      const bodyVal =
+                        (form?.elements.namedItem('noteBody') as HTMLTextAreaElement | null)
+                          ?.value ||
+                        editingNote?.body ||
+                        '';
+                      const folderIdVal =
+                        (form?.elements.namedItem('noteFolderId') as HTMLSelectElement | null)
+                          ?.value || noteModalDefaultFolderId;
+                      const folderName = noteFolders.find((f) => f.id === folderIdVal)?.name;
+                      const ok = downloadNoteReminderIcs(
+                        {
+                          id: editingNote?.id || Date.now(),
+                          title: titleVal,
+                          category: folderName || 'Notes',
+                          body: bodyVal,
+                          date: '',
+                          dueAt: noteFormDueAt,
+                        },
+                        folderName
+                      );
+                      if (ok) {
+                        showToast('🔔 Downloaded .ics alert for Phone Calendar / Alarm');
+                      }
+                    }}
+                    className="w-full py-1.5 px-2.5 rounded-lg bg-amber-500/20 hover:bg-amber-500/30 border border-amber-400/50 text-amber-200 text-[11px] font-black cursor-pointer flex items-center justify-center gap-1.5"
+                  >
+                    <span>🔔</span>
+                    <span>Add to Phone Calendar / Alarm (.ics)</span>
+                  </button>
+                )}
+              </div>
+
+              {/* Pin & Completed Toggles */}
+              <div className="grid grid-cols-2 gap-2">
+                <label className="flex items-center gap-2 bg-[var(--bg)] border border-[var(--border)] rounded-xl px-3 py-2 text-xs font-bold text-[var(--text)] cursor-pointer">
+                  <input
+                    type="checkbox"
+                    name="notePinned"
+                    defaultChecked={Boolean(editingNote?.pinned)}
+                    className="w-4 h-4 accent-amber-400 cursor-pointer"
+                  />
+                  <span>📌 Pin to top</span>
+                </label>
+                <label className="flex items-center gap-2 bg-[var(--bg)] border border-[var(--border)] rounded-xl px-3 py-2 text-xs font-bold text-[var(--text)] cursor-pointer">
+                  <input
+                    type="checkbox"
+                    name="noteCompleted"
+                    defaultChecked={Boolean(editingNote?.completed)}
+                    className="w-4 h-4 accent-emerald-500 cursor-pointer"
+                  />
+                  <span>✓ Completed</span>
+                </label>
+              </div>
+
               <div>
-                <label className="text-[8px] uppercase font-bold text-[var(--text-muted)] block mb-1">
+                <label className="text-[9px] uppercase font-extrabold text-[var(--text-muted)] block mb-1">
                   Note Body
                 </label>
                 <textarea
                   name="noteBody"
-                  rows={5}
+                  rows={4}
                   defaultValue={editingNote?.body || ''}
                   placeholder="Write details..."
-                  className="w-full bg-[var(--bg)] border border-[var(--border)] text-[var(--text)] rounded-lg p-2 text-xs outline-none"
+                  className="w-full bg-[var(--bg)] border border-[var(--border)] focus:border-[var(--accent)] text-[var(--text)] rounded-xl p-2.5 text-xs outline-none"
                 />
               </div>
 
@@ -2356,14 +2787,15 @@ export default function App() {
                   onClick={() => {
                     setNoteModalOpen(false);
                     setEditingNote(null);
+                    setNoteFormDueAt('');
                   }}
-                  className="flex-1 py-2 bg-[var(--surface-subtle)] text-[var(--text)] rounded-lg text-xs font-bold border border-[var(--border)] cursor-pointer"
+                  className="flex-1 py-2 bg-[var(--surface-subtle)] text-[var(--text)] rounded-xl text-xs font-bold border border-[var(--border)] cursor-pointer"
                 >
                   Cancel
                 </button>
                 <button
                   type="submit"
-                  className="flex-1 py-2 bg-[var(--accent-tertiary)] text-white rounded-lg text-xs font-bold shadow cursor-pointer"
+                  className="flex-1 py-2 bg-[var(--accent-tertiary)] text-white rounded-xl text-xs font-extrabold shadow cursor-pointer"
                 >
                   Save Note
                 </button>

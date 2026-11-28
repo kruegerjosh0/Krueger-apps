@@ -164,8 +164,8 @@ export const PREP_CHECKLIST_CATEGORIES: readonly PrepCategory[] = [
     icon: '🛡️',
     items: [
       {
-        label: 'Mask/tape baseboards',
-        scopeText: '- Tape and mask all baseboards',
+        label: 'Mask baseboards & pull plates',
+        scopeText: '- Tape and mask all baseboards and remove all switch and outlet plates',
       },
       {
         label: 'Mask windows & trim',
@@ -503,6 +503,9 @@ export function clearChecklistPrepLines(prepScope: string): string {
  */
 export function resolvePrepOptionScopeText(labelOrText: string): string {
   const norm = normalizePrepLine(labelOrText);
+  if (norm === 'mask/tape baseboards') {
+    return 'Tape and mask all baseboards and remove all switch and outlet plates';
+  }
   const matched = ALL_PREP_CHECKLIST_OPTIONS.find(
     (opt) => normalizePrepLine(opt.label) === norm || normalizePrepLine(opt.scopeText) === norm
   );

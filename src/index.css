@@ -88,3 +88,32 @@ body {
   color: #cbd5e1 !important;
 }
 
+@keyframes krueger-gps-pulse {
+  0% {
+    transform: translate(-50%, -50%) scale(0.75);
+    opacity: 0.85;
+  }
+  70% {
+    transform: translate(-50%, -50%) scale(2.15);
+    opacity: 0;
+  }
+  100% {
+    transform: translate(-50%, -50%) scale(2.15);
+    opacity: 0;
+  }
+}
+
+.krueger-gps-pulse-ring {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 24px;
+  height: 24px;
+  border-radius: 9999px;
+  background: rgba(56, 189, 248, 0.55);
+  border: 2px solid rgba(56, 189, 248, 0.9);
+  animation: krueger-gps-pulse 2s cubic-bezier(0.215, 0.61, 0.355, 1) infinite;
+  pointer-events: none;
+}
+
+

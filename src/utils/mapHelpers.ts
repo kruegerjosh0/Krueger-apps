@@ -745,6 +745,14 @@ export function haversineMiles(
   return 2 * R * Math.asin(Math.sqrt(a));
 }
 
+export interface RouteOriginPoint {
+  lat: number;
+  lng: number;
+  label: string;
+  address?: string;
+  isGps?: boolean;
+}
+
 export interface RouteMileageEstimate {
   oneWayMiles: number;
   roundTripMiles: number;
@@ -755,9 +763,23 @@ export interface RouteMileageEstimate {
 
 const WI_ROAD_FACTOR = 1.24;
 
+function resolveOriginPoint(origin?: RouteOriginPoint | null): RouteOriginPoint {
+  if (origin && Number.isFinite(origin.lat) && Number.isFinite(origin.lng)) {
+    return origin;
+  }
+  return {
+    lat: HOME_BASE.lat,
+    lng: HOME_BASE.lng,
+    label: HOME_BASE.name,
+    address: HOME_BASE.address,
+    isGps: false,
+  };
+}
+
 export function estimateFallbackRoute(
   stops: RouteStopItem[],
-  returnToBase: boolean
+  returnToOrigin: boolean,
+  origin?: RouteOriginPoint | null
 ): RouteMileageEstimate {
   if (stops.length === 0) {
     return {
@@ -769,8 +791,9 @@ export function estimateFallbackRoute(
     };
   }
 
+  const start = resolveOriginPoint(origin);
   const legs: [number, number][] = [
-    [HOME_BASE.lat, HOME_BASE.lng],
+    [start.lat, start.lng],
     ...stops.map((s): [number, number] => [s.lat, s.lng]),
   ];
 
@@ -781,12 +804,12 @@ export function estimateFallbackRoute(
 
   const last = legs[legs.length - 1];
   const returnLeg =
-    haversineMiles(last[0], last[1], HOME_BASE.lat, HOME_BASE.lng) * WI_ROAD_FACTOR;
+    haversineMiles(last[0], last[1], start.lat, start.lng) * WI_ROAD_FACTOR;
   const roundTrip = oneWay + returnLeg;
-  const activeMiles = returnToBase ? roundTrip : oneWay;
+  const activeMiles = returnToOrigin ? roundTrip : oneWay;
 
-  const geometryLatLngs: [number, number][] = returnToBase
-    ? [...legs, [HOME_BASE.lat, HOME_BASE.lng]]
+  const geometryLatLngs: [number, number][] = returnToOrigin
+    ? [...legs, [start.lat, start.lng]]
     : legs;
 
   return {
@@ -800,14 +823,16 @@ export function estimateFallbackRoute(
 
 export async function fetchOsrmRoadRoute(
   stops: RouteStopItem[],
-  returnToBase: boolean
+  returnToOrigin: boolean,
+  origin?: RouteOriginPoint | null
 ): Promise<RouteMileageEstimate | null> {
   if (stops.length === 0) return null;
 
+  const start = resolveOriginPoint(origin);
   const points: [number, number][] = [
-    [HOME_BASE.lat, HOME_BASE.lng],
+    [start.lat, start.lng],
     ...stops.map((s): [number, number] => [s.lat, s.lng]),
-    [HOME_BASE.lat, HOME_BASE.lng],
+    [start.lat, start.lng],
   ];
 
   const coordStr = points.map(([lat, lng]) => `${lng.toFixed(5)},${lat.toFixed(5)}`).join(';');
@@ -830,13 +855,13 @@ export async function fetchOsrmRoadRoute(
     const roundTripMiles = Math.round((totalMeters / 1609.344) * 10) / 10;
     const oneWayMiles = Math.round(((totalMeters - lastLegMeters) / 1609.344) * 10) / 10;
 
-    // If not returning to base, fetch one-way geometry cleanly or slice via second request
+    // If not returning to origin, fetch one-way geometry cleanly
     let geometryLatLngs: [number, number][] = (route.geometry.coordinates as [number, number][]).map(
       ([lng, lat]) => [lat, lng]
     );
     let activeSec = totalSec;
 
-    if (!returnToBase) {
+    if (!returnToOrigin) {
       activeSec = Math.max(60, totalSec - lastLegSec);
       const oneWayCoordStr = points
         .slice(0, -1)
@@ -993,21 +1018,29 @@ function stopToMapsQuery(stop: RouteStopItem): string {
 }
 
 /**
- * Generates an official Google Maps multi-stop driving URL starting from Home Base
- * (`2119 Barton Ave, West Bend, WI 53090`), compatible with Android/iOS Google Maps apps and web.
+ * Generates an official Google Maps multi-stop driving URL starting from either
+ * the user's current GPS location or Home Base (`2119 Barton Ave, West Bend, WI 53090`),
+ * compatible with Android/iOS Google Maps apps and web.
  */
 export function buildGoogleMapsMultiStopUrl(
   stops: RouteStopItem[],
-  returnToBase = true
+  returnToOrigin = true,
+  origin?: RouteOriginPoint | null
 ): string {
-  const origin = encodeURIComponent(HOME_BASE.address);
+  const start = resolveOriginPoint(origin);
+  const originStr =
+    !start.isGps && start.address?.trim()
+      ? start.address.trim()
+      : `${start.lat.toFixed(5)},${start.lng.toFixed(5)}`;
+  const encodedOrigin = encodeURIComponent(originStr);
+
   if (stops.length === 0) {
-    return `https://www.google.com/maps/search/?api=1&query=${origin}`;
+    return `https://www.google.com/maps/search/?api=1&query=${encodedOrigin}`;
   }
 
-  if (returnToBase) {
+  if (returnToOrigin) {
     const waypoints = stops.map((s) => encodeURIComponent(stopToMapsQuery(s))).join('|');
-    return `https://www.google.com/maps/dir/?api=1&origin=${origin}&destination=${origin}&waypoints=${waypoints}&travelmode=driving`;
+    return `https://www.google.com/maps/dir/?api=1&origin=${encodedOrigin}&destination=${encodedOrigin}&waypoints=${waypoints}&travelmode=driving`;
   }
 
   const destination = encodeURIComponent(stopToMapsQuery(stops[stops.length - 1]));
@@ -1017,7 +1050,7 @@ export function buildGoogleMapsMultiStopUrl(
       ? `&waypoints=${midStops.map((s) => encodeURIComponent(stopToMapsQuery(s))).join('|')}`
       : '';
 
-  return `https://www.google.com/maps/dir/?api=1&origin=${origin}&destination=${destination}${waypointsParam}&travelmode=driving`;
+  return `https://www.google.com/maps/dir/?api=1&origin=${encodedOrigin}&destination=${destination}${waypointsParam}&travelmode=driving`;
 }
 
 export interface DriveFromBaseEstimate {
@@ -1027,11 +1060,16 @@ export interface DriveFromBaseEstimate {
   isRoadData: boolean;
 }
 
-const driveFromBaseCache = new Map<string, DriveFromBaseEstimate>();
+const driveBetweenCache = new Map<string, DriveFromBaseEstimate>();
 
-export function estimateDriveFromBase(lat: number, lng: number): DriveFromBaseEstimate {
-  const straight = haversineMiles(HOME_BASE.lat, HOME_BASE.lng, lat, lng);
-  const oneWay = Math.max(0.2, Math.round(straight * WI_ROAD_FACTOR * 10) / 10);
+export function estimateDriveBetween(
+  fromLat: number,
+  fromLng: number,
+  toLat: number,
+  toLng: number
+): DriveFromBaseEstimate {
+  const straight = haversineMiles(fromLat, fromLng, toLat, toLng);
+  const oneWay = Math.max(0.1, Math.round(straight * WI_ROAD_FACTOR * 10) / 10);
   const roundTrip = Math.round(oneWay * 2 * 10) / 10;
   const etaMinutes = Math.max(1, Math.round((oneWay / 36) * 60));
   return {
@@ -1042,17 +1080,19 @@ export function estimateDriveFromBase(lat: number, lng: number): DriveFromBaseEs
   };
 }
 
-export async function fetchDriveFromBase(
-  lat: number,
-  lng: number
+export async function fetchDriveBetween(
+  fromLat: number,
+  fromLng: number,
+  toLat: number,
+  toLng: number
 ): Promise<DriveFromBaseEstimate> {
-  const key = `${lat.toFixed(4)},${lng.toFixed(4)}`;
-  const cached = driveFromBaseCache.get(key);
+  const key = `${fromLat.toFixed(3)},${fromLng.toFixed(3)}->${toLat.toFixed(4)},${toLng.toFixed(4)}`;
+  const cached = driveBetweenCache.get(key);
   if (cached) return cached;
 
-  const fallback = estimateDriveFromBase(lat, lng);
+  const fallback = estimateDriveBetween(fromLat, fromLng, toLat, toLng);
   try {
-    const coords = `${HOME_BASE.lng.toFixed(5)},${HOME_BASE.lat.toFixed(5)};${lng.toFixed(5)},${lat.toFixed(5)}`;
+    const coords = `${fromLng.toFixed(5)},${fromLat.toFixed(5)};${toLng.toFixed(5)},${toLat.toFixed(5)}`;
     const url = `https://router.project-osrm.org/route/v1/driving/${coords}?overview=false`;
     const res = await fetch(url);
     if (!res.ok) return fallback;
@@ -1071,10 +1111,293 @@ export async function fetchDriveFromBase(
       etaMinutes,
       isRoadData: true,
     };
-    driveFromBaseCache.set(key, result);
+    driveBetweenCache.set(key, result);
     return result;
   } catch {
     return fallback;
+  }
+}
+
+export function estimateDriveFromBase(lat: number, lng: number): DriveFromBaseEstimate {
+  return estimateDriveBetween(HOME_BASE.lat, HOME_BASE.lng, lat, lng);
+}
+
+export async function fetchDriveFromBase(
+  lat: number,
+  lng: number
+): Promise<DriveFromBaseEstimate> {
+  return fetchDriveBetween(HOME_BASE.lat, HOME_BASE.lng, lat, lng);
+}
+
+export interface NearbyStorePreset {
+  id: 'sherwin' | 'menards' | 'homedepot' | 'hardware';
+  label: string;
+  query: string;
+  icon: string;
+}
+
+export const NEAREST_STORE_PRESETS: NearbyStorePreset[] = [
+  { id: 'sherwin', label: 'Sherwin-Williams', query: 'Sherwin-Williams', icon: '🎨' },
+  { id: 'menards', label: 'Menards', query: 'Menards', icon: '🛒' },
+  { id: 'homedepot', label: 'Home Depot', query: 'Home Depot', icon: '🔨' },
+  { id: 'hardware', label: 'Hardware', query: 'Hardware', icon: '🧰' },
+];
+
+export interface NearbyStoreResult {
+  id: string;
+  name: string;
+  address: string;
+  lat: number;
+  lng: number;
+  distanceMiles: number;
+  phone?: string;
+  categoryLabel: string;
+  source: 'OVERPASS' | 'NOMINATIM';
+}
+
+function escapeOverpassRegex(input: string): string {
+  return input.replace(/[.*+?^${}()|[\]\\"]/g, '\\$&').trim();
+}
+
+function formatOsmTagsAddress(tags: Record<string, string | undefined>): string {
+  const streetLine = [tags['addr:housenumber'], tags['addr:street']].filter(Boolean).join(' ').trim();
+  const city = tags['addr:city'] || tags['addr:town'] || tags['addr:village'] || '';
+  const state = tags['addr:state'] || (city ? 'WI' : '');
+  const zip = tags['addr:postcode'] || '';
+  const cityStateZip = [city, [state, zip].filter(Boolean).join(' ')].filter(Boolean).join(', ').trim();
+
+  if (streetLine && cityStateZip) return `${streetLine}, ${cityStateZip}`;
+  if (streetLine) return `${streetLine}, WI`;
+  if (cityStateZip) return cityStateZip;
+  if (tags['addr:full']) return tags['addr:full'];
+  return 'Wisconsin';
+}
+
+function buildOverpassStoreQuery(
+  rawQuery: string,
+  centerLat: number,
+  centerLng: number,
+  radiusMeters: number
+): string {
+  const q = rawQuery.trim().toLowerCase();
+  const around = `(around:${Math.round(radiusMeters)},${centerLat.toFixed(5)},${centerLng.toFixed(5)})`;
+
+  let clauses = '';
+  if (q.includes('sherwin')) {
+    clauses = `
+      nwr["name"~"Sherwin[- ]?Williams",i]${around};
+      nwr["brand"~"Sherwin[- ]?Williams",i]${around};
+    `;
+  } else if (q.includes('menards')) {
+    clauses = `
+      nwr["name"~"Menards",i]${around};
+      nwr["brand"~"Menards",i]${around};
+    `;
+  } else if (q.includes('home depot')) {
+    clauses = `
+      nwr["name"~"Home Depot",i]${around};
+      nwr["brand"~"Home Depot",i]${around};
+    `;
+  } else if (q === 'hardware' || q === 'hardware store' || q === 'paint') {
+    clauses = `
+      nwr["shop"~"hardware|paint|doityourself",i]${around};
+      nwr["name"~"Ace Hardware|True Value|Fleet Farm|Hardware|Paint|Lowe'?s|Menards|Home Depot|Sherwin",i]${around};
+    `;
+  } else {
+    const escaped = escapeOverpassRegex(rawQuery);
+    clauses = `
+      nwr["name"~"${escaped}",i]${around};
+      nwr["brand"~"${escaped}",i]${around};
+    `;
+  }
+
+  return `[out:json][timeout:12];(${clauses});out center tags 40;`;
+}
+
+function dedupeAndSortStores(
+  items: NearbyStoreResult[],
+  maxRadiusMiles: number
+): NearbyStoreResult[] {
+  const sorted = items
+    .filter((item) => item.distanceMiles <= maxRadiusMiles + 0.25)
+    .sort((a, b) => a.distanceMiles - b.distanceMiles);
+
+  const deduped: NearbyStoreResult[] = [];
+  for (const item of sorted) {
+    const isDuplicate = deduped.some(
+      (existing) =>
+        haversineMiles(existing.lat, existing.lng, item.lat, item.lng) < 0.08
+    );
+    if (!isDuplicate) {
+      deduped.push(item);
+    }
+    if (deduped.length >= 16) break;
+  }
+  return deduped;
+}
+
+/**
+ * Queries the free OpenStreetMap Overpass API within a 25-mile radius of the
+ * provided center point (live GPS or Home Base), falling back to a bounded
+ * Nominatim local search if Overpass returns empty or times out.
+ * Results are deduplicated and sorted closest-to-farthest.
+ */
+export async function searchNearestStoresOverpass(
+  rawQuery: string,
+  centerLat: number,
+  centerLng: number,
+  radiusMiles = 25,
+  signal?: AbortSignal
+): Promise<NearbyStoreResult[]> {
+  const trimmed = rawQuery.trim();
+  if (trimmed.length < 2) return [];
+
+  const radiusMeters = Math.round(radiusMiles * 1609.344);
+  const overpassQuery = buildOverpassStoreQuery(trimmed, centerLat, centerLng, radiusMeters);
+
+  // 1. Try OpenStreetMap Overpass API first
+  try {
+    const timeoutController = new AbortController();
+    const timeoutId = setTimeout(() => timeoutController.abort(), 11000);
+    const onParentAbort = () => timeoutController.abort();
+    if (signal) {
+      if (signal.aborted) {
+        clearTimeout(timeoutId);
+        return [];
+      }
+      signal.addEventListener('abort', onParentAbort, { once: true });
+    }
+
+    const res = await fetch('https://overpass-api.de/api/interpreter', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8',
+        Accept: 'application/json',
+      },
+      body: `data=${encodeURIComponent(overpassQuery)}`,
+      signal: timeoutController.signal,
+    });
+
+    clearTimeout(timeoutId);
+    if (signal) signal.removeEventListener('abort', onParentAbort);
+
+    if (res.ok) {
+      const data = await res.json();
+      const elements: Array<{
+        type: string;
+        id: number;
+        lat?: number;
+        lon?: number;
+        center?: { lat: number; lon: number };
+        tags?: Record<string, string | undefined>;
+      }> = Array.isArray(data?.elements) ? data.elements : [];
+
+      const parsed: NearbyStoreResult[] = [];
+      for (const el of elements) {
+        const lat = typeof el.lat === 'number' ? el.lat : el.center?.lat;
+        const lng = typeof el.lon === 'number' ? el.lon : el.center?.lon;
+        if (typeof lat !== 'number' || typeof lng !== 'number') continue;
+        if (!Number.isFinite(lat) || !Number.isFinite(lng)) continue;
+
+        const tags = el.tags || {};
+        const name = (tags.name || tags.brand || trimmed).trim();
+        const address = formatOsmTagsAddress(tags);
+        const distanceMiles =
+          Math.round(haversineMiles(centerLat, centerLng, lat, lng) * 10) / 10;
+
+        parsed.push({
+          id: `osm-${el.type}-${el.id}`,
+          name,
+          address,
+          lat,
+          lng,
+          distanceMiles,
+          phone: tags.phone || tags['contact:phone'],
+          categoryLabel: tags.shop
+            ? tags.shop.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())
+            : 'Nearby Store',
+          source: 'OVERPASS',
+        });
+      }
+
+      const cleaned = dedupeAndSortStores(parsed, radiusMiles);
+      if (cleaned.length > 0) {
+        return cleaned;
+      }
+    }
+  } catch {
+    // Fall through to Nominatim local fallback
+  }
+
+  if (signal?.aborted) return [];
+
+  // 2. Fallback: Bounded Nominatim local search (~25-mile viewbox around center)
+  try {
+    const latDelta = radiusMiles / 69.0;
+    const lngDelta = radiusMiles / (69.0 * Math.max(0.3, Math.cos((centerLat * Math.PI) / 180)));
+    const left = (centerLng - lngDelta).toFixed(4);
+    const right = (centerLng + lngDelta).toFixed(4);
+    const top = (centerLat + latDelta).toFixed(4);
+    const bottom = (centerLat - latDelta).toFixed(4);
+
+    const searchPhrase =
+      trimmed.toLowerCase() === 'hardware' ? 'hardware store' : trimmed;
+    const url =
+      `https://nominatim.openstreetmap.org/search?format=json&limit=12&addressdetails=1` +
+      `&countrycodes=us&viewbox=${left},${top},${right},${bottom}&bounded=1&q=${encodeURIComponent(
+        searchPhrase
+      )}`;
+
+    const res = await fetch(url, {
+      headers: { Accept: 'application/json' },
+      signal,
+    });
+    if (!res.ok) return [];
+    const data = await res.json();
+    if (!Array.isArray(data)) return [];
+
+    const fallbackResults: NearbyStoreResult[] = [];
+    for (const item of data) {
+      const lat = parseFloat(item.lat);
+      const lng = parseFloat(item.lon);
+      if (!Number.isFinite(lat) || !Number.isFinite(lng)) continue;
+
+      const addr = item.address || {};
+      const streetLine = [addr.house_number, addr.road].filter(Boolean).join(' ').trim();
+      const city = addr.city || addr.town || addr.village || '';
+      const state = addr.state === 'Wisconsin' ? 'WI' : addr.state || 'WI';
+      const zip = addr.postcode || '';
+      const cleanAddress = streetLine
+        ? [streetLine, city, `${state} ${zip}`.trim()].filter(Boolean).join(', ')
+        : String(item.display_name || '')
+            .split(',')
+            .slice(0, 3)
+            .map((p: string) => p.trim())
+            .filter(Boolean)
+            .join(', ');
+
+      const name =
+        (item.name && String(item.name).trim()) ||
+        String(item.display_name || trimmed).split(',')[0].trim();
+
+      const distanceMiles =
+        Math.round(haversineMiles(centerLat, centerLng, lat, lng) * 10) / 10;
+
+      fallbackResults.push({
+        id: `nom-store-${item.place_id || `${lat.toFixed(4)}-${lng.toFixed(4)}`}`,
+        name,
+        address: cleanAddress || 'Wisconsin',
+        lat,
+        lng,
+        distanceMiles,
+        categoryLabel: 'Nearby Store',
+        source: 'NOMINATIM',
+      });
+    }
+
+    return dedupeAndSortStores(fallbackResults, radiusMiles);
+  } catch {
+    return [];
   }
 }
 
@@ -1094,3 +1417,4 @@ export function sanitizeSmsHref(phone?: string): string {
   const digits = (phone || '').replace(/[^\d+]/g, '');
   return digits ? `sms:${digits}` : '';
 }
+

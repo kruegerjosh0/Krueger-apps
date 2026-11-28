@@ -9,22 +9,26 @@ import {
   SystemConstants,
 } from '../types';
 import {
-  FREQUENT_SUPPLY_STOP_CHIPS,
   HOME_BASE,
   JOB_MAP_STATUS_META,
   MAP_DEFAULT_CENTER,
   MAP_DEFAULT_ZOOM,
+  NEAREST_STORE_PRESETS,
   PRESET_SUPPLY_STOPS,
   SUPPLY_CATEGORY_META,
   CustomerMapSummary,
   DriveFromBaseEstimate,
+  NearbyStoreResult,
   PinWeatherSummary,
   PlaceSearchResult,
   RouteMileageEstimate,
+  RouteOriginPoint,
   buildGoogleMapsMultiStopUrl,
   buildSingleStopMapsUrl,
+  estimateDriveBetween,
   estimateDriveFromBase,
   estimateFallbackRoute,
+  fetchDriveBetween,
   fetchDriveFromBase,
   fetchOsrmRoadRoute,
   fetchPinWeatherSummary,
@@ -34,12 +38,14 @@ import {
   resolveApproxWisconsinCoords,
   sanitizeSmsHref,
   sanitizeTelHref,
+  searchNearestStoresOverpass,
   searchPlacesWithNominatim,
 } from '../utils/mapHelpers';
 import { formatScheduledDate } from '../utils/projectHelpers';
 
 const NEARBY_RADIUS_MILES = 3;
 const NEARBY_RADIUS_METERS = NEARBY_RADIUS_MILES * 1609.344;
+const STORE_SEARCH_RADIUS_MILES = 25;
 
 function getWeatherDotColor(tone: PinWeatherSummary['paintTone']): string {
   if (tone === 'ok') return '#22c55e';
@@ -72,9 +78,17 @@ interface SearchedPin {
   subtitle?: string;
 }
 
+interface UserGpsLocation {
+  lat: number;
+  lng: number;
+  accuracyMeters: number;
+  updatedAt: number;
+}
+
 type SelectedPin =
   | { kind: 'CUSTOMER'; customerId: number }
   | { kind: 'SUPPLY'; pinId: string }
+  | { kind: 'NEARBY_STORE'; storeId: string }
   | { kind: 'SEARCH'; pin: SearchedPin }
   | { kind: 'HOME' };
 
@@ -113,34 +127,49 @@ export const JobsiteMapView: React.FC<JobsiteMapViewProps> = ({
   const tileLayerRef = useRef<L.TileLayer | null>(null);
   const routeLayerRef = useRef<L.LayerGroup | null>(null);
   const radiusLayerRef = useRef<L.LayerGroup | null>(null);
+  const gpsLayerRef = useRef<L.LayerGroup | null>(null);
   const markersLayerRef = useRef<L.LayerGroup | null>(null);
   const geocodedAttemptedRef = useRef<Set<string>>(new Set());
   const hasAutoCenteredRef = useRef<boolean>(false);
   const searchBoxRef = useRef<HTMLDivElement | null>(null);
+  const storeSearchAbortRef = useRef<AbortController | null>(null);
 
   // Map UI Controls (Completed gray pins OFF by default via ALL_ACTIVE)
   const [moneyView, setMoneyView] = useState<boolean>(false);
-  const [showSupplyLayer, setShowSupplyLayer] = useState<boolean>(true);
+  const [showSupplyLayer, setShowSupplyLayer] = useState<boolean>(false);
   const [mapStyle, setMapStyle] = useState<'dark' | 'street'>('dark');
   const [statusFilter, setStatusFilter] = useState<MapStatusFilter>('ALL_ACTIVE');
   const [selectedPin, setSelectedPin] = useState<SelectedPin | null>(null);
   const [callTextMenuOpen, setCallTextMenuOpen] = useState<boolean>(false);
 
-  // Multi-Stop "Plan Day Route" Mode state
+  // Live GPS Location ("You Are Here") state
+  const [userGps, setUserGps] = useState<UserGpsLocation | null>(null);
+  const [isLocatingGps, setIsLocatingGps] = useState<boolean>(false);
+
+  // Nearest Store Finder (Overpass API + Nominatim fallback, 25-mile radius)
+  const [nearbyStores, setNearbyStores] = useState<NearbyStoreResult[]>([]);
+  const [activeStorePreset, setActiveStorePreset] = useState<string | null>(null);
+  const [storeSearchSummary, setStoreSearchSummary] = useState<string>('');
+  const [isFindingStores, setIsFindingStores] = useState<boolean>(false);
+
+  // Multi-Stop "Plan Day Route" Mode state (supports Jobs AND/OR Stores, starting from GPS or Home Base)
   const [planRouteMode, setPlanRouteMode] = useState<boolean>(false);
-  const [plannedCustomerIds, setPlannedCustomerIds] = useState<number[]>([]);
+  const [plannedStops, setPlannedStops] = useState<RouteStopItem[]>([]);
+  const [routeStartMode, setRouteStartMode] = useState<'GPS' | 'HOME'>('HOME');
   const [routeEstimate, setRouteEstimate] = useState<RouteMileageEstimate | null>(null);
   const [isRouting, setIsRouting] = useState<boolean>(false);
 
-  // Universal Search Bar state (Wisconsin-biased Nominatim + local customers/stores)
+  // Nearest Store & Address Search Bar state
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [nominatimResults, setNominatimResults] = useState<PlaceSearchResult[]>([]);
   const [isSearching, setIsSearching] = useState<boolean>(false);
   const [searchDropdownOpen, setSearchDropdownOpen] = useState<boolean>(false);
   const [droppedSearchPin, setDroppedSearchPin] = useState<SearchedPin | null>(null);
 
-  // Live Drive Distance & ETA from Home Base (2119 Barton Ave) for active pin
+  // Live Drive Distance & ETA from Home Base AND from Live GPS for active pin
   const [activeDriveEstimate, setActiveDriveEstimate] = useState<DriveFromBaseEstimate | null>(null);
+  const [activeGpsDriveEstimate, setActiveGpsDriveEstimate] =
+    useState<DriveFromBaseEstimate | null>(null);
 
   // Live Open-Meteo weather for currently tapped customer pin & exterior/deck map pins
   const [pinWeather, setPinWeather] = useState<PinWeatherSummary | null>(null);
@@ -223,32 +252,61 @@ export const JobsiteMapView: React.FC<JobsiteMapViewProps> = ({
     return customerSummaries.filter((s) => s.mapStatus === statusFilter);
   }, [customerSummaries, statusFilter]);
 
-  // Ordered multi-stop route items for "Plan Day Route" mode
-  const plannedRouteStops = useMemo<RouteStopItem[]>(() => {
-    const byId = new Map(customerSummaries.map((c) => [c.customer.id, c]));
-    const stops: RouteStopItem[] = [];
-    plannedCustomerIds.forEach((id) => {
-      const found = byId.get(id);
-      if (!found) return;
-      stops.push({
-        id: `cust-${found.customer.id}`,
-        kind: 'CUSTOMER',
-        refId: found.customer.id,
-        name: found.customer.name,
-        address: found.customer.address || '',
-        lat: found.lat,
-        lng: found.lng,
-        subtitle: JOB_MAP_STATUS_META[found.mapStatus].label,
-      });
-    });
-    return stops;
-  }, [plannedCustomerIds, customerSummaries]);
+  // Keep live GPS distances updated on found nearby stores whenever GPS moves
+  const nearbyStoresWithLiveDist = useMemo<NearbyStoreResult[]>(() => {
+    const refLat = userGps ? userGps.lat : HOME_BASE.lat;
+    const refLng = userGps ? userGps.lng : HOME_BASE.lng;
+    return nearbyStores
+      .map((st) => ({
+        ...st,
+        distanceMiles: Math.round(haversineMiles(refLat, refLng, st.lat, st.lng) * 10) / 10,
+      }))
+      .sort((a, b) => a.distanceMiles - b.distanceMiles);
+  }, [nearbyStores, userGps]);
 
-  const plannedStopIndexByCustId = useMemo(() => {
-    const map = new Map<number, number>();
-    plannedCustomerIds.forEach((id, idx) => map.set(id, idx + 1));
+  // Active start origin for Plan Day Route (My Current GPS or 2119 Barton Ave Home Base)
+  const activeRouteOrigin = useMemo<RouteOriginPoint>(() => {
+    if (routeStartMode === 'GPS' && userGps) {
+      return {
+        lat: userGps.lat,
+        lng: userGps.lng,
+        label: 'My Current Location',
+        isGps: true,
+      };
+    }
+    return {
+      lat: HOME_BASE.lat,
+      lng: HOME_BASE.lng,
+      label: HOME_BASE.address,
+      address: HOME_BASE.address,
+      isGps: false,
+    };
+  }, [routeStartMode, userGps]);
+
+  // Whether route loops back to origin (Home Base loops round-trip; GPS runs point-to-point)
+  const routeReturnToOrigin = !activeRouteOrigin.isGps;
+
+  // Lookup map of stop ID -> 1-based stop order badge (#1, #2, ...)
+  const plannedStopIndexById = useMemo(() => {
+    const map = new Map<string, number>();
+    plannedStops.forEach((s, idx) => map.set(s.id, idx + 1));
     return map;
-  }, [plannedCustomerIds]);
+  }, [plannedStops]);
+
+  const toggleRouteStop = (stop: RouteStopItem) => {
+    setPlannedStops((prev) =>
+      prev.some((s) => s.id === stop.id)
+        ? prev.filter((s) => s.id !== stop.id)
+        : [...prev, stop]
+    );
+  };
+
+  const addStopAndOpenPlanner = (stop: RouteStopItem) => {
+    setPlannedStops((prev) => (prev.some((s) => s.id === stop.id) ? prev : [...prev, stop]));
+    setPlanRouteMode(true);
+    setSelectedPin(null);
+    onToast(`Added ${stop.name} to Plan Route`);
+  };
 
   // Money View aggregate metrics across visible pins
   const moneyRollup = useMemo(() => {
@@ -422,11 +480,13 @@ export const JobsiteMapView: React.FC<JobsiteMapViewProps> = ({
 
     const routeLayer = L.layerGroup().addTo(map);
     const radiusLayer = L.layerGroup().addTo(map);
+    const gpsLayer = L.layerGroup().addTo(map);
     const markersLayer = L.layerGroup().addTo(map);
 
     mapInstanceRef.current = map;
     routeLayerRef.current = routeLayer;
     radiusLayerRef.current = radiusLayer;
+    gpsLayerRef.current = gpsLayer;
     markersLayerRef.current = markersLayer;
 
     const handleResize = () => map.invalidateSize();
@@ -436,14 +496,60 @@ export const JobsiteMapView: React.FC<JobsiteMapViewProps> = ({
     return () => {
       clearTimeout(timer);
       window.removeEventListener('resize', handleResize);
+      storeSearchAbortRef.current?.abort();
       map.remove();
       mapInstanceRef.current = null;
       tileLayerRef.current = null;
       routeLayerRef.current = null;
       radiusLayerRef.current = null;
+      gpsLayerRef.current = null;
       markersLayerRef.current = null;
     };
   }, []);
+
+  // Render pulsing blue "You Are Here" live GPS marker + accuracy ring
+  useEffect(() => {
+    const gpsLayer = gpsLayerRef.current;
+    if (!gpsLayer) return;
+    gpsLayer.clearLayers();
+
+    if (!userGps) return;
+
+    const ringRadiusMeters = Math.min(Math.max(userGps.accuracyMeters || 45, 25), 900);
+    L.circle([userGps.lat, userGps.lng], {
+      radius: ringRadiusMeters,
+      color: '#38bdf8',
+      weight: 1.5,
+      opacity: 0.75,
+      fillColor: '#0ea5e9',
+      fillOpacity: 0.16,
+      interactive: false,
+    }).addTo(gpsLayer);
+
+    const gpsIcon = L.divIcon({
+      className: 'krueger-map-divicon',
+      html: `
+        <div data-gps-you-are-here="true" style="position:relative;width:0;height:0;" title="You Are Here (Live GPS)">
+          <span class="krueger-gps-pulse-ring"></span>
+          <span style="
+            position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);
+            width:16px;height:16px;border-radius:9999px;
+            background:#0a84ff;border:3px solid #ffffff;
+            box-shadow:0 0 12px rgba(10,132,255,0.95), 0 2px 6px rgba(0,0,0,0.8);
+            display:block;
+          "></span>
+        </div>
+      `,
+      iconSize: [0, 0],
+      iconAnchor: [0, 0],
+    });
+
+    L.marker([userGps.lat, userGps.lng], {
+      icon: gpsIcon,
+      zIndexOffset: 1100,
+      interactive: false,
+    }).addTo(gpsLayer);
+  }, [userGps]);
 
   // Auto-center initial map view on active jobs/leads (falling back to 2119 Barton Ave Home Base)
   useEffect(() => {
@@ -464,10 +570,10 @@ export const JobsiteMapView: React.FC<JobsiteMapViewProps> = ({
     map.fitBounds(L.latLngBounds(pts), { padding: [38, 38], maxZoom: 13 });
   }, [customerSummaries]);
 
-  // Compute live OSRM road route & draw polyline when in Plan Route mode
+  // Compute live OSRM road route & draw polyline when in Plan Route mode (supports Jobs & Stores from GPS or Home Base)
   useEffect(() => {
     const routeLayer = routeLayerRef.current;
-    if (!planRouteMode || plannedRouteStops.length === 0) {
+    if (!planRouteMode || plannedStops.length === 0) {
       setRouteEstimate(null);
       setIsRouting(false);
       routeLayer?.clearLayers();
@@ -475,11 +581,11 @@ export const JobsiteMapView: React.FC<JobsiteMapViewProps> = ({
     }
 
     let cancelled = false;
-    const immediate = estimateFallbackRoute(plannedRouteStops, true);
+    const immediate = estimateFallbackRoute(plannedStops, routeReturnToOrigin, activeRouteOrigin);
     setRouteEstimate(immediate);
     setIsRouting(true);
 
-    fetchOsrmRoadRoute(plannedRouteStops, true).then((osrm) => {
+    fetchOsrmRoadRoute(plannedStops, routeReturnToOrigin, activeRouteOrigin).then((osrm) => {
       if (cancelled) return;
       setIsRouting(false);
       if (osrm) {
@@ -490,7 +596,7 @@ export const JobsiteMapView: React.FC<JobsiteMapViewProps> = ({
     return () => {
       cancelled = true;
     };
-  }, [planRouteMode, plannedRouteStops]);
+  }, [planRouteMode, plannedStops, routeReturnToOrigin, activeRouteOrigin]);
 
   useEffect(() => {
     const routeLayer = routeLayerRef.current;
@@ -538,15 +644,23 @@ export const JobsiteMapView: React.FC<JobsiteMapViewProps> = ({
     return allSupplyPins.find((p) => p.id === selectedPin.pinId) || null;
   }, [selectedPin, allSupplyPins]);
 
+  const selectedNearbyStore = useMemo(() => {
+    if (selectedPin?.kind !== 'NEARBY_STORE') return null;
+    return nearbyStoresWithLiveDist.find((s) => s.id === selectedPin.storeId) || null;
+  }, [selectedPin, nearbyStoresWithLiveDist]);
+
   const selectedSearchPin = useMemo(() => {
     if (selectedPin?.kind !== 'SEARCH') return null;
     return selectedPin.pin;
   }, [selectedPin]);
 
-  // Coordinates of the currently selected destination (for Drive Distance / ETA from 2119 Barton Ave)
+  // Coordinates of the currently selected destination (for Drive Distance / ETA from Home Base & GPS)
   const activeDestinationCoords = useMemo<{ lat: number; lng: number } | null>(() => {
     if (selectedCustomerItem) {
       return { lat: selectedCustomerItem.lat, lng: selectedCustomerItem.lng };
+    }
+    if (selectedNearbyStore) {
+      return { lat: selectedNearbyStore.lat, lng: selectedNearbyStore.lng };
     }
     if (selectedSupplyPin) {
       return { lat: selectedSupplyPin.lat, lng: selectedSupplyPin.lng };
@@ -554,12 +668,15 @@ export const JobsiteMapView: React.FC<JobsiteMapViewProps> = ({
     if (selectedSearchPin) {
       return { lat: selectedSearchPin.lat, lng: selectedSearchPin.lng };
     }
+    if (selectedPin?.kind === 'HOME') {
+      return { lat: HOME_BASE.lat, lng: HOME_BASE.lng };
+    }
     return null;
-  }, [selectedCustomerItem, selectedSupplyPin, selectedSearchPin]);
+  }, [selectedCustomerItem, selectedNearbyStore, selectedSupplyPin, selectedSearchPin, selectedPin]);
 
   // Immediately estimate + silently upgrade live driving distance & ETA from 2119 Barton Ave
   useEffect(() => {
-    if (!activeDestinationCoords) {
+    if (!activeDestinationCoords || selectedPin?.kind === 'HOME') {
       setActiveDriveEstimate(null);
       return;
     }
@@ -577,7 +694,36 @@ export const JobsiteMapView: React.FC<JobsiteMapViewProps> = ({
     return () => {
       cancelled = true;
     };
-  }, [activeDestinationCoords?.lat, activeDestinationCoords?.lng]);
+  }, [activeDestinationCoords?.lat, activeDestinationCoords?.lng, selectedPin?.kind]);
+
+  // Immediately estimate + silently upgrade live driving distance & ETA from My Current GPS Location
+  useEffect(() => {
+    if (!activeDestinationCoords || !userGps) {
+      setActiveGpsDriveEstimate(null);
+      return;
+    }
+    let cancelled = false;
+    const immediate = estimateDriveBetween(
+      userGps.lat,
+      userGps.lng,
+      activeDestinationCoords.lat,
+      activeDestinationCoords.lng
+    );
+    setActiveGpsDriveEstimate(immediate);
+
+    fetchDriveBetween(
+      userGps.lat,
+      userGps.lng,
+      activeDestinationCoords.lat,
+      activeDestinationCoords.lng
+    ).then((res) => {
+      if (!cancelled) setActiveGpsDriveEstimate(res);
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [userGps?.lat, userGps?.lng, activeDestinationCoords?.lat, activeDestinationCoords?.lng]);
 
   // Nearby leads & past clients within 3 miles of the selected customer pin
   const nearbyCustomers = useMemo(() => {
@@ -654,7 +800,7 @@ export const JobsiteMapView: React.FC<JobsiteMapViewProps> = ({
     };
   }, [exteriorPinKey]);
 
-  // Render map markers whenever pins, mode, selection, or search pin changes
+  // Render map markers whenever pins, stores, mode, selection, or search pin changes
   useEffect(() => {
     const map = mapInstanceRef.current;
     const markersLayer = markersLayerRef.current;
@@ -688,11 +834,78 @@ export const JobsiteMapView: React.FC<JobsiteMapViewProps> = ({
     }).addTo(markersLayer);
     homeMarker.on('click', () => setSelectedPin({ kind: 'HOME' }));
 
-    // 2. Supply & Hardware Stop Overlay Pins
+    // 2. Nearest Store Finder Orange Pins (Overpass API / Nominatim results within 25 mi)
+    nearbyStoresWithLiveDist.forEach((store) => {
+      const stopId = `store-${store.id}`;
+      const isSelected = selectedPin?.kind === 'NEARBY_STORE' && selectedPin.storeId === store.id;
+      const routeStopOrder = planRouteMode ? plannedStopIndexById.get(stopId) : undefined;
+      const routeBadgeHtml =
+        routeStopOrder !== undefined
+          ? `<span style="min-width:17px;height:17px;padding:0 4px;border-radius:9999px;background:#38bdf8;color:#09090b;font-size:10px;font-weight:900;display:inline-flex;align-items:center;justify-content:center;flex-shrink:0;">#${routeStopOrder}</span>`
+          : '';
+      const shortStoreName =
+        store.name.length <= 16 ? store.name : `${store.name.slice(0, 15)}…`;
+
+      const storeIcon = L.divIcon({
+        className: 'krueger-map-divicon',
+        html: `
+          <div data-orange-store-pin="true" style="
+            display:inline-flex;align-items:center;gap:4px;
+            background:#431407;color:#ffedd5;
+            border:2px solid ${routeStopOrder !== undefined ? '#38bdf8' : isSelected ? '#ffffff' : '#f97316'};
+            border-radius:10px;padding:3px 7px;
+            font-size:10px;font-weight:900;white-space:nowrap;
+            box-shadow:${
+              routeStopOrder !== undefined
+                ? '0 0 0 3px rgba(56,189,248,0.55), 0 4px 14px rgba(0,0,0,0.9)'
+                : '0 2px 10px rgba(0,0,0,0.78)'
+            };
+            transform:translate(-50%,-50%);
+          ">
+            ${routeBadgeHtml}
+            <span style="width:8px;height:8px;border-radius:50%;background:#f97316;border:1.5px solid #ffffff;display:inline-block;flex-shrink:0;"></span>
+            <span>${escapeHtml(shortStoreName)}</span>
+            <span style="color:#fdba74;font-size:9px;">${store.distanceMiles.toFixed(1)} mi</span>
+          </div>
+        `,
+        iconSize: [0, 0],
+        iconAnchor: [0, 0],
+      });
+
+      const marker = L.marker([store.lat, store.lng], {
+        icon: storeIcon,
+        zIndexOffset: routeStopOrder !== undefined ? 970 : isSelected ? 940 : 680,
+      }).addTo(markersLayer);
+
+      marker.on('click', () => {
+        if (planRouteMode) {
+          toggleRouteStop({
+            id: stopId,
+            kind: 'SUPPLY',
+            refId: store.id,
+            name: store.name,
+            address: store.address,
+            lat: store.lat,
+            lng: store.lng,
+            subtitle: store.categoryLabel,
+          });
+          return;
+        }
+        setSelectedPin({ kind: 'NEARBY_STORE', storeId: store.id });
+      });
+    });
+
+    // 3. Saved / Preset Supply & Hardware Stop Overlay Pins (optional toggle)
     if (showSupplyLayer) {
       allSupplyPins.forEach((pin) => {
+        const stopId = `supply-${pin.id}`;
         const cat = SUPPLY_CATEGORY_META[pin.category];
         const isSelected = selectedPin?.kind === 'SUPPLY' && selectedPin.pinId === pin.id;
+        const routeStopOrder = planRouteMode ? plannedStopIndexById.get(stopId) : undefined;
+        const routeBadgeHtml =
+          routeStopOrder !== undefined
+            ? `<span style="min-width:17px;height:17px;padding:0 4px;border-radius:9999px;background:#38bdf8;color:#09090b;font-size:10px;font-weight:900;display:inline-flex;align-items:center;justify-content:center;flex-shrink:0;">#${routeStopOrder}</span>`
+            : '';
 
         const supplyIcon = L.divIcon({
           className: 'krueger-map-divicon',
@@ -700,12 +913,13 @@ export const JobsiteMapView: React.FC<JobsiteMapViewProps> = ({
             <div style="
               display:inline-flex;align-items:center;gap:3px;
               background:${cat.bg};color:${cat.color};
-              border:2px solid ${isSelected ? '#ffffff' : cat.color};
+              border:2px solid ${routeStopOrder !== undefined ? '#38bdf8' : isSelected ? '#ffffff' : cat.color};
               border-radius:8px;padding:3px 6px;
               font-size:10px;font-weight:800;white-space:nowrap;
               box-shadow:0 2px 10px rgba(0,0,0,0.72);
               transform:translate(-50%,-50%);
             ">
+              ${routeBadgeHtml}
               <span>${cat.icon}</span>
               <span>${escapeHtml(pin.name.split('—')[0].trim().slice(0, 14))}</span>
             </div>
@@ -716,16 +930,29 @@ export const JobsiteMapView: React.FC<JobsiteMapViewProps> = ({
 
         const marker = L.marker([pin.lat, pin.lng], {
           icon: supplyIcon,
-          zIndexOffset: isSelected ? 850 : 350,
+          zIndexOffset: routeStopOrder !== undefined ? 965 : isSelected ? 850 : 350,
         }).addTo(markersLayer);
 
         marker.on('click', () => {
+          if (planRouteMode) {
+            toggleRouteStop({
+              id: stopId,
+              kind: 'SUPPLY',
+              refId: pin.id,
+              name: pin.name,
+              address: pin.address,
+              lat: pin.lat,
+              lng: pin.lng,
+              subtitle: cat.label,
+            });
+            return;
+          }
           setSelectedPin({ kind: 'SUPPLY', pinId: pin.id });
         });
       });
     }
 
-    // 3. Dropped Search Result Pin (if user searched an address or store)
+    // 4. Dropped Search Result Pin (if user picked an address from search dropdown)
     if (droppedSearchPin) {
       const isSearchSelected = selectedPin?.kind === 'SEARCH';
       const searchIcon = L.divIcon({
@@ -758,13 +985,14 @@ export const JobsiteMapView: React.FC<JobsiteMapViewProps> = ({
       });
     }
 
-    // 4. Customer & Jobsite Pins (Status Mode vs Money View + Plan Route stop badges)
+    // 5. Customer & Jobsite Pins (Status Mode vs Money View + Plan Route stop badges)
     visibleCustomerPins.forEach((item) => {
       const { customer, mapStatus, isActiveInProgress, isExteriorJob, financials, lat, lng } = item;
+      const stopId = `cust-${customer.id}`;
       const meta = JOB_MAP_STATUS_META[mapStatus];
       const isSelected = selectedPin?.kind === 'CUSTOMER' && selectedPin.customerId === customer.id;
       const isNearbyNeighbor = nearbyCustomerIdSet.has(customer.id);
-      const routeStopOrder = planRouteMode ? plannedStopIndexByCustId.get(customer.id) : undefined;
+      const routeStopOrder = planRouteMode ? plannedStopIndexById.get(stopId) : undefined;
       const extWx = isExteriorJob ? exteriorWeatherByCustId[customer.id] : undefined;
 
       const weatherDotHtml = extWx
@@ -864,11 +1092,16 @@ export const JobsiteMapView: React.FC<JobsiteMapViewProps> = ({
 
       marker.on('click', () => {
         if (planRouteMode) {
-          setPlannedCustomerIds((prev) =>
-            prev.includes(customer.id)
-              ? prev.filter((id) => id !== customer.id)
-              : [...prev, customer.id]
-          );
+          toggleRouteStop({
+            id: stopId,
+            kind: 'CUSTOMER',
+            refId: customer.id,
+            name: customer.name,
+            address: customer.address || '',
+            lat,
+            lng,
+            subtitle: meta.label,
+          });
           return;
         }
         setSelectedPin({ kind: 'CUSTOMER', customerId: customer.id });
@@ -876,6 +1109,7 @@ export const JobsiteMapView: React.FC<JobsiteMapViewProps> = ({
     });
   }, [
     visibleCustomerPins,
+    nearbyStoresWithLiveDist,
     allSupplyPins,
     showSupplyLayer,
     moneyView,
@@ -884,7 +1118,7 @@ export const JobsiteMapView: React.FC<JobsiteMapViewProps> = ({
     exteriorWeatherByCustId,
     droppedSearchPin,
     planRouteMode,
-    plannedStopIndexByCustId,
+    plannedStopIndexById,
   ]);
 
   // Fetch live Open-Meteo weather when a customer pin is tapped
@@ -910,7 +1144,122 @@ export const JobsiteMapView: React.FC<JobsiteMapViewProps> = ({
     };
   }, [selectedCustomerItem?.customer.id, selectedCustomerItem?.lat, selectedCustomerItem?.lng]);
 
-  // Search selection handler
+  // Locate Me (high-accuracy browser Geolocation API — zero paid keys)
+  const handleLocateMe = (opts?: { switchRouteStartToGps?: boolean; silentToast?: boolean }) => {
+    if (typeof navigator === 'undefined' || !navigator.geolocation) {
+      onToast('GPS geolocation is not supported by this browser');
+      return;
+    }
+    setIsLocatingGps(true);
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        const nextGps: UserGpsLocation = {
+          lat: pos.coords.latitude,
+          lng: pos.coords.longitude,
+          accuracyMeters: pos.coords.accuracy || 40,
+          updatedAt: Date.now(),
+        };
+        setUserGps(nextGps);
+        setIsLocatingGps(false);
+        if (opts?.switchRouteStartToGps) {
+          setRouteStartMode('GPS');
+        }
+        const map = mapInstanceRef.current;
+        if (map) {
+          map.flyTo([nextGps.lat, nextGps.lng], Math.max(map.getZoom(), 13), {
+            duration: 0.7,
+          });
+        }
+        if (!opts?.silentToast) {
+          onToast('📍 Live GPS locked — showing distances from your location');
+        }
+      },
+      (err) => {
+        setIsLocatingGps(false);
+        if (err.code === err.PERMISSION_DENIED) {
+          onToast('Location permission denied — enable GPS in browser settings');
+        } else if (err.code === err.TIMEOUT) {
+          onToast('GPS request timed out — try again outdoors');
+        } else {
+          onToast('Unable to read GPS position right now');
+        }
+      },
+      {
+        enableHighAccuracy: true,
+        timeout: 12000,
+        maximumAge: 15000,
+      }
+    );
+  };
+
+  // Query free OpenStreetMap Overpass API (+ Nominatim fallback) within 25 miles of GPS or Home Base
+  const handleFindNearestStores = async (queryText: string, presetId?: string | null) => {
+    const q = queryText.trim();
+    if (q.length < 2) {
+      onToast('Enter a store name (e.g. Sherwin-Williams, Menards, Ace)');
+      return;
+    }
+
+    storeSearchAbortRef.current?.abort();
+    const controller = new AbortController();
+    storeSearchAbortRef.current = controller;
+
+    setSearchDropdownOpen(false);
+    setDroppedSearchPin(null);
+    setActiveStorePreset(presetId ?? null);
+    setIsFindingStores(true);
+
+    const centerLat = userGps ? userGps.lat : HOME_BASE.lat;
+    const centerLng = userGps ? userGps.lng : HOME_BASE.lng;
+    const originLabel = userGps ? 'your GPS' : '2119 Barton Ave';
+
+    const results = await searchNearestStoresOverpass(
+      q,
+      centerLat,
+      centerLng,
+      STORE_SEARCH_RADIUS_MILES,
+      controller.signal
+    );
+
+    if (controller.signal.aborted) return;
+    setIsFindingStores(false);
+
+    if (results.length === 0) {
+      setNearbyStores([]);
+      setStoreSearchSummary(`No "${q}" stores found within ${STORE_SEARCH_RADIUS_MILES} mi of ${originLabel}`);
+      onToast(`No "${q}" stores found within ${STORE_SEARCH_RADIUS_MILES} mi`);
+      return;
+    }
+
+    setNearbyStores(results);
+    setStoreSearchSummary(
+      `${results.length} nearest "${q}" within ${STORE_SEARCH_RADIUS_MILES} mi of ${originLabel}`
+    );
+
+    // Smoothly frame the origin + closest store pins on the map
+    const map = mapInstanceRef.current;
+    if (map) {
+      const topStores = results.slice(0, 6);
+      const pts: [number, number][] = [
+        [centerLat, centerLng],
+        ...topStores.map((s): [number, number] => [s.lat, s.lng]),
+      ];
+      map.fitBounds(L.latLngBounds(pts), { padding: [42, 42], maxZoom: 13 });
+    }
+  };
+
+  const handleClearStores = () => {
+    storeSearchAbortRef.current?.abort();
+    setNearbyStores([]);
+    setActiveStorePreset(null);
+    setStoreSearchSummary('');
+    setIsFindingStores(false);
+    if (selectedPin?.kind === 'NEARBY_STORE') {
+      setSelectedPin(null);
+    }
+  };
+
+  // Search dropdown selection handler
   const handleSelectSearchResult = (res: PlaceSearchResult) => {
     setSearchDropdownOpen(false);
     setSearchQuery(res.name);
@@ -943,35 +1292,12 @@ export const JobsiteMapView: React.FC<JobsiteMapViewProps> = ({
     mapInstanceRef.current?.setView([pin.lat, pin.lng], 13, { animate: true });
   };
 
-  // Handle Enter key in search input
+  // Handle Enter / Find button in "Find Nearest Store" bar
   const handleSearchSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (combinedSearchResults.length > 0) {
-      handleSelectSearchResult(combinedSearchResults[0]);
-      return;
-    }
     const q = searchQuery.trim();
     if (q.length < 2) return;
-    setIsSearching(true);
-    const results = await searchPlacesWithNominatim(q);
-    setIsSearching(false);
-    setNominatimResults(results);
-    if (results.length > 0) {
-      handleSelectSearchResult(results[0]);
-    } else {
-      onToast('No matching WI address or store found');
-    }
-  };
-
-  // One-tap Frequent Supply Stop chip handler
-  const handleSelectFrequentStop = (pinId: string) => {
-    const found = allSupplyPins.find((p) => p.id === pinId);
-    if (!found) return;
-    setShowSupplyLayer(true);
-    setDroppedSearchPin(null);
-    setSearchDropdownOpen(false);
-    setSelectedPin({ kind: 'SUPPLY', pinId: found.id });
-    mapInstanceRef.current?.setView([found.lat, found.lng], 13, { animate: true });
+    await handleFindNearestStores(q, null);
   };
 
   // Silent background mileage trigger when opening Google Maps (zero popups/toasts)
@@ -994,7 +1320,11 @@ export const JobsiteMapView: React.FC<JobsiteMapViewProps> = ({
     const map = mapInstanceRef.current;
     if (!map) return;
     const pts: [number, number][] = [[HOME_BASE.lat, HOME_BASE.lng]];
+    if (userGps) {
+      pts.push([userGps.lat, userGps.lng]);
+    }
     visibleCustomerPins.forEach((c) => pts.push([c.lat, c.lng]));
+    nearbyStoresWithLiveDist.forEach((s) => pts.push([s.lat, s.lng]));
     if (showSupplyLayer) {
       allSupplyPins.forEach((s) => pts.push([s.lat, s.lng]));
     }
@@ -1089,7 +1419,7 @@ export const JobsiteMapView: React.FC<JobsiteMapViewProps> = ({
 
   return (
     <div className="space-y-3 pb-24">
-      {/* Top Dispatch Search, Frequent Stops & Map Controls */}
+      {/* Top Dispatch Controls, Nearest Store Finder & Status Filters */}
       <div className="bg-[var(--surface)] border border-[var(--border)] rounded-2xl p-3 shadow-sm space-y-2.5">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <div>
@@ -1099,6 +1429,9 @@ export const JobsiteMapView: React.FC<JobsiteMapViewProps> = ({
             </h2>
             <p className="text-[10px] text-[var(--text-muted)]">
               Base: {HOME_BASE.address}
+              {userGps && (
+                <span className="ml-2 text-sky-400 font-bold">• 📍 Live GPS Active</span>
+              )}
               {isGeocodingCount > 0 && (
                 <span className="ml-2 text-amber-400 font-bold">
                   • Locating {isGeocodingCount} address{isGeocodingCount > 1 ? 'es' : ''}…
@@ -1133,116 +1466,163 @@ export const JobsiteMapView: React.FC<JobsiteMapViewProps> = ({
           </div>
         </div>
 
-        {/* Universal Store & Address Search Bar (Wisconsin-Biased Nominatim) */}
-        <div ref={searchBoxRef} className="relative">
-          <form onSubmit={handleSearchSubmit} className="relative flex items-center">
-            <span className="pointer-events-none absolute left-3 text-sm text-[var(--text-muted)]">
-              🔎
-            </span>
-            <input
-              type="text"
-              inputMode="search"
-              enterKeyHint="search"
-              value={searchQuery}
-              onFocus={() => setSearchDropdownOpen(true)}
-              onChange={(e) => {
-                setSearchQuery(e.target.value);
-                setSearchDropdownOpen(true);
-              }}
-              placeholder="Search address, town, or store (e.g. Menards West Bend)…"
-              aria-label="Search store, town, or address"
-              className="w-full bg-[var(--bg)] border border-[var(--border)] focus:border-sky-400 text-[var(--text)] rounded-xl pl-9 pr-16 py-2.5 text-xs font-semibold outline-none shadow-inner"
-            />
-            {isSearching && (
-              <span className="absolute right-9 text-[10px] font-bold text-sky-400 animate-pulse">
-                …
-              </span>
-            )}
-            {searchQuery.trim().length > 0 && (
+        {/* Compact "Find Nearest Store" Search Bar + Preset Chips (Overpass API + Nominatim fallback) */}
+        <div ref={searchBoxRef} className="space-y-1.5" data-store-finder="true">
+          <div className="relative">
+            <form onSubmit={handleSearchSubmit} className="flex items-center gap-1.5">
+              <div className="relative flex-1 flex items-center">
+                <span className="pointer-events-none absolute left-3 text-sm text-orange-400">
+                  🏪
+                </span>
+                <input
+                  type="text"
+                  inputMode="search"
+                  enterKeyHint="search"
+                  value={searchQuery}
+                  onFocus={() => setSearchDropdownOpen(true)}
+                  onChange={(e) => {
+                    setSearchQuery(e.target.value);
+                    setSearchDropdownOpen(true);
+                  }}
+                  placeholder="Find nearest store (Sherwin-Williams, Menards, Ace) or client…"
+                  aria-label="Find nearest store"
+                  className="w-full bg-[var(--bg)] border border-[var(--border)] focus:border-orange-400 text-[var(--text)] rounded-xl pl-9 pr-8 py-2 text-xs font-semibold outline-none shadow-inner"
+                />
+                {searchQuery.trim().length > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSearchQuery('');
+                      setNominatimResults([]);
+                      setSearchDropdownOpen(false);
+                    }}
+                    aria-label="Clear search"
+                    className="absolute right-2 px-1.5 py-0.5 rounded-md text-xs font-bold text-[var(--text-muted)] hover:text-[var(--text)] cursor-pointer"
+                  >
+                    ✕
+                  </button>
+                )}
+              </div>
               <button
-                type="button"
-                onClick={() => {
-                  setSearchQuery('');
-                  setNominatimResults([]);
-                  setSearchDropdownOpen(false);
-                }}
-                aria-label="Clear search"
-                className="absolute right-2.5 px-1.5 py-0.5 rounded-md text-xs font-bold text-[var(--text-muted)] hover:text-[var(--text)] cursor-pointer"
+                type="submit"
+                disabled={isFindingStores || searchQuery.trim().length < 2}
+                className="px-3 py-2 rounded-xl bg-orange-500 hover:bg-orange-400 disabled:opacity-50 text-slate-950 text-xs font-black whitespace-nowrap shadow cursor-pointer transition-all active:scale-95"
               >
-                ✕
+                {isFindingStores ? 'Finding…' : 'Find'}
               </button>
-            )}
-          </form>
+            </form>
 
-          {/* Instant Search Dropdown (Top 3–4 Results) */}
-          {searchDropdownOpen && searchQuery.trim().length >= 2 && (
-            <div
-              data-search-dropdown="true"
-              className="absolute left-0 right-0 top-full mt-1.5 z-[600] bg-[#101218] border border-sky-500/40 rounded-xl shadow-2xl overflow-hidden divide-y divide-slate-800/80"
+            {/* Instant Search Dropdown for Clients / Addresses */}
+            {searchDropdownOpen && searchQuery.trim().length >= 2 && (
+              <div
+                data-search-dropdown="true"
+                className="absolute left-0 right-0 top-full mt-1.5 z-[600] bg-[#101218] border border-sky-500/40 rounded-xl shadow-2xl overflow-hidden divide-y divide-slate-800/80"
+              >
+                <button
+                  type="button"
+                  onClick={() => handleFindNearestStores(searchQuery, null)}
+                  className="w-full px-3 py-2 text-left bg-orange-500/10 hover:bg-orange-500/20 flex items-center justify-between gap-2 cursor-pointer"
+                >
+                  <span className="text-[11px] font-extrabold text-orange-300 truncate">
+                    🏪 Find nearest &ldquo;{searchQuery.trim()}&rdquo; within 25 mi of{' '}
+                    {userGps ? 'my GPS' : 'Home Base'}
+                  </span>
+                  <span className="text-[10px] font-black text-orange-400 shrink-0">Go →</span>
+                </button>
+                {combinedSearchResults.length > 0 ? (
+                  combinedSearchResults.map((res) => {
+                    const est = userGps
+                      ? estimateDriveBetween(userGps.lat, userGps.lng, res.lat, res.lng)
+                      : estimateDriveFromBase(res.lat, res.lng);
+                    const badgeIcon =
+                      res.source === 'CUSTOMER' ? '📍' : res.source === 'SUPPLY' ? '🎨' : '🔎';
+                    return (
+                      <button
+                        key={res.id}
+                        type="button"
+                        onClick={() => handleSelectSearchResult(res)}
+                        className="w-full px-3 py-2 text-left hover:bg-slate-800/90 flex items-center justify-between gap-2 transition-colors cursor-pointer"
+                      >
+                        <div className="flex items-start gap-2 min-w-0">
+                          <span className="text-sm mt-0.5 shrink-0">{badgeIcon}</span>
+                          <div className="min-w-0">
+                            <div className="text-xs font-extrabold text-white truncate">
+                              {res.name}
+                            </div>
+                            <div className="text-[10px] text-slate-400 truncate">
+                              {res.address}
+                            </div>
+                          </div>
+                        </div>
+                        <div className="text-right shrink-0">
+                          <div className="text-[10.5px] font-extrabold text-sky-300">
+                            {est.oneWayMiles.toFixed(1)} mi
+                          </div>
+                          <div className="text-[9px] text-slate-400">~{est.etaMinutes} min</div>
+                        </div>
+                      </button>
+                    );
+                  })
+                ) : (
+                  isSearching && (
+                    <div className="px-3 py-2 text-[11px] text-slate-400">
+                      Searching local matches…
+                    </div>
+                  )
+                )}
+              </div>
+            )}
+          </div>
+
+          {/* One-Tap Nearest Store Preset Chips + Clear Stores */}
+          <div className="flex items-center gap-1.5 overflow-x-auto pb-0.5" data-store-chips="true">
+            {NEAREST_STORE_PRESETS.map((preset) => {
+              const active = activeStorePreset === preset.id && nearbyStores.length > 0;
+              return (
+                <button
+                  key={preset.id}
+                  type="button"
+                  disabled={isFindingStores}
+                  onClick={() => {
+                    setSearchQuery(preset.query);
+                    handleFindNearestStores(preset.query, preset.id);
+                  }}
+                  className={`px-2.5 py-1.5 rounded-full text-[10.5px] font-extrabold border whitespace-nowrap cursor-pointer transition-all active:scale-95 flex items-center gap-1 shrink-0 ${
+                    active
+                      ? 'bg-orange-500 text-slate-950 border-orange-400 shadow'
+                      : 'bg-[var(--bg)] text-[var(--text)] border-orange-500/35 hover:border-orange-400'
+                  }`}
+                >
+                  <span>{preset.icon}</span>
+                  <span>{preset.label}</span>
+                </button>
+              );
+            })}
+            <button
+              type="button"
+              onClick={handleClearStores}
+              disabled={nearbyStores.length === 0 && !storeSearchSummary && !isFindingStores}
+              className={`px-2.5 py-1.5 rounded-full text-[10.5px] font-extrabold border whitespace-nowrap transition-all shrink-0 ${
+                nearbyStores.length > 0 || storeSearchSummary
+                  ? 'bg-rose-500/15 border-rose-500/50 text-rose-300 hover:bg-rose-500/25 cursor-pointer active:scale-95'
+                  : 'bg-[var(--bg)] border-[var(--border)] text-[var(--text-muted)] opacity-50 cursor-not-allowed'
+              }`}
             >
-              {combinedSearchResults.length > 0 ? (
-                combinedSearchResults.map((res) => {
-                  const est = estimateDriveFromBase(res.lat, res.lng);
-                  const badgeIcon =
-                    res.source === 'CUSTOMER' ? '📍' : res.source === 'SUPPLY' ? '🎨' : '🔎';
-                  return (
-                    <button
-                      key={res.id}
-                      type="button"
-                      onClick={() => handleSelectSearchResult(res)}
-                      className="w-full px-3 py-2.5 text-left hover:bg-slate-800/90 flex items-center justify-between gap-2 transition-colors cursor-pointer"
-                    >
-                      <div className="flex items-start gap-2 min-w-0">
-                        <span className="text-sm mt-0.5 shrink-0">{badgeIcon}</span>
-                        <div className="min-w-0">
-                          <div className="text-xs font-extrabold text-white truncate">
-                            {res.name}
-                          </div>
-                          <div className="text-[10px] text-slate-400 truncate">
-                            {res.address}
-                          </div>
-                        </div>
-                      </div>
-                      <div className="text-right shrink-0">
-                        <div className="text-[10.5px] font-extrabold text-sky-300">
-                          {est.oneWayMiles.toFixed(1)} mi
-                        </div>
-                        <div className="text-[9px] text-slate-400">~{est.etaMinutes} min</div>
-                      </div>
-                    </button>
-                  );
-                })
-              ) : (
-                <div className="px-3 py-2.5 text-[11px] text-slate-400">
-                  {isSearching
-                    ? 'Searching Wisconsin addresses & stores…'
-                    : 'No matches yet — press Enter to search'}
-                </div>
-              )}
+              ✕ Clear Stores
+            </button>
+          </div>
+
+          {(isFindingStores || storeSearchSummary) && (
+            <div className="text-[10px] font-bold text-orange-300 flex items-center justify-between gap-2 px-0.5">
+              <span>
+                {isFindingStores
+                  ? `🔎 Searching OpenStreetMap within ${STORE_SEARCH_RADIUS_MILES} mi of ${
+                      userGps ? 'your GPS' : '2119 Barton Ave'
+                    }…`
+                  : `🟠 ${storeSearchSummary}`}
+              </span>
             </div>
           )}
-        </div>
-
-        {/* Quick "Frequent Stops" Horizontal Chip Bar */}
-        <div className="flex items-center gap-1.5 overflow-x-auto pb-0.5" data-frequent-stops="true">
-          {FREQUENT_SUPPLY_STOP_CHIPS.map((chip) => {
-            const active = selectedPin?.kind === 'SUPPLY' && selectedPin.pinId === chip.pinId;
-            return (
-              <button
-                key={chip.pinId}
-                type="button"
-                onClick={() => handleSelectFrequentStop(chip.pinId)}
-                className={`px-2.5 py-1.5 rounded-full text-[10.5px] font-extrabold border whitespace-nowrap cursor-pointer transition-all active:scale-95 flex items-center gap-1 shrink-0 ${
-                  active
-                    ? 'bg-amber-500 text-slate-950 border-amber-400 shadow'
-                    : 'bg-[var(--bg)] text-[var(--text)] border-[var(--border)] hover:border-amber-400/70'
-                }`}
-              >
-                <span>{chip.icon}</span>
-                <span>{chip.label}</span>
-              </button>
-            );
-          })}
         </div>
 
         {/* Mode & Layer Toggle Row */}
@@ -1281,6 +1661,9 @@ export const JobsiteMapView: React.FC<JobsiteMapViewProps> = ({
                 const next = !prev;
                 if (next) {
                   setSelectedPin(null);
+                  if (userGps) {
+                    setRouteStartMode('GPS');
+                  }
                 }
                 return next;
               });
@@ -1293,11 +1676,11 @@ export const JobsiteMapView: React.FC<JobsiteMapViewProps> = ({
           >
             <span>🛣️</span>
             <span>
-              Plan Route{planRouteMode && plannedCustomerIds.length > 0 ? ` (${plannedCustomerIds.length})` : ''}
+              Plan Route{plannedStops.length > 0 ? ` (${plannedStops.length})` : ''}
             </span>
           </button>
 
-          {/* Supply Stops Overlay Toggle */}
+          {/* Saved Supply Pins Overlay Toggle */}
           <button
             type="button"
             onClick={() => setShowSupplyLayer((prev) => !prev)}
@@ -1308,7 +1691,7 @@ export const JobsiteMapView: React.FC<JobsiteMapViewProps> = ({
             }`}
           >
             <span>🎨</span>
-            <span>Supply Stops ({allSupplyPins.length})</span>
+            <span>Saved Stops ({allSupplyPins.length})</span>
           </button>
 
           {/* + Add Custom Pin Button */}
@@ -1402,19 +1785,52 @@ export const JobsiteMapView: React.FC<JobsiteMapViewProps> = ({
         {/* Plan Route Mode Banner Overlay */}
         {planRouteMode && (
           <div className="pointer-events-none absolute top-3 left-1/2 -translate-x-1/2 z-[450] bg-slate-950/90 border border-sky-400/60 text-sky-200 px-3 py-1.5 rounded-full text-[10px] font-extrabold shadow-lg whitespace-nowrap">
-            🛣️ Tap customer pins in order ({plannedRouteStops.length} selected)
+            🛣️ Tap jobs or stores in order ({plannedStops.length} selected)
           </div>
         )}
 
         {/* Empty state hint overlay when zero customers are saved yet */}
-        {!planRouteMode && customers.length === 0 && !selectedPin && (
+        {!planRouteMode && customers.length === 0 && nearbyStores.length === 0 && !selectedPin && (
           <div className="pointer-events-none absolute top-3 left-1/2 -translate-x-1/2 z-[450] bg-slate-950/90 border border-amber-400/50 text-amber-200 px-3 py-1.5 rounded-full text-[10px] font-bold shadow-lg whitespace-nowrap">
-            Search any store/address above or tap a Frequent Stop chip to dispatch
+            Tap Locate Me or pick a Nearest Store chip above
           </div>
         )}
+
+        {/* Floating "Locate Me" Live GPS Crosshair Button */}
+        <button
+          type="button"
+          data-locate-me-btn="true"
+          onClick={() => handleLocateMe()}
+          disabled={isLocatingGps}
+          title="Locate Me (Live GPS)"
+          aria-label="Locate Me"
+          className={`absolute bottom-7 right-3 z-[450] flex items-center gap-1.5 px-3 py-2 rounded-full border text-[11px] font-black shadow-2xl cursor-pointer transition-all active:scale-95 ${
+            userGps
+              ? 'bg-sky-500 text-slate-950 border-white shadow-sky-500/40'
+              : 'bg-slate-950/92 text-sky-300 border-sky-400/70 hover:bg-slate-900'
+          }`}
+        >
+          <svg
+            xmlns="http://www.w3.org/2000/svg"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2.4"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            className={`w-4 h-4 ${isLocatingGps ? 'animate-spin' : ''}`}
+          >
+            <circle cx="12" cy="12" r="4" />
+            <line x1="12" y1="2" x2="12" y2="6" />
+            <line x1="12" y1="18" x2="12" y2="22" />
+            <line x1="2" y1="12" x2="6" y2="12" />
+            <line x1="18" y1="12" x2="22" y2="12" />
+          </svg>
+          <span>{isLocatingGps ? 'Locating…' : 'Locate Me'}</span>
+        </button>
       </div>
 
-      {/* Multi-Stop "Plan Day Route" Card */}
+      {/* Multi-Stop "Plan Day Route" Card (Supports Jobs AND/OR Stores, starting from GPS or Home Base) */}
       {planRouteMode && (
         <div
           data-plan-route-card="true"
@@ -1427,14 +1843,16 @@ export const JobsiteMapView: React.FC<JobsiteMapViewProps> = ({
                 <span>Plan Day Route</span>
               </h3>
               <p className="text-[10px] text-slate-400 truncate">
-                Starts &amp; ends at {HOME_BASE.address}
+                {activeRouteOrigin.isGps
+                  ? 'Starts from My Current GPS Location'
+                  : `Starts & ends at ${HOME_BASE.address}`}
               </p>
             </div>
             <div className="flex items-center gap-1.5 shrink-0">
-              {plannedCustomerIds.length > 0 && (
+              {plannedStops.length > 0 && (
                 <button
                   type="button"
-                  onClick={() => setPlannedCustomerIds([])}
+                  onClick={() => setPlannedStops([])}
                   className="px-2.5 py-1 rounded-lg bg-slate-800 border border-slate-700 text-[10px] font-bold text-slate-300 hover:text-white cursor-pointer"
                 >
                   Clear
@@ -1450,32 +1868,76 @@ export const JobsiteMapView: React.FC<JobsiteMapViewProps> = ({
             </div>
           </div>
 
-          {plannedRouteStops.length === 0 ? (
+          {/* Start Origin Switcher: My Current GPS vs 2119 Barton Ave Home Base */}
+          <div className="flex items-center gap-1.5 flex-wrap">
+            <span className="text-[10px] font-bold uppercase text-slate-400">Start from:</span>
+            <button
+              type="button"
+              onClick={() => {
+                if (userGps) {
+                  setRouteStartMode('GPS');
+                } else {
+                  handleLocateMe({ switchRouteStartToGps: true });
+                }
+              }}
+              className={`px-2.5 py-1 rounded-full text-[10px] font-extrabold border cursor-pointer transition-all ${
+                activeRouteOrigin.isGps
+                  ? 'bg-sky-500 text-slate-950 border-sky-400 shadow'
+                  : 'bg-slate-900 text-sky-300 border-sky-500/40 hover:border-sky-400'
+              }`}
+            >
+              📍 My GPS {userGps ? '' : '(Locate)'}
+            </button>
+            <button
+              type="button"
+              onClick={() => setRouteStartMode('HOME')}
+              className={`px-2.5 py-1 rounded-full text-[10px] font-extrabold border cursor-pointer transition-all ${
+                !activeRouteOrigin.isGps
+                  ? 'bg-amber-500 text-slate-950 border-amber-400 shadow'
+                  : 'bg-slate-900 text-amber-300 border-amber-500/40 hover:border-amber-400'
+              }`}
+            >
+              🏠 2119 Barton Ave
+            </button>
+          </div>
+
+          {plannedStops.length === 0 ? (
             <div className="bg-slate-900/90 border border-slate-800 rounded-xl px-3 py-2.5 text-[11px] text-slate-300">
-              Tap customer pins on the map in the order you want to visit them. Estimated round-trip mileage and drive time will calculate automatically via OSRM.
+              Tap customer job pins or orange store pins on the map in visit order. Total mileage and drive time calculate automatically via OSRM.
             </div>
           ) : (
             <>
               {/* Ordered Stops Chips */}
               <div className="flex flex-wrap items-center gap-1.5">
-                <span className="inline-flex items-center gap-1 px-2 py-1 rounded-full bg-amber-500/15 border border-amber-400/40 text-[10px] font-extrabold text-amber-300">
-                  🏠 Base
+                <span
+                  className={`inline-flex items-center gap-1 px-2 py-1 rounded-full text-[10px] font-extrabold border ${
+                    activeRouteOrigin.isGps
+                      ? 'bg-sky-500/20 border-sky-400/50 text-sky-300'
+                      : 'bg-amber-500/15 border-amber-400/40 text-amber-300'
+                  }`}
+                >
+                  {activeRouteOrigin.isGps ? '📍 My GPS' : '🏠 Base'}
                 </span>
-                {plannedRouteStops.map((stop, idx) => (
+                {plannedStops.map((stop, idx) => (
                   <span
                     key={stop.id}
-                    className="inline-flex items-center gap-1.5 px-2 py-1 rounded-full bg-sky-500/15 border border-sky-400/50 text-[10.5px] font-bold text-white"
+                    className={`inline-flex items-center gap-1.5 px-2 py-1 rounded-full border text-[10.5px] font-bold text-white ${
+                      stop.kind === 'SUPPLY'
+                        ? 'bg-orange-500/20 border-orange-400/55'
+                        : 'bg-sky-500/15 border-sky-400/50'
+                    }`}
                   >
                     <span className="w-4 h-4 rounded-full bg-sky-400 text-slate-950 text-[9.5px] font-black inline-flex items-center justify-center">
                       {idx + 1}
                     </span>
-                    <span className="truncate max-w-[130px]">{stop.name}</span>
+                    <span className="truncate max-w-[130px]">
+                      {stop.kind === 'SUPPLY' ? '🏪 ' : ''}
+                      {stop.name}
+                    </span>
                     <button
                       type="button"
                       onClick={() =>
-                        setPlannedCustomerIds((prev) =>
-                          prev.filter((id) => id !== Number(stop.refId))
-                        )
+                        setPlannedStops((prev) => prev.filter((s) => s.id !== stop.id))
                       }
                       aria-label={`Remove ${stop.name} from route`}
                       className="text-slate-300 hover:text-white text-[10px] font-black cursor-pointer"
@@ -1484,20 +1946,26 @@ export const JobsiteMapView: React.FC<JobsiteMapViewProps> = ({
                     </button>
                   </span>
                 ))}
-                <span className="inline-flex items-center gap-1 px-2 py-1 rounded-full bg-amber-500/15 border border-amber-400/40 text-[10px] font-extrabold text-amber-300">
-                  ↩ Base
-                </span>
+                {routeReturnToOrigin && (
+                  <span className="inline-flex items-center gap-1 px-2 py-1 rounded-full bg-amber-500/15 border border-amber-400/40 text-[10px] font-extrabold text-amber-300">
+                    ↩ Base
+                  </span>
+                )}
               </div>
 
-              {/* OSRM Round-Trip Mileage & Drive Time Summary */}
+              {/* OSRM Total Mileage & Drive Time Summary */}
               {routeEstimate && (
                 <div className="grid grid-cols-2 gap-2">
                   <div className="bg-slate-900/90 border border-slate-800 rounded-xl px-3 py-2">
                     <div className="text-[9px] uppercase font-bold text-slate-400">
-                      Est. Round-Trip Miles
+                      {routeReturnToOrigin ? 'Est. Round-Trip Miles' : 'Est. Total Route Miles'}
                     </div>
                     <div className="text-sm font-black text-sky-300 tabular-nums">
-                      {routeEstimate.roundTripMiles.toFixed(1)} mi
+                      {(routeReturnToOrigin
+                        ? routeEstimate.roundTripMiles
+                        : routeEstimate.oneWayMiles
+                      ).toFixed(1)}{' '}
+                      mi
                     </div>
                   </div>
                   <div className="bg-slate-900/90 border border-slate-800 rounded-xl px-3 py-2">
@@ -1513,16 +1981,25 @@ export const JobsiteMapView: React.FC<JobsiteMapViewProps> = ({
 
               {/* Primary Multi-Stop Google Maps Launch CTA */}
               <a
-                href={buildGoogleMapsMultiStopUrl(plannedRouteStops, true)}
+                href={buildGoogleMapsMultiStopUrl(
+                  plannedStops,
+                  routeReturnToOrigin,
+                  activeRouteOrigin
+                )}
                 target="_blank"
                 rel="noopener noreferrer"
                 onClick={() => {
-                  if (routeEstimate && routeEstimate.roundTripMiles > 0) {
-                    const stopNames = plannedRouteStops.map((s) => s.name).join(' → ');
+                  const milesToLog = routeEstimate
+                    ? routeReturnToOrigin
+                      ? routeEstimate.roundTripMiles
+                      : routeEstimate.oneWayMiles
+                    : 0;
+                  if (milesToLog > 0) {
+                    const stopNames = plannedStops.map((s) => s.name).join(' → ');
                     onSilentLogDispatchMileage({
-                      destKey: `route:${plannedRouteStops.map((s) => s.refId).join('-')}`,
-                      destName: `Day Route (${plannedRouteStops.length} stops: ${stopNames})`,
-                      roundTripMiles: routeEstimate.roundTripMiles,
+                      destKey: `route:${plannedStops.map((s) => s.id).join('-')}`,
+                      destName: `Day Route (${plannedStops.length} stops: ${stopNames})`,
+                      roundTripMiles: milesToLog,
                     });
                   }
                 }}
@@ -1621,10 +2098,28 @@ export const JobsiteMapView: React.FC<JobsiteMapViewProps> = ({
                         </button>
                       )}
                     </p>
-                    <div className="mt-1 inline-flex items-center gap-1.5 text-[10.5px] font-extrabold text-sky-300 bg-sky-500/10 border border-sky-500/30 rounded-lg px-2 py-0.5">
-                      <span>🚗</span>
-                      <span>
-                        {drive.oneWayMiles.toFixed(1)} mi • ~{drive.etaMinutes} min from 2119 Barton Ave
+                    <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+                      {userGps && (() => {
+                        const gpsDrive =
+                          activeGpsDriveEstimate ||
+                          estimateDriveBetween(userGps.lat, userGps.lng, lat, lng);
+                        return (
+                          <span
+                            data-gps-distance-badge="true"
+                            className="inline-flex items-center gap-1 text-[10.5px] font-extrabold text-emerald-300 bg-emerald-500/15 border border-emerald-500/40 rounded-lg px-2 py-0.5"
+                          >
+                            <span>📍</span>
+                            <span>
+                              {gpsDrive.oneWayMiles.toFixed(1)} mi • ~{gpsDrive.etaMinutes} min from Me
+                            </span>
+                          </span>
+                        );
+                      })()}
+                      <span className="inline-flex items-center gap-1 text-[10.5px] font-extrabold text-sky-300 bg-sky-500/10 border border-sky-500/30 rounded-lg px-2 py-0.5">
+                        <span>🏠</span>
+                        <span>
+                          {drive.oneWayMiles.toFixed(1)} mi • ~{drive.etaMinutes} min from 2119 Barton Ave
+                        </span>
                       </span>
                     </div>
                   </div>
@@ -1790,6 +2285,136 @@ export const JobsiteMapView: React.FC<JobsiteMapViewProps> = ({
             );
           })()}
 
+          {/* NEAREST STORE FINDER (ORANGE PIN) CARD */}
+          {selectedNearbyStore && (() => {
+            const driveBase =
+              activeDriveEstimate ||
+              estimateDriveFromBase(selectedNearbyStore.lat, selectedNearbyStore.lng);
+            const gpsDrive = userGps
+              ? activeGpsDriveEstimate ||
+                estimateDriveBetween(
+                  userGps.lat,
+                  userGps.lng,
+                  selectedNearbyStore.lat,
+                  selectedNearbyStore.lng
+                )
+              : null;
+            const telHref = sanitizeTelHref(selectedNearbyStore.phone);
+            const stopId = `store-${selectedNearbyStore.id}`;
+            const alreadyInRoute = plannedStopIndexById.has(stopId);
+
+            return (
+              <div className="space-y-2.5">
+                <div className="flex items-start justify-between gap-2">
+                  <div className="min-w-0">
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      <span className="text-base">🏪</span>
+                      <h3 className="text-sm font-black text-white truncate">
+                        {selectedNearbyStore.name}
+                      </h3>
+                      <span className="text-[9px] font-black uppercase px-2 py-0.5 rounded-full bg-orange-500/20 text-orange-300 border border-orange-400/60">
+                        {selectedNearbyStore.categoryLabel}
+                      </span>
+                    </div>
+                    <p className="text-[10.5px] text-slate-300 mt-0.5">
+                      📍 {selectedNearbyStore.address}
+                    </p>
+                    <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+                      {gpsDrive && (
+                        <span
+                          data-gps-distance-badge="true"
+                          className="inline-flex items-center gap-1 text-[10.5px] font-extrabold text-emerald-300 bg-emerald-500/15 border border-emerald-500/40 rounded-lg px-2 py-0.5"
+                        >
+                          <span>📍</span>
+                          <span>
+                            {gpsDrive.oneWayMiles.toFixed(1)} mi • ~{gpsDrive.etaMinutes} min from Me
+                          </span>
+                        </span>
+                      )}
+                      <span className="inline-flex items-center gap-1 text-[10.5px] font-extrabold text-sky-300 bg-sky-500/10 border border-sky-500/30 rounded-lg px-2 py-0.5">
+                        <span>🏠</span>
+                        <span>
+                          {driveBase.oneWayMiles.toFixed(1)} mi • ~{driveBase.etaMinutes} min from 2119 Barton Ave
+                        </span>
+                      </span>
+                    </div>
+                    {selectedNearbyStore.phone && (
+                      <p className="text-[10.5px] text-emerald-300 font-bold mt-1">
+                        📞 {selectedNearbyStore.phone}
+                      </p>
+                    )}
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setSelectedPin(null)}
+                    className="text-xs font-bold text-slate-400 hover:text-white px-1.5 py-0.5 cursor-pointer"
+                    aria-label="Close store card"
+                  >
+                    ✕
+                  </button>
+                </div>
+
+                <div className="grid grid-cols-2 gap-1.5 pt-0.5">
+                  <a
+                    href={buildSingleStopMapsUrl(
+                      selectedNearbyStore.address,
+                      selectedNearbyStore.lat,
+                      selectedNearbyStore.lng
+                    )}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    onClick={() =>
+                      handleOpenGoogleMapsClick(
+                        stopId,
+                        selectedNearbyStore.name,
+                        selectedNearbyStore.lat,
+                        selectedNearbyStore.lng
+                      )
+                    }
+                    className="py-2.5 px-3 rounded-xl bg-gradient-to-r from-sky-500 to-blue-600 hover:opacity-95 text-white text-xs font-black text-center shadow-lg transition-all active:scale-95 flex items-center justify-center gap-1.5"
+                  >
+                    <span>🧭</span>
+                    <span>Navigate</span>
+                  </a>
+
+                  <button
+                    type="button"
+                    onClick={() =>
+                      addStopAndOpenPlanner({
+                        id: stopId,
+                        kind: 'SUPPLY',
+                        refId: selectedNearbyStore.id,
+                        name: selectedNearbyStore.name,
+                        address: selectedNearbyStore.address,
+                        lat: selectedNearbyStore.lat,
+                        lng: selectedNearbyStore.lng,
+                        subtitle: selectedNearbyStore.categoryLabel,
+                      })
+                    }
+                    className={`py-2.5 px-3 rounded-xl border text-xs font-black transition-all active:scale-95 cursor-pointer flex items-center justify-center gap-1.5 ${
+                      alreadyInRoute
+                        ? 'bg-emerald-500/20 border-emerald-400 text-emerald-200'
+                        : 'bg-orange-500/20 border-orange-400 text-orange-200 hover:bg-orange-500/30'
+                    }`}
+                  >
+                    <span>🛣️</span>
+                    <span>{alreadyInRoute ? 'In Route ✓' : 'Add to Route'}</span>
+                  </button>
+                </div>
+
+                {telHref && (
+                  <a
+                    href={telHref}
+                    className="w-full py-2 px-3 rounded-xl bg-emerald-600/25 border border-emerald-500/40 hover:bg-emerald-600/35 text-emerald-200 text-xs font-extrabold text-center flex items-center justify-center gap-1.5"
+                  >
+                    <span>📞</span>
+                    <span>Call {selectedNearbyStore.phone}</span>
+                  </a>
+                )}
+              </div>
+            );
+          })()}
+
           {/* SUPPLY / HARDWARE STOP PIN CARD */}
           {selectedSupplyPin && (() => {
             const cat = SUPPLY_CATEGORY_META[selectedSupplyPin.category];
@@ -1797,6 +2422,17 @@ export const JobsiteMapView: React.FC<JobsiteMapViewProps> = ({
             const drive =
               activeDriveEstimate ||
               estimateDriveFromBase(selectedSupplyPin.lat, selectedSupplyPin.lng);
+            const gpsDrive = userGps
+              ? activeGpsDriveEstimate ||
+                estimateDriveBetween(
+                  userGps.lat,
+                  userGps.lng,
+                  selectedSupplyPin.lat,
+                  selectedSupplyPin.lng
+                )
+              : null;
+            const stopId = `supply-${selectedSupplyPin.id}`;
+            const alreadyInRoute = plannedStopIndexById.has(stopId);
 
             return (
               <div className="space-y-2.5">
@@ -1821,10 +2457,23 @@ export const JobsiteMapView: React.FC<JobsiteMapViewProps> = ({
                     <p className="text-[10.5px] text-slate-300 mt-0.5">
                       📍 {selectedSupplyPin.address}
                     </p>
-                    <div className="mt-1 inline-flex items-center gap-1.5 text-[10.5px] font-extrabold text-sky-300 bg-sky-500/10 border border-sky-500/30 rounded-lg px-2 py-0.5">
-                      <span>🚗</span>
-                      <span>
-                        {drive.oneWayMiles.toFixed(1)} mi • ~{drive.etaMinutes} min from 2119 Barton Ave
+                    <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+                      {gpsDrive && (
+                        <span
+                          data-gps-distance-badge="true"
+                          className="inline-flex items-center gap-1 text-[10.5px] font-extrabold text-emerald-300 bg-emerald-500/15 border border-emerald-500/40 rounded-lg px-2 py-0.5"
+                        >
+                          <span>📍</span>
+                          <span>
+                            {gpsDrive.oneWayMiles.toFixed(1)} mi • ~{gpsDrive.etaMinutes} min from Me
+                          </span>
+                        </span>
+                      )}
+                      <span className="inline-flex items-center gap-1 text-[10.5px] font-extrabold text-sky-300 bg-sky-500/10 border border-sky-500/30 rounded-lg px-2 py-0.5">
+                        <span>🏠</span>
+                        <span>
+                          {drive.oneWayMiles.toFixed(1)} mi • ~{drive.etaMinutes} min from 2119 Barton Ave
+                        </span>
                       </span>
                     </div>
                     {selectedSupplyPin.phone && (
@@ -1859,17 +2508,36 @@ export const JobsiteMapView: React.FC<JobsiteMapViewProps> = ({
                     rel="noopener noreferrer"
                     onClick={() =>
                       handleOpenGoogleMapsClick(
-                        `supply-${selectedSupplyPin.id}`,
+                        stopId,
                         selectedSupplyPin.name,
                         selectedSupplyPin.lat,
                         selectedSupplyPin.lng
                       )
                     }
-                    className="flex-1 min-w-[175px] py-2.5 px-3.5 rounded-xl bg-gradient-to-r from-sky-500 to-blue-600 hover:opacity-95 text-white text-xs font-black uppercase tracking-wide text-center shadow-lg transition-all active:scale-95 flex items-center justify-center gap-1.5"
+                    className="flex-1 min-w-[125px] py-2.5 px-3 rounded-xl bg-gradient-to-r from-sky-500 to-blue-600 hover:opacity-95 text-white text-xs font-black text-center shadow-lg transition-all active:scale-95 flex items-center justify-center gap-1.5"
                   >
                     <span>🧭</span>
-                    <span>Open in Google Maps</span>
+                    <span>Navigate</span>
                   </a>
+
+                  <button
+                    type="button"
+                    onClick={() =>
+                      addStopAndOpenPlanner({
+                        id: stopId,
+                        kind: 'SUPPLY',
+                        refId: selectedSupplyPin.id,
+                        name: selectedSupplyPin.name,
+                        address: selectedSupplyPin.address,
+                        lat: selectedSupplyPin.lat,
+                        lng: selectedSupplyPin.lng,
+                        subtitle: cat.label,
+                      })
+                    }
+                    className="py-2.5 px-3 rounded-xl bg-orange-500/20 border border-orange-400 text-orange-200 text-xs font-extrabold hover:bg-orange-500/30 cursor-pointer transition-all active:scale-95"
+                  >
+                    🛣️ {alreadyInRoute ? 'In Route ✓' : 'Add to Route'}
+                  </button>
 
                   {telHref && (
                     <a
@@ -1904,6 +2572,15 @@ export const JobsiteMapView: React.FC<JobsiteMapViewProps> = ({
             const drive =
               activeDriveEstimate ||
               estimateDriveFromBase(selectedSearchPin.lat, selectedSearchPin.lng);
+            const gpsDrive = userGps
+              ? activeGpsDriveEstimate ||
+                estimateDriveBetween(
+                  userGps.lat,
+                  userGps.lng,
+                  selectedSearchPin.lat,
+                  selectedSearchPin.lng
+                )
+              : null;
             return (
               <div className="space-y-2.5">
                 <div className="flex items-start justify-between gap-2">
@@ -1920,10 +2597,23 @@ export const JobsiteMapView: React.FC<JobsiteMapViewProps> = ({
                     <p className="text-[10.5px] text-slate-300 mt-0.5">
                       📍 {selectedSearchPin.address}
                     </p>
-                    <div className="mt-1 inline-flex items-center gap-1.5 text-[10.5px] font-extrabold text-sky-300 bg-sky-500/10 border border-sky-500/30 rounded-lg px-2 py-0.5">
-                      <span>🚗</span>
-                      <span>
-                        {drive.oneWayMiles.toFixed(1)} mi • ~{drive.etaMinutes} min from 2119 Barton Ave
+                    <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+                      {gpsDrive && (
+                        <span
+                          data-gps-distance-badge="true"
+                          className="inline-flex items-center gap-1 text-[10.5px] font-extrabold text-emerald-300 bg-emerald-500/15 border border-emerald-500/40 rounded-lg px-2 py-0.5"
+                        >
+                          <span>📍</span>
+                          <span>
+                            {gpsDrive.oneWayMiles.toFixed(1)} mi • ~{gpsDrive.etaMinutes} min from Me
+                          </span>
+                        </span>
+                      )}
+                      <span className="inline-flex items-center gap-1 text-[10.5px] font-extrabold text-sky-300 bg-sky-500/10 border border-sky-500/30 rounded-lg px-2 py-0.5">
+                        <span>🏠</span>
+                        <span>
+                          {drive.oneWayMiles.toFixed(1)} mi • ~{drive.etaMinutes} min from 2119 Barton Ave
+                        </span>
                       </span>
                     </div>
                   </div>
@@ -1957,11 +2647,29 @@ export const JobsiteMapView: React.FC<JobsiteMapViewProps> = ({
                         selectedSearchPin.lng
                       )
                     }
-                    className="flex-1 min-w-[175px] py-2.5 px-3.5 rounded-xl bg-gradient-to-r from-sky-500 to-blue-600 hover:opacity-95 text-white text-xs font-black uppercase tracking-wide text-center shadow-lg transition-all active:scale-95 flex items-center justify-center gap-1.5"
+                    className="flex-1 min-w-[140px] py-2.5 px-3.5 rounded-xl bg-gradient-to-r from-sky-500 to-blue-600 hover:opacity-95 text-white text-xs font-black text-center shadow-lg transition-all active:scale-95 flex items-center justify-center gap-1.5"
                   >
                     <span>🧭</span>
-                    <span>Open in Google Maps</span>
+                    <span>Navigate</span>
                   </a>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      addStopAndOpenPlanner({
+                        id: `search-${selectedSearchPin.id}`,
+                        kind: 'SUPPLY',
+                        refId: selectedSearchPin.id,
+                        name: selectedSearchPin.name,
+                        address: selectedSearchPin.address,
+                        lat: selectedSearchPin.lat,
+                        lng: selectedSearchPin.lng,
+                        subtitle: 'Searched Stop',
+                      })
+                    }
+                    className="py-2.5 px-3 rounded-xl bg-orange-500/20 border border-orange-400 text-orange-200 text-xs font-extrabold hover:bg-orange-500/30 cursor-pointer"
+                  >
+                    🛣️ Add to Route
+                  </button>
                   <button
                     type="button"
                     onClick={() => {
@@ -1981,27 +2689,58 @@ export const JobsiteMapView: React.FC<JobsiteMapViewProps> = ({
           })()}
 
           {/* HOME BASE PIN CARD */}
-          {selectedPin.kind === 'HOME' && (
-            <div className="flex items-center justify-between gap-2">
-              <div>
-                <div className="text-xs font-black text-amber-300 flex items-center gap-1.5">
-                  <span>🏠</span>
-                  <span>{HOME_BASE.name}</span>
+          {selectedPin.kind === 'HOME' && (() => {
+            const gpsDriveHome = userGps
+              ? activeGpsDriveEstimate ||
+                estimateDriveBetween(userGps.lat, userGps.lng, HOME_BASE.lat, HOME_BASE.lng)
+              : null;
+            return (
+              <div className="space-y-2.5">
+                <div className="flex items-start justify-between gap-2">
+                  <div>
+                    <div className="text-xs font-black text-amber-300 flex items-center gap-1.5">
+                      <span>🏠</span>
+                      <span>{HOME_BASE.name}</span>
+                    </div>
+                    <p className="text-[11px] text-slate-300 mt-0.5">{HOME_BASE.address}</p>
+                    {gpsDriveHome ? (
+                      <div
+                        data-gps-distance-badge="true"
+                        className="mt-1.5 inline-flex items-center gap-1 text-[10.5px] font-extrabold text-emerald-300 bg-emerald-500/15 border border-emerald-500/40 rounded-lg px-2 py-0.5"
+                      >
+                        <span>📍</span>
+                        <span>
+                          {gpsDriveHome.oneWayMiles.toFixed(1)} mi • ~{gpsDriveHome.etaMinutes} min from Me
+                        </span>
+                      </div>
+                    ) : (
+                      <p className="text-[10px] text-slate-400 mt-0.5">
+                        Home dispatch origin for distance, drive-time ETAs, and background tax mileage.
+                      </p>
+                    )}
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setSelectedPin(null)}
+                    className="text-xs font-bold text-slate-400 hover:text-white px-2 py-1 cursor-pointer"
+                  >
+                    ✕
+                  </button>
                 </div>
-                <p className="text-[11px] text-slate-300 mt-0.5">{HOME_BASE.address}</p>
-                <p className="text-[10px] text-slate-400">
-                  Home dispatch origin for distance, drive-time ETAs, and background tax mileage.
-                </p>
+                {gpsDriveHome && (
+                  <a
+                    href={buildSingleStopMapsUrl(HOME_BASE.address, HOME_BASE.lat, HOME_BASE.lng)}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="w-full py-2 px-3 rounded-xl bg-gradient-to-r from-amber-500 to-orange-500 hover:opacity-95 text-slate-950 text-xs font-black text-center shadow flex items-center justify-center gap-1.5"
+                  >
+                    <span>🧭</span>
+                    <span>Navigate to Home Base</span>
+                  </a>
+                )}
               </div>
-              <button
-                type="button"
-                onClick={() => setSelectedPin(null)}
-                className="text-xs font-bold text-slate-400 hover:text-white px-2 py-1 cursor-pointer"
-              >
-                ✕
-              </button>
-            </div>
-          )}
+            );
+          })()}
         </div>
       )}
 

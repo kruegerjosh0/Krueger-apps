@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { User } from 'firebase/auth';
 import {
   Customer,
@@ -89,6 +89,8 @@ import {
   signOutCloudAdmin,
   saveWorkspaceToCloud,
   loadWorkspaceFromCloud,
+  calculateCloudSyncPayloadBytes,
+  formatFirestoreSyncError,
   mergeLocalFileBlobsIntoCloudCustomers,
   getLocalLastUpdated,
   setLocalLastUpdated,
@@ -650,13 +652,20 @@ export default function App() {
         return false;
       } catch (err: any) {
         console.error('Firestore push failed:', err);
+        const readableErr = formatFirestoreSyncError(err, err?.payloadBytes);
         setCloudSyncState('error');
-        setCloudSyncError(err?.message || 'Cloud save failed. Local copy is safe.');
+        setCloudSyncError(readableErr);
         hasPendingPushRef.current = true;
+        if (
+          String(err?.code || '').toLowerCase().includes('resource-exhausted') ||
+          readableErr.toLowerCase().includes('1 mb')
+        ) {
+          showToast(`⚠️ ${readableErr}`);
+        }
         return false;
       }
     },
-    [recordCloudSyncTime]
+    [recordCloudSyncTime, showToast]
   );
 
   const syncWithCloud = useCallback(
@@ -733,10 +742,10 @@ export default function App() {
       } catch (err: any) {
         console.error('Firestore sync error:', err);
         setCloudSyncState('error');
-        const msg = err?.message || 'Cloud sync failed. Local storage remains active.';
+        const msg = formatFirestoreSyncError(err, err?.payloadBytes);
         setCloudSyncError(msg);
-        if (!silent) {
-          showToast(`❌ Cloud sync failed: ${msg}`);
+        if (!silent || msg.toLowerCase().includes('1 mb')) {
+          showToast(`⚠️ ${msg}`);
         }
       } finally {
         isSyncInFlightRef.current = false;
@@ -923,6 +932,37 @@ export default function App() {
     showToast('Signed out • Switched to local device storage');
   }, [showToast]);
 
+  const syncPayloadBytes = useMemo(
+    () =>
+      calculateCloudSyncPayloadBytes(
+        {
+          customers,
+          notes,
+          expenses,
+          mileage,
+          shoppingList,
+          priceBook,
+          customSupplyPins,
+          settings,
+          constants,
+        },
+        cloudUser?.uid || 'admin_preview_uid',
+        localLastUpdatedRef.current || 1
+      ),
+    [
+      customers,
+      notes,
+      expenses,
+      mileage,
+      shoppingList,
+      priceBook,
+      customSupplyPins,
+      settings,
+      constants,
+      cloudUser?.uid,
+    ]
+  );
+
   const cloudSyncAccountProps: CloudSyncAccountProps = {
     currentUser: cloudUser,
     isAuthorizedAdmin: isAuthorizedCloudAdmin,
@@ -930,6 +970,7 @@ export default function App() {
     syncState: cloudSyncState,
     lastSyncLabel: lastCloudSyncLabel,
     syncError: cloudSyncError,
+    syncPayloadBytes,
     onSignIn: handleCloudSignIn,
     onPasswordReset: handleCloudPasswordReset,
     onForceSync: handleCloudForceSync,

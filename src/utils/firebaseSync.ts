@@ -37,8 +37,11 @@ export const LOCAL_LAST_UPDATED_KEY = 'KMaster_LocalLastUpdated';
 export const LAST_CLOUD_SYNC_LABEL_KEY = 'KMaster_LastCloudSync';
 export const DEVICE_ID_KEY = 'KMaster_DeviceId';
 
-// Safe byte ceiling below Firestore's 1 MiB (1,048,576 bytes) document limit
-const MAX_FIRESTORE_DOC_BYTES = 880_000;
+// Firestore single-document limit: 1 MB (1,024 KB = 1,048,576 bytes)
+export const FIRESTORE_DOC_LIMIT_KB = 1024;
+export const FIRESTORE_DOC_LIMIT_BYTES = FIRESTORE_DOC_LIMIT_KB * 1024;
+export const FIRESTORE_WARNING_THRESHOLD_KB = 800;
+export const FIRESTORE_WARNING_THRESHOLD_BYTES = FIRESTORE_WARNING_THRESHOLD_KB * 1024;
 
 export const firebaseApp = getApps().length === 0 ? initializeApp(firebaseConfig) : getApp();
 export const firebaseAuth = getAuth(firebaseApp);
@@ -128,13 +131,6 @@ function getEstimatorSyncDocRef(userId: string) {
   return doc(firestore, 'users', userId, ESTIMATOR_CLOUD_COLLECTION, ESTIMATOR_CLOUD_DOC);
 }
 
-function measureUtf8Bytes(text: string): number {
-  if (typeof TextEncoder !== 'undefined') {
-    return new TextEncoder().encode(text).length;
-  }
-  return text.length * 2;
-}
-
 export interface CloudWorkspacePayload {
   customers: Customer[];
   notes: FieldNote[];
@@ -151,72 +147,140 @@ export interface CloudWorkspacePayload {
   deviceId?: string;
 }
 
+export type CloudWorkspaceInput = Omit<
+  CloudWorkspacePayload,
+  'updatedAt' | 'deviceLabel' | 'lastUpdated' | 'deviceId'
+>;
+
 export interface CloudSaveResult {
   saved: boolean;
   lastUpdated: number;
-  strippedLargeFiles?: boolean;
+  payloadBytes: number;
 }
 
-function stripLargeFileDataUrls(customers: Customer[]): Customer[] {
+/**
+ * Strips all legacy `files` and `photos` Base64 arrays from customer & job records
+ * before serializing for Firestore cloud sync so binary uploads never bloat the 1 MB document.
+ */
+export function sanitizeCustomersForCloudSync(customers: Customer[]): Customer[] {
   return (customers || []).map((customer) => {
-    if (!Array.isArray(customer.files) || customer.files.length === 0) return customer;
-    return {
+    const cleaned: Record<string, any> = {
       ...customer,
-      files: customer.files.map((file) => {
-        if (file?.data && file.data.length > 16_000) {
-          return {
-            ...file,
-            data: '',
-            omittedFromCloud: true,
-          } as typeof file & { omittedFromCloud?: boolean };
-        }
-        return file;
-      }),
+      files: [],
     };
+    delete cleaned.photos;
+
+    if (Array.isArray(cleaned.jobs)) {
+      cleaned.jobs = cleaned.jobs.map((job: any) => {
+        if (!job || typeof job !== 'object') return job;
+        const cleanedJob = { ...job };
+        delete cleanedJob.photos;
+        delete cleanedJob.files;
+        return cleanedJob;
+      });
+    }
+
+    return cleaned as Customer;
   });
 }
 
 /**
- * Preserves local binary attachment data on this device if the cloud copy
- * omitted oversized inline image/PDF payloads to stay under Firestore's 1 MiB limit.
+ * Builds the exact Firestore document object written to users/${uid}/estimatorData/main.
+ * Used both for real writes and for calculating the live Cloud Storage Meter byte size.
+ */
+export function buildCloudSyncDocData(
+  userId: string,
+  payload: CloudWorkspaceInput,
+  lastUpdated: number
+) {
+  const sanitizedCustomers = sanitizeCustomersForCloudSync(payload.customers || []);
+  const nowIso = new Date(lastUpdated).toISOString();
+
+  return {
+    userId,
+    email: ADMIN_CLOUD_EMAIL,
+    lastUpdated,
+    updatedAt: nowIso,
+    deviceId: getOrCreateDeviceId(),
+    deviceLabel: getDeviceLabel(),
+    customersJson: JSON.stringify(sanitizedCustomers),
+    notesJson: JSON.stringify(payload.notes || []),
+    expensesJson: JSON.stringify(payload.expenses || []),
+    mileageJson: JSON.stringify(payload.mileage || []),
+    shoppingJson: JSON.stringify(payload.shoppingList || []),
+    priceBookJson: JSON.stringify(payload.priceBook || []),
+    customSupplyPinsJson: JSON.stringify(payload.customSupplyPins || []),
+    settingsJson: JSON.stringify(payload.settings || {}),
+    constantsJson: JSON.stringify(payload.constants || {}),
+  };
+}
+
+/**
+ * Calculates the exact serialized UTF-8 byte size of the Firestore cloud sync document
+ * using `new Blob([JSON.stringify(docData)]).size`.
+ */
+export function calculateCloudSyncPayloadBytes(
+  payload: CloudWorkspaceInput,
+  userId = firebaseAuth.currentUser?.uid || 'admin_preview_uid',
+  lastUpdated = getLocalLastUpdated() || Date.now()
+): number {
+  const docData = buildCloudSyncDocData(userId, payload, lastUpdated);
+  const serialized = JSON.stringify(docData);
+  if (typeof Blob !== 'undefined') {
+    return new Blob([serialized]).size;
+  }
+  if (typeof TextEncoder !== 'undefined') {
+    return new TextEncoder().encode(serialized).length;
+  }
+  return serialized.length;
+}
+
+/**
+ * Formats Firestore sync errors into clear, actionable messages—especially
+ * for `resource-exhausted` and 1 MB document size-limit errors.
+ */
+export function formatFirestoreSyncError(err: any, payloadBytes?: number): string {
+  const code = String(err?.code || '').toLowerCase();
+  const message = String(err?.message || '');
+  const lowerMsg = message.toLowerCase();
+
+  const isSizeError =
+    code === 'resource-exhausted' ||
+    code.includes('resource-exhausted') ||
+    lowerMsg.includes('resource-exhausted') ||
+    lowerMsg.includes('exceeds the maximum allowed size') ||
+    lowerMsg.includes('maximum size') ||
+    lowerMsg.includes('document too large') ||
+    lowerMsg.includes('1,048,576') ||
+    lowerMsg.includes('1048576');
+
+  if (isSizeError) {
+    const kbText =
+      typeof payloadBytes === 'number' && payloadBytes > 0
+        ? ` (${Math.round(payloadBytes / 1024).toLocaleString()} KB / 1,024 KB)`
+        : '';
+    return `Cloud sync limit reached${kbText}: Firestore's 1 MB document limit was exceeded. Archive old projects or export a backup to free space.`;
+  }
+
+  if (code === 'permission-denied' || lowerMsg.includes('missing or insufficient permissions')) {
+    return 'Cloud sync blocked by Firestore permissions. Ensure your admin account is allowed to access users/{uid}/estimatorData/main.';
+  }
+
+  if (code === 'unavailable' || lowerMsg.includes('offline')) {
+    return 'Unable to reach cloud database right now. Your changes are safely stored locally.';
+  }
+
+  return message || 'Cloud sync failed. Local device storage remains active.';
+}
+
+/**
+ * Preserves local attachment records only if needed; stripped cloud payloads keep `files: []`.
  */
 export function mergeLocalFileBlobsIntoCloudCustomers(
   cloudCustomers: Customer[],
-  localCustomers: Customer[]
+  _localCustomers: Customer[]
 ): Customer[] {
-  if (!Array.isArray(localCustomers) || localCustomers.length === 0) {
-    return cloudCustomers;
-  }
-
-  const localFileMap = new Map<string, string>();
-  for (const c of localCustomers) {
-    if (!Array.isArray(c.files)) continue;
-    for (const f of c.files) {
-      if (f?.id !== undefined && f?.data) {
-        localFileMap.set(`${c.id}:${f.id}`, f.data);
-      }
-    }
-  }
-
-  if (localFileMap.size === 0) return cloudCustomers;
-
-  return cloudCustomers.map((c) => {
-    if (!Array.isArray(c.files) || c.files.length === 0) return c;
-    return {
-      ...c,
-      files: c.files.map((f) => {
-        if ((!f.data || f.data.length === 0) && localFileMap.has(`${c.id}:${f.id}`)) {
-          const rest = { ...(f as any) };
-          delete rest.omittedFromCloud;
-          return {
-            ...rest,
-            data: localFileMap.get(`${c.id}:${f.id}`)!,
-          };
-        }
-        return f;
-      }),
-    };
-  });
+  return sanitizeCustomersForCloudSync(cloudCustomers);
 }
 
 function parseCloudDoc(d: Record<string, any>): CloudWorkspacePayload {
@@ -228,7 +292,7 @@ function parseCloudDoc(d: Record<string, any>): CloudWorkspacePayload {
         : 0;
 
   return {
-    customers: d.customersJson ? JSON.parse(d.customersJson) : [],
+    customers: sanitizeCustomersForCloudSync(d.customersJson ? JSON.parse(d.customersJson) : []),
     notes: d.notesJson ? JSON.parse(d.notesJson) : [],
     expenses: d.expensesJson ? JSON.parse(d.expensesJson) : [],
     mileage: d.mileageJson ? JSON.parse(d.mileageJson) : [],
@@ -246,62 +310,58 @@ function parseCloudDoc(d: Record<string, any>): CloudWorkspacePayload {
 
 /**
  * Saves contractor estimator data to Firestore at users/${uid}/estimatorData/main.
- * Strict admin gate ensures non-admin or unauthenticated sessions perform zero cloud writes.
+ * Strips all legacy photos/files Base64 arrays, enforces the admin gate, and rejects
+ * payloads exceeding Firestore's 1 MB limit with a clear `resource-exhausted` error.
  */
 export async function saveWorkspaceToCloud(
   userId: string,
-  payload: Omit<CloudWorkspacePayload, 'updatedAt' | 'deviceLabel' | 'lastUpdated' | 'deviceId'>,
+  payload: CloudWorkspaceInput,
   lastUpdatedOverride?: number
 ): Promise<CloudSaveResult> {
   const activeUser = firebaseAuth.currentUser;
   if (!userId || !isAuthorizedAdminUser(activeUser) || activeUser?.uid !== userId) {
-    return { saved: false, lastUpdated: lastUpdatedOverride || getLocalLastUpdated() };
+    return {
+      saved: false,
+      lastUpdated: lastUpdatedOverride || getLocalLastUpdated(),
+      payloadBytes: 0,
+    };
   }
 
   const lastUpdated =
     typeof lastUpdatedOverride === 'number' && lastUpdatedOverride > 0
       ? Math.floor(lastUpdatedOverride)
       : Date.now();
-  const nowIso = new Date(lastUpdated).toISOString();
-  const deviceLabel = getDeviceLabel();
-  const deviceId = getOrCreateDeviceId();
 
-  let customersToSave = payload.customers || [];
-  let strippedLargeFiles = false;
+  const docData = buildCloudSyncDocData(userId, payload, lastUpdated);
+  const serialized = JSON.stringify(docData);
+  const payloadBytes =
+    typeof Blob !== 'undefined'
+      ? new Blob([serialized]).size
+      : new TextEncoder().encode(serialized).length;
 
-  const buildDocData = (customersList: Customer[]) => ({
-    userId,
-    email: ADMIN_CLOUD_EMAIL,
-    lastUpdated,
-    updatedAt: nowIso,
-    deviceId,
-    deviceLabel,
-    customersJson: JSON.stringify(customersList),
-    notesJson: JSON.stringify(payload.notes || []),
-    expensesJson: JSON.stringify(payload.expenses || []),
-    mileageJson: JSON.stringify(payload.mileage || []),
-    shoppingJson: JSON.stringify(payload.shoppingList || []),
-    priceBookJson: JSON.stringify(payload.priceBook || []),
-    customSupplyPinsJson: JSON.stringify(payload.customSupplyPins || []),
-    settingsJson: JSON.stringify(payload.settings || {}),
-    constantsJson: JSON.stringify(payload.constants || {}),
-  });
-
-  let docData = buildDocData(customersToSave);
-  if (measureUtf8Bytes(JSON.stringify(docData)) > MAX_FIRESTORE_DOC_BYTES) {
-    customersToSave = stripLargeFileDataUrls(customersToSave);
-    docData = buildDocData(customersToSave);
-    strippedLargeFiles = true;
-    console.warn('Stripped oversized inline file blobs from cloud sync payload to stay under Firestore 1 MiB limit.');
+  if (payloadBytes >= FIRESTORE_DOC_LIMIT_BYTES) {
+    const sizeErr: any = new Error(
+      `Document exceeds the maximum allowed size of 1,048,576 bytes (${Math.round(payloadBytes / 1024)} KB).`
+    );
+    sizeErr.code = 'resource-exhausted';
+    sizeErr.payloadBytes = payloadBytes;
+    throw sizeErr;
   }
 
   const syncDocRef = getEstimatorSyncDocRef(userId);
-  await setDoc(syncDocRef, docData, { merge: true });
+  try {
+    await setDoc(syncDocRef, docData, { merge: true });
+  } catch (err: any) {
+    if (err && typeof err === 'object') {
+      err.payloadBytes = payloadBytes;
+    }
+    throw err;
+  }
 
   return {
     saved: true,
     lastUpdated,
-    strippedLargeFiles,
+    payloadBytes,
   };
 }
 

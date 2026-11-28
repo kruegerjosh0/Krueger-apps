@@ -1,7 +1,12 @@
 import React, { useState } from 'react';
 import { User } from 'firebase/auth';
 import { Cloud, RefreshCw, LogOut, ShieldCheck, Lock, AlertTriangle } from 'lucide-react';
-import { ADMIN_CLOUD_EMAIL } from '../utils/firebaseSync';
+import {
+  ADMIN_CLOUD_EMAIL,
+  FIRESTORE_DOC_LIMIT_BYTES,
+  FIRESTORE_DOC_LIMIT_KB,
+  FIRESTORE_WARNING_THRESHOLD_BYTES,
+} from '../utils/firebaseSync';
 
 export type CloudSyncState = 'idle' | 'syncing' | 'synced' | 'offline' | 'error';
 
@@ -12,10 +17,18 @@ export interface CloudSyncAccountProps {
   syncState: CloudSyncState;
   lastSyncLabel: string | null;
   syncError: string | null;
+  syncPayloadBytes: number;
   onSignIn: (email: string, password: string) => Promise<void>;
   onPasswordReset: (email: string) => Promise<void>;
   onForceSync: () => Promise<void>;
   onSignOut: () => Promise<void>;
+}
+
+function formatKb(bytes: number): string {
+  if (!Number.isFinite(bytes) || bytes <= 0) return '0';
+  const kb = bytes / 1024;
+  if (kb < 1) return kb.toFixed(1);
+  return Math.round(kb).toLocaleString();
 }
 
 export const CloudSyncAccountCard: React.FC<CloudSyncAccountProps> = ({
@@ -25,6 +38,7 @@ export const CloudSyncAccountCard: React.FC<CloudSyncAccountProps> = ({
   syncState,
   lastSyncLabel,
   syncError,
+  syncPayloadBytes,
   onSignIn,
   onPasswordReset,
   onForceSync,
@@ -89,6 +103,15 @@ export const CloudSyncAccountCard: React.FC<CloudSyncAccountProps> = ({
   };
 
   const isSyncing = syncState === 'syncing';
+  const safeBytes = Math.max(0, syncPayloadBytes || 0);
+  const sizeKbLabel = formatKb(safeBytes);
+  const usagePercent = Math.min(
+    100,
+    Math.round((safeBytes / FIRESTORE_DOC_LIMIT_BYTES) * 100)
+  );
+  const isWarningLimit = safeBytes >= FIRESTORE_WARNING_THRESHOLD_BYTES;
+  const isCriticalLimit = safeBytes >= 950 * 1024;
+  const barWidthPercent = safeBytes > 0 ? Math.max(usagePercent, 2) : 0;
 
   return (
     <div className="bg-[var(--surface)] border border-[var(--border)] rounded-2xl p-3.5 sm:p-4 shadow-sm space-y-3">
@@ -131,6 +154,66 @@ export const CloudSyncAccountCard: React.FC<CloudSyncAccountProps> = ({
         </span>
       </div>
 
+      {/* Live Cloud Storage Meter (against Firestore's 1 MB / 1,024 KB single-document limit) */}
+      <div className="bg-[var(--surface-subtle)] border border-[var(--border)] rounded-xl p-2.5 space-y-1.5">
+        <div className="flex items-center justify-between gap-2 text-[10.5px]">
+          <span className="font-bold text-[var(--text)]">
+            Sync Storage: {sizeKbLabel} KB / {FIRESTORE_DOC_LIMIT_KB.toLocaleString()} KB ({usagePercent}%)
+          </span>
+          <span
+            className={`text-[9.5px] font-extrabold uppercase tracking-wide ${
+              isCriticalLimit
+                ? 'text-red-400'
+                : isWarningLimit
+                  ? 'text-amber-400'
+                  : 'text-emerald-400'
+            }`}
+          >
+            {isCriticalLimit ? 'Limit Critical' : isWarningLimit ? '80%+ Warning' : 'Healthy'}
+          </span>
+        </div>
+
+        <div
+          className="w-full h-2 rounded-full bg-[var(--bg)] border border-[var(--border)] overflow-hidden"
+          role="progressbar"
+          aria-label="Cloud sync storage usage"
+          aria-valuenow={usagePercent}
+          aria-valuemin={0}
+          aria-valuemax={100}
+        >
+          <div
+            className={`h-full rounded-full transition-all duration-300 ${
+              isCriticalLimit
+                ? 'bg-gradient-to-r from-red-500 to-rose-500'
+                : isWarningLimit
+                  ? 'bg-gradient-to-r from-amber-500 to-red-500'
+                  : 'bg-gradient-to-r from-emerald-500 to-sky-500'
+            }`}
+            style={{ width: `${barWidthPercent}%` }}
+          />
+        </div>
+
+        {isWarningLimit && (
+          <div
+            role="alert"
+            className={`flex items-start gap-2 rounded-lg p-2 text-[10.5px] font-semibold leading-snug border ${
+              isCriticalLimit
+                ? 'bg-red-950/50 border-red-500/45 text-red-200'
+                : 'bg-amber-950/45 border-amber-500/45 text-amber-200'
+            }`}
+          >
+            <AlertTriangle
+              className={`w-3.5 h-3.5 shrink-0 mt-0.5 ${
+                isCriticalLimit ? 'text-red-400' : 'text-amber-400'
+              }`}
+            />
+            <span>
+              Approaching 1 MB cloud sync limit ({sizeKbLabel} KB / {FIRESTORE_DOC_LIMIT_KB.toLocaleString()} KB) — archive old projects or export a backup.
+            </span>
+          </div>
+        )}
+      </div>
+
       {/* SIGNED IN AS AUTHORIZED ADMIN */}
       {currentUser && isAuthorizedAdmin && (
         <div className="space-y-2.5">
@@ -153,9 +236,12 @@ export const CloudSyncAccountCard: React.FC<CloudSyncAccountProps> = ({
           </div>
 
           {syncError && (
-            <div className="flex items-start gap-2 text-[11px] text-red-300 bg-red-950/40 border border-red-500/30 rounded-xl p-2.5">
-              <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-0.5 text-red-400" />
-              <span>{syncError}</span>
+            <div
+              role="alert"
+              className="flex items-start gap-2 text-[11px] text-red-200 bg-red-950/50 border border-red-500/40 rounded-xl p-2.5"
+            >
+              <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5 text-red-400" />
+              <span className="leading-snug">{syncError}</span>
             </div>
           )}
 

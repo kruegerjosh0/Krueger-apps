@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Customer, JobProject, CustomerFile, ProjectDocMode } from '../../types';
+import { Customer, JobProject, ProjectDocMode } from '../../types';
 import {
   signInWithGoogle,
   getAccessToken,
@@ -41,9 +41,9 @@ interface FolderViewModalProps {
     action: 'OPEN' | 'DOWNLOAD'
   ) => void;
   onGenerateCustomerRecord?: (customer: Customer) => void;
-  onViewImage: (dataUrl: string) => void;
+  onViewImage?: (dataUrl: string) => void;
   onViewDocFile?: (file: { name: string; data: string; tag?: string }) => void;
-  onGenerateCollage: () => void;
+  onGenerateCollage?: () => void;
   onScheduleEstimate: () => void;
   onShareBusinessCard?: () => void;
   onMarkCalendarSynced?: (customerId: number, syncedAt: number) => void;
@@ -60,9 +60,6 @@ export const FolderViewModal: React.FC<FolderViewModalProps> = ({
   onDeleteJob,
   onGenerateDoc,
   onGenerateCustomerRecord,
-  onViewImage,
-  onViewDocFile,
-  onGenerateCollage,
   onScheduleEstimate,
   onShareBusinessCard,
   onMarkCalendarSynced,
@@ -79,7 +76,6 @@ export const FolderViewModal: React.FC<FolderViewModalProps> = ({
   const [email, setEmail] = useState(customer.email);
   const [notes, setNotes] = useState(customer.notes);
   const [statusOverride, setStatusOverride] = useState(normalizedOverride);
-  const [fileTag, setFileTag] = useState<'BEFORE' | 'ACTIVE' | 'AFTER' | 'DOC'>('BEFORE');
 
   useEffect(() => {
     setName(customer.name);
@@ -108,89 +104,6 @@ export const FolderViewModal: React.FC<FolderViewModalProps> = ({
   const togglePinned = () => {
     onUpdateCustomer({ ...customer, isPinned: !customer.isPinned });
     onToast(customer.isPinned ? 'Unpinned customer' : '★ Customer pinned to top');
-  };
-
-  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (!e.target.files || e.target.files.length === 0) return;
-    const files = Array.from(e.target.files);
-
-    files.forEach((file) => {
-      const reader = new FileReader();
-      reader.onload = (uploadEvent) => {
-        const result = uploadEvent.target?.result as string;
-        if (file.type.startsWith('image/')) {
-          const img = new Image();
-          img.onload = () => {
-            const canvas = document.createElement('canvas');
-            const ctx = canvas.getContext('2d');
-            const maxDim = 1200;
-            let width = img.width;
-            let height = img.height;
-            if (width > height) {
-              if (width > maxDim) {
-                height = (height * maxDim) / width;
-                width = maxDim;
-              }
-            } else {
-              if (height > maxDim) {
-                width = (width * maxDim) / height;
-                height = maxDim;
-              }
-            }
-            canvas.width = width;
-            canvas.height = height;
-            ctx?.drawImage(img, 0, 0, width, height);
-            const compressed = canvas.toDataURL('image/jpeg', 0.8);
-
-            const newFile: CustomerFile = {
-              id: Date.now() + Math.random(),
-              name: file.name,
-              tag: fileTag,
-              data: compressed,
-              isImg: true,
-              type: file.type,
-            };
-            const updated = {
-              ...customer,
-              files: [...(customer.files || []), newFile],
-              lastActive: Date.now(),
-            };
-            onUpdateCustomer(updated);
-            onToast('✔ Photo Uploaded');
-          };
-          img.src = result;
-        } else {
-          const newFile: CustomerFile = {
-            id: Date.now() + Math.random(),
-            name: file.name,
-            tag: fileTag,
-            data: result,
-            isImg: false,
-            type: file.type,
-          };
-          const updated = {
-            ...customer,
-            files: [...(customer.files || []), newFile],
-            lastActive: Date.now(),
-          };
-          onUpdateCustomer(updated);
-          onToast('✔ Document Uploaded');
-        }
-      };
-      reader.readAsDataURL(file);
-    });
-    e.target.value = '';
-  };
-
-  const deleteFile = (id: number) => {
-    if (confirm('Delete this file?')) {
-      const updated = {
-        ...customer,
-        files: (customer.files || []).filter((f) => f.id !== id),
-      };
-      onUpdateCustomer(updated);
-      onToast('File Deleted');
-    }
   };
 
   const sendEtaSms = () => {
@@ -485,110 +398,6 @@ export const FolderViewModal: React.FC<FolderViewModalProps> = ({
             placeholder="Gate codes, key locations, pet notes, special requests..."
             className="w-full bg-[var(--bg)] border border-[var(--border)] focus:border-[var(--accent)] text-[var(--text)] rounded-lg p-2 text-xs outline-none"
           />
-        </div>
-
-        {/* Project Photos & Files */}
-        <div className="bg-[var(--surface-subtle)] border border-[var(--border)] rounded-xl p-3.5 space-y-2.5">
-          <div className="flex items-center justify-between">
-            <span className="text-[10px] font-extrabold uppercase tracking-wide text-[var(--accent)]">
-              📸 Photos & Document Files
-            </span>
-            <span className="text-[9px] text-[var(--text-muted)]">
-              {(customer.files || []).length} items
-            </span>
-          </div>
-
-          <div className="grid grid-cols-2 gap-2">
-            <div>
-              <label className="text-[8px] uppercase font-bold text-[var(--text-muted)] block mb-1">
-                Upload Tag
-              </label>
-              <select
-                value={fileTag}
-                onChange={(e) => setFileTag(e.target.value as any)}
-                className="w-full bg-[var(--bg)] border border-[var(--border)] text-[var(--text)] rounded-lg p-2 text-xs outline-none"
-              >
-                <option value="BEFORE">Before Photo</option>
-                <option value="ACTIVE">In-Progress</option>
-                <option value="AFTER">After Photo</option>
-                <option value="DOC">Document</option>
-              </select>
-            </div>
-
-            <div className="flex items-end">
-              <label className="w-full py-2 bg-[var(--accent)] hover:opacity-95 text-white font-bold text-xs rounded-lg text-center cursor-pointer shadow transition-transform active:scale-95">
-                📁 Upload Photos / Files
-                <input
-                  type="file"
-                  multiple
-                  accept="image/*,application/pdf"
-                  onChange={handleFileUpload}
-                  className="hidden"
-                />
-              </label>
-            </div>
-          </div>
-
-          <button
-            type="button"
-            onClick={onGenerateCollage}
-            className="w-full py-2 bg-gradient-to-r from-amber-500 to-orange-500 text-white font-extrabold text-xs rounded-lg shadow cursor-pointer transition-transform active:scale-95"
-          >
-            🎨 Generate Before / After Showcase Card
-          </button>
-
-          {/* Photo Grid */}
-          <div className="grid grid-cols-3 sm:grid-cols-4 gap-2 pt-1 max-h-48 overflow-y-auto">
-            {(customer.files || []).map((f) => (
-              <div
-                key={f.id}
-                className="relative rounded-lg overflow-hidden border border-[var(--border)] group bg-black/20"
-              >
-                <span className="absolute top-1 left-1 text-[7px] font-black uppercase px-1 py-0.5 rounded bg-black/80 text-white z-10">
-                  {f.tag}
-                </span>
-                <button
-                  type="button"
-                  onClick={() => deleteFile(f.id)}
-                  className="absolute top-1 right-1 w-4 h-4 rounded bg-red-600 text-white text-[9px] font-bold flex items-center justify-center z-10 cursor-pointer"
-                >
-                  ✕
-                </button>
-
-                {f.isImg ? (
-                  <img
-                    src={f.data}
-                    alt={f.name}
-                    onClick={() => onViewImage(f.data)}
-                    className="w-full h-16 object-cover cursor-pointer hover:scale-105 transition-transform"
-                  />
-                ) : (
-                  <div
-                    onClick={() => {
-                      if (onViewDocFile) {
-                        onViewDocFile(f);
-                      } else {
-                        onViewImage(f.data);
-                      }
-                    }}
-                    className="w-full h-16 flex flex-col items-center justify-center p-1 text-center cursor-pointer hover:bg-[var(--border)] rounded transition-colors group/doc"
-                  >
-                    <span className="text-xl group-hover/doc:scale-110 transition-transform">📄</span>
-                    <span className="text-[8px] text-[var(--accent)] truncate max-w-full font-bold">
-                      {f.name}
-                    </span>
-                    <span className="text-[7px] text-[var(--text-muted)] font-semibold">Tap to View</span>
-                  </div>
-                )}
-              </div>
-            ))}
-
-            {(!customer.files || customer.files.length === 0) && (
-              <div className="col-span-full text-center py-4 text-[10px] text-[var(--text-muted)]">
-                No site photos or documents uploaded yet.
-              </div>
-            )}
-          </div>
         </div>
 
         {/* Project Estimates & Invoices List */}
